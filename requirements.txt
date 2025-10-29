@@ -1,0 +1,6 @@
+requests>=2.25.0
+mutagen>=1.45.0
+yt-dlp>=2023.12.30  # Updated to latest version to avoid 403 errors
+youtube-dl>=2021.12.17  # Fallback option
+# Additional dependencies for new metadata sources
+# Note: Some APIs require API keys/tokens - see individual client modules for setup instructions
