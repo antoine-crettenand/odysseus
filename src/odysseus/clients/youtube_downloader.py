@@ -123,7 +123,7 @@ class YouTubeDownloader:
         return organized_dir
     
     def download(self, url: str, quality: str = "bestaudio", 
-                      audio_only: bool = True, metadata: Optional[Dict[str, Any]] = None) -> Optional[Path]:
+                      audio_only: bool = True, metadata: Optional[Dict[str, Any]] = None, quiet: bool = False) -> Optional[Path]:
         try:
             # Determine download directory based on metadata
             download_dir = self._create_organized_path(metadata)
@@ -131,8 +131,13 @@ class YouTubeDownloader:
             # Create filename template based on metadata
             if metadata and metadata.get('title'):
                 title = self._sanitize_filename(metadata['title'])
-                if audio_only:
-                    filename_template = f"{title}.%(ext)s"
+                
+                # Add track number prefix if available
+                track_number = metadata.get('track_number')
+                if track_number:
+                    # Format with leading zero (e.g., "01", "02", "10")
+                    track_prefix = f"{track_number:02d} - "
+                    filename_template = f"{track_prefix}{title}.%(ext)s"
                 else:
                     filename_template = f"{title}.%(ext)s"
             else:
@@ -141,20 +146,22 @@ class YouTubeDownloader:
             # Set output template
             output_template = str(download_dir / filename_template)
             
-            # Import colors here to avoid circular imports
-            from ..utils.colors import Colors
-            
-            print(f"Downloading: {Colors.blue(url)}")
-            print(f"Quality: {Colors.cyan(quality)}")
-            print(f"Audio only: {Colors.cyan(str(audio_only))}")
-            print(f"Save location: {Colors.blue(str(download_dir))}")
-            if metadata:
-                artist = metadata.get('artist', 'Unknown')
-                album = metadata.get('album', 'Unknown')
-                year = metadata.get('year', 'Unknown Year')
-                title = metadata.get('title', 'Unknown Title')
-                print(f"Organized as: {Colors.green(artist)}/{Colors.yellow(album)} ({Colors.cyan(str(year))})/{Colors.white(title)}")
-            print()
+            # Only print download info if not in quiet mode (Rich UI handles this)
+            if not quiet:
+                # Import colors here to avoid circular imports
+                from ..utils.colors import Colors
+                
+                print(f"Downloading: {Colors.blue(url)}")
+                print(f"Quality: {Colors.cyan(quality)}")
+                print(f"Audio only: {Colors.cyan(str(audio_only))}")
+                print(f"Save location: {Colors.blue(str(download_dir))}")
+                if metadata:
+                    artist = metadata.get('artist', 'Unknown')
+                    album = metadata.get('album', 'Unknown')
+                    year = metadata.get('year', 'Unknown Year')
+                    title = metadata.get('title', 'Unknown Title')
+                    print(f"Organized as: {Colors.green(artist)}/{Colors.yellow(album)} ({Colors.cyan(str(year))})/{Colors.white(title)}")
+                print()
             
             # Try multiple strategies to bypass 403 errors
             strategies = [
@@ -361,18 +368,19 @@ class YouTubeDownloader:
         cmd.extend(['-o', output_template, url])
         return cmd
     
-    def download_high_quality_audio(self, url: str, metadata: Optional[Dict[str, Any]] = None) -> Optional[Path]:
+    def download_high_quality_audio(self, url: str, metadata: Optional[Dict[str, Any]] = None, quiet: bool = False) -> Optional[Path]:
         """
         Download high-quality audio from YouTube video.
         
         Args:
             url: YouTube video URL
             metadata: Optional metadata for organized file structure
+            quiet: If True, suppress console output (for Rich UI)
             
         Returns:
             Path to downloaded audio file or None if failed
         """
-        return self.download(url, quality="bestaudio", audio_only=True, metadata=metadata)
+        return self.download(url, quality="bestaudio", audio_only=True, metadata=metadata, quiet=quiet)
     
     def download_playlist(self, url: str, quality: str = "bestaudio") -> List[str]:
         """

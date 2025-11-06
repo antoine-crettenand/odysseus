@@ -15,7 +15,7 @@ from rich.align import Align
 from rich import box
 
 from ..models.search_results import SearchResult, MusicBrainzSong, YouTubeVideo
-from ..models.releases import ReleaseInfo
+from ..models.releases import ReleaseInfo, Track
 from ..utils.colors import Colors
 
 
@@ -347,7 +347,7 @@ class DisplayManager:
                 else:
                     self.console.print("[bold red]✗[/bold red] Please enter a valid number or 'q' to skip")
     
-    def get_release_selection(self, releases: List[MusicBrainzSong]) -> List[MusicBrainzSong]:
+    def get_release_selection(self, releases: List[MusicBrainzSong], quality: str = "audio", search_service=None) -> List[MusicBrainzSong]:
         """Get user selection for releases to download."""
         self.console.print()
         self.console.print(self._create_header_panel(
@@ -380,7 +380,7 @@ class DisplayManager:
             elif choice == '3':
                 return self._select_range_releases(releases)
             elif choice == '4':
-                return self._confirm_all_releases(releases)
+                return self._confirm_all_releases(releases, quality, search_service)
             elif choice == '5':
                 self.console.print("[yellow]⚠[/yellow] Selection cancelled.")
                 return []
@@ -483,9 +483,121 @@ class DisplayManager:
             except (ValueError, KeyboardInterrupt):
                 self.console.print("[bold red]✗[/bold red] Invalid format. Please enter range as 'start-end' (e.g., 1-5)")
     
-    def _confirm_all_releases(self, releases: List[MusicBrainzSong]) -> List[MusicBrainzSong]:
-        """Confirm downloading all releases."""
+    def _parse_duration_to_minutes(self, duration_str: Optional[str]) -> float:
+        """Parse duration string (MM:SS or HH:MM:SS) to minutes."""
+        if not duration_str or duration_str == "—":
+            return 0.0
+        
+        try:
+            parts = duration_str.split(':')
+            if len(parts) == 2:  # MM:SS
+                minutes, seconds = map(int, parts)
+                return minutes + seconds / 60.0
+            elif len(parts) == 3:  # HH:MM:SS
+                hours, minutes, seconds = map(int, parts)
+                return hours * 60 + minutes + seconds / 60.0
+        except (ValueError, AttributeError):
+            pass
+        return 0.0
+    
+    def _estimate_disk_space(self, releases: List[MusicBrainzSong], quality: str, search_service=None) -> tuple[str, int, float]:
+        """
+        Estimate disk space needed for downloading releases.
+        Returns: (formatted_size, total_tracks, total_minutes)
+        """
+        # Bitrate estimates (MB per minute of audio)
+        # These are approximate values for MP3 encoding
+        bitrate_estimates = {
+            'audio': 1.4,      # ~192 kbps MP3
+            'best': 2.4,       # ~320 kbps MP3 (best audio quality)
+            'worst': 0.7,      # ~96 kbps MP3 (worst quality)
+        }
+        
+        mb_per_minute = bitrate_estimates.get(quality, 1.4)  # Default to audio quality
+        
+        total_minutes = 0.0
+        total_tracks = 0
+        
+        # Try to get actual track info for better estimates
+        if search_service:
+            # Sample a few releases to get average track count and duration
+            sample_size = min(3, len(releases))
+            sample_releases = releases[:sample_size]
+            
+            sample_tracks = 0
+            sample_minutes = 0.0
+            
+            for release in sample_releases:
+                try:
+                    release_info = search_service.get_release_info(release.mbid)
+                    if release_info and release_info.tracks:
+                        sample_tracks += len(release_info.tracks)
+                        for track in release_info.tracks:
+                            track_minutes = self._parse_duration_to_minutes(track.duration)
+                            sample_minutes += track_minutes
+                except Exception:
+                    # If we can't get info, use defaults
+                    pass
+            
+            if sample_tracks > 0:
+                # Calculate averages from sample
+                avg_tracks_per_release = sample_tracks / sample_size
+                avg_minutes_per_track = sample_minutes / sample_tracks if sample_tracks > 0 else 4.0
+                
+                total_tracks = int(avg_tracks_per_release * len(releases))
+                total_minutes = avg_minutes_per_track * total_tracks
+            else:
+                # Fallback to defaults
+                avg_tracks_per_release = 10  # Average tracks per album
+                avg_minutes_per_track = 4.0  # Average 4 minutes per track
+                total_tracks = int(avg_tracks_per_release * len(releases))
+                total_minutes = avg_minutes_per_track * total_tracks
+        else:
+            # Use default estimates
+            avg_tracks_per_release = 10
+            avg_minutes_per_track = 4.0
+            total_tracks = int(avg_tracks_per_release * len(releases))
+            total_minutes = avg_minutes_per_track * total_tracks
+        
+        # Calculate total size in MB
+        total_size_mb = total_minutes * mb_per_minute
+        
+        # Format size
+        if total_size_mb < 1024:
+            formatted_size = f"{total_size_mb:.1f} MB"
+        else:
+            formatted_size = f"{total_size_mb / 1024:.2f} GB"
+        
+        return formatted_size, total_tracks, total_minutes
+    
+    def _confirm_all_releases(self, releases: List[MusicBrainzSong], quality: str = "audio", search_service=None) -> List[MusicBrainzSong]:
+        """Confirm downloading all releases with disk space estimate."""
         self.console.print(f"[bold yellow]⚠[/bold yellow] This will download ALL {len(releases)} release{'s' if len(releases) != 1 else ''}!")
+        
+        # Estimate disk space (with loading indicator if we need to fetch release info)
+        if search_service:
+            estimated_size, total_tracks, total_minutes = self.show_loading_spinner(
+                "Calculating disk space estimate...",
+                self._estimate_disk_space,
+                releases,
+                quality,
+                search_service
+            )
+        else:
+            estimated_size, total_tracks, total_minutes = self._estimate_disk_space(releases, quality, search_service)
+        
+        # Format time estimate (rough estimate: 1 minute per track for download + processing)
+        estimated_time_minutes = total_tracks
+        if estimated_time_minutes < 60:
+            time_estimate = f"~{estimated_time_minutes} minutes"
+        else:
+            hours = estimated_time_minutes // 60
+            minutes = estimated_time_minutes % 60
+            time_estimate = f"~{hours}h {minutes}m" if minutes > 0 else f"~{hours} hours"
+        
+        self.console.print(f"[blue]ℹ[/blue] Estimated disk space: [bold cyan]{estimated_size}[/bold cyan]")
+        self.console.print(f"[blue]ℹ[/blue] Estimated tracks: [cyan]{total_tracks}[/cyan] (~{total_minutes:.0f} minutes of music)")
+        self.console.print(f"[blue]ℹ[/blue] Estimated time: [cyan]{time_estimate}[/cyan]")
         self.console.print("[blue]ℹ[/blue] This may take a very long time and use significant disk space.")
         
         # Show a preview

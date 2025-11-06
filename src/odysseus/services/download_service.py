@@ -14,13 +14,13 @@ class DownloadService:
         self.downloader = YouTubeDownloader(download_dir)
     
     def download_video(self, url: str, quality: str = "best", 
-                      audio_only: bool = True, metadata: Optional[Dict[str, Any]] = None) -> Optional[Path]:
+                      audio_only: bool = True, metadata: Optional[Dict[str, Any]] = None, quiet: bool = True) -> Optional[Path]:
         """Download a video from URL."""
-        return self.downloader.download(url, quality, audio_only, metadata)
+        return self.downloader.download(url, quality, audio_only, metadata, quiet=quiet)
     
-    def download_high_quality_audio(self, url: str, metadata: Optional[Dict[str, Any]] = None) -> Optional[Path]:
+    def download_high_quality_audio(self, url: str, metadata: Optional[Dict[str, Any]] = None, quiet: bool = True) -> Optional[Path]:
         """Download high-quality audio from video."""
-        return self.downloader.download_high_quality_audio(url, metadata)
+        return self.downloader.download_high_quality_audio(url, metadata, quiet=quiet)
     
     def download_playlist(self, url: str, quality: str = "bestaudio") -> List[str]:
         """Download a YouTube playlist."""

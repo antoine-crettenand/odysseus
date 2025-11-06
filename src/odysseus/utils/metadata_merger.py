@@ -319,7 +319,7 @@ class MetadataMerger:
         try:
             # Try to import mutagen for metadata writing
             from mutagen import File as MutagenFile
-            from mutagen.id3 import APIC, TIT2, TPE1, TALB, TYER, TCON, ID3NoHeaderError
+            from mutagen.id3 import APIC, TIT2, TPE1, TALB, TYER, TCON, TRCK, ID3NoHeaderError
             
             # Convert to Path if it's a string
             if isinstance(file_path, str):
@@ -352,6 +352,13 @@ class MetadataMerger:
                         audio_file.tags['TYER'] = TYER(encoding=3, text=str(self.final_metadata.year))
                     if self.final_metadata.genre:
                         audio_file.tags['TCON'] = TCON(encoding=3, text=self.final_metadata.genre)
+                    # Track number: format as "1/10" if total_tracks available, else just "1"
+                    if self.final_metadata.track_number:
+                        if self.final_metadata.total_tracks:
+                            track_str = f"{self.final_metadata.track_number}/{self.final_metadata.total_tracks}"
+                        else:
+                            track_str = str(self.final_metadata.track_number)
+                        audio_file.tags['TRCK'] = TRCK(encoding=3, text=track_str)
                 except Exception as e:
                     logger.warning(f"Error setting ID3 tags: {e}")
                     # Fallback to simple assignment
@@ -365,6 +372,13 @@ class MetadataMerger:
                         audio_file['date'] = str(self.final_metadata.year)
                     if self.final_metadata.genre:
                         audio_file['genre'] = self.final_metadata.genre
+                    # Track number: format as "1/10" if total_tracks available, else just "1"
+                    if self.final_metadata.track_number:
+                        if self.final_metadata.total_tracks:
+                            track_str = f"{self.final_metadata.track_number}/{self.final_metadata.total_tracks}"
+                        else:
+                            track_str = str(self.final_metadata.track_number)
+                        audio_file['TRCK'] = track_str
             else:
                 # For other formats, use simple assignment
                 if self.final_metadata.title:
@@ -377,6 +391,15 @@ class MetadataMerger:
                     audio_file['date'] = str(self.final_metadata.year)
                 if self.final_metadata.genre:
                     audio_file['genre'] = self.final_metadata.genre
+                # Track number: format as "1/10" if total_tracks available, else just "1"
+                if self.final_metadata.track_number:
+                    if self.final_metadata.total_tracks:
+                        track_str = f"{self.final_metadata.track_number}/{self.final_metadata.total_tracks}"
+                    else:
+                        track_str = str(self.final_metadata.track_number)
+                    # Try common tag names for track number
+                    audio_file['tracknumber'] = track_str
+                    audio_file['TRCK'] = track_str
             
             # Apply cover art if available
             if self.final_metadata.cover_art_data:

@@ -359,7 +359,7 @@ Examples:
             return
         
         # Get user selection for releases to download
-        selected_releases = self.display_manager.get_release_selection(ordered_releases)
+        selected_releases = self.display_manager.get_release_selection(ordered_releases, args.quality, self.search_service)
         
         if not selected_releases:
             console.print("[yellow]⚠[/yellow] No releases selected for download.")
@@ -555,7 +555,9 @@ Examples:
                     'title': track.title,
                     'artist': track.artist,
                     'album': release_info.title,
-                    'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None
+                    'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
+                    'track_number': track.position,
+                    'total_tracks': len(release_info.tracks)
                 }
                 
                 # Download the track
@@ -567,6 +569,12 @@ Examples:
                     downloaded_path = self.download_service.download_video(youtube_url, quality=quality, audio_only=(quality == 'audio'), metadata=metadata_dict)
                 
                 if downloaded_path:
+                    # Apply metadata with cover art (same as _download_release_tracks)
+                    try:
+                        self._apply_metadata_with_cover_art(downloaded_path, track, release_info)
+                    except Exception:
+                        # If metadata application fails, still count as downloaded
+                        pass
                     downloaded_count += 1
                 else:
                     failed_count += 1
@@ -732,7 +740,7 @@ Examples:
             )
         
         if downloaded_path:
-            # Apply metadata with cover art
+            # Apply metadata with cover art (consistent with release mode)
             from ..models.song import AudioMetadata
             audio_metadata = AudioMetadata(
                 title=song_data.title,
@@ -745,6 +753,7 @@ Examples:
                 cover_art_data = self._fetch_musicbrainz_cover_art(metadata.mbid)
                 if cover_art_data:
                     audio_metadata.cover_art_data = cover_art_data
+                    console.print(f"[blue]ℹ[/blue] ✓ Fetched cover art for [white]{song_data.title}[/white]")
             
             self.metadata_service.merger.set_final_metadata(audio_metadata)
             self.metadata_service.apply_metadata_to_file(str(downloaded_path))
@@ -793,7 +802,9 @@ Examples:
                 artist=track.artist,
                 album=release_info.title,
                 year=int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
-                genre=release_info.genre
+                genre=release_info.genre,
+                track_number=track.position,
+                total_tracks=len(release_info.tracks)
             )
             
             # Fetch cover art from MusicBrainz if we have MBID

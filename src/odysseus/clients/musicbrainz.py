@@ -253,13 +253,15 @@ class MusicBrainzClient:
             print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
             return None
     
-    def search_artist_releases(self, artist: str, year: Optional[int] = None) -> List[MusicBrainzSong]:
+    def search_artist_releases(self, artist: str, year: Optional[int] = None, max_results: Optional[int] = None) -> List[MusicBrainzSong]:
         """
         Search for releases by a specific artist.
+        Fetches all available releases using pagination.
         
         Args:
             artist: Artist name to search for
             year: Optional year filter
+            max_results: Optional maximum number of results to fetch (None = fetch all)
             
         Returns:
             List of releases by the artist
@@ -272,27 +274,62 @@ class MusicBrainzClient:
         query = ' AND '.join(query_parts)
         
         url = f"{self.base_url}/release"
-        params = {
-            'query': query,
-            'fmt': 'json',
-            'limit': 20  # More results for discography
-        }
+        all_results = []
+        offset = 0
+        limit = 100  # MusicBrainz allows up to 100 results per request
         
         try:
-            print(f"Searching releases by artist: {artist}")
-            if year:
-                print(f"Filtering by year: {year}")
-            data = self._make_request(url, params)
+            # Don't print here - let the UI handle it with loading spinner
+            # print(f"Searching releases by artist: {artist}")
+            # if year:
+            #     print(f"Filtering by year: {year}")
             
-            if data:
-                return self._parse_release_results(data)
-            else:
-                print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: Failed to get data from MusicBrainz")
-                return []
+            while True:
+                params = {
+                    'query': query,
+                    'fmt': 'json',
+                    'limit': limit,
+                    'offset': offset
+                }
+                
+                data = self._make_request(url, params)
+                
+                if not data:
+                    break
+                
+                releases = data.get('releases', [])
+                if not releases:
+                    break
+                
+                parsed_results = self._parse_release_results(data)
+                all_results.extend(parsed_results)
+                
+                # Check if we've fetched all results
+                count = data.get('count', 0)
+                if offset + len(releases) >= count:
+                    break
+                
+                # Check if we've reached max_results limit
+                if max_results and len(all_results) >= max_results:
+                    all_results = all_results[:max_results]
+                    break
+                
+                offset += limit
+                
+                # Rate limiting between requests
+                time.sleep(self.request_delay)
+            
+            # Don't print here - let the UI handle it
+            # if all_results:
+            #     print(f"Found {len(all_results)} release{'s' if len(all_results) != 1 else ''}")
+            # else:
+            #     print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: Failed to get data from MusicBrainz")
+            
+            return all_results
             
         except Exception as e:
             print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
-            return []
+            return all_results if all_results else []
     
     def _parse_recording_results(self, data: Dict[str, Any]) -> List[MusicBrainzSong]:
         """Parse recording search results."""
