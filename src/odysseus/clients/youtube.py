@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 YouTube Client Module
 A client for searching YouTube videos and extracting video information.
@@ -9,18 +8,9 @@ import urllib.parse
 import json
 import re
 from typing import Optional, List, Dict, Any
-from config import YOUTUBE_CONFIG, ERROR_MESSAGES, DEFAULTS
+from ..models.search_results import YouTubeVideo
+from ..core.config import YOUTUBE_CONFIG, ERROR_MESSAGES
 
-class YouTubeVideo:
-    """YouTube video class."""
-    def __init__(self, video_id: str, title: str, channel: str, duration: str, views: str, publish_time: str, url_suffix: str):
-        self.video_id = video_id
-        self.title = title
-        self.channel = channel
-        self.duration = duration
-        self.views = views
-        self.publish_time = publish_time
-        self.url_suffix = url_suffix
 
 class YouTubeClient:
     """YouTube search and video information client."""
@@ -78,10 +68,13 @@ class YouTubeClient:
             for item in item_section.get("contents", []):
                 if "videoRenderer" in item:
                     video_data = item["videoRenderer"]
+                    title = video_data.get("title", {}).get("runs", [{}])[0].get("text") or "Unknown"
+                    channel = video_data.get("longBylineText", {}).get("runs", [{}])[0].get("text") or "Unknown Artist"
                     video_info: YouTubeVideo = YouTubeVideo(
+                        title=title,
+                        artist=channel,
                         video_id=video_data.get("videoId"),
-                        title=video_data.get("title", {}).get("runs", [{}])[0].get("text"),
-                        channel=video_data.get("longBylineText", {}).get("runs", [{}])[0].get("text"),
+                        channel=channel,
                         duration=video_data.get("lengthText", {}).get("simpleText"),
                         views=video_data.get("viewCountText", {}).get("simpleText"),
                         publish_time=video_data.get("publishedTimeText", {}).get("simpleText"),
@@ -132,10 +125,13 @@ class YouTubeClient:
         except AttributeError:
             raise Exception("Unexpected data format from YouTube video page.")
     
+        title = video_details.get("title") or "Unknown"
+        channel = video_details.get("author") or "Unknown Artist"
         video_info: YouTubeVideo = YouTubeVideo(
+            title=title,
+            artist=channel,
             video_id=video_details.get("videoId"),
-            title=video_details.get("title"),
-            channel=video_details.get("author"),
+            channel=channel,
             duration=video_details.get("lengthSeconds"),
             views=video_details.get("viewCount"),
             publish_time=video_details.get("publishDate"),

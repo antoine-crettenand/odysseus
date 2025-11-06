@@ -1,11 +1,12 @@
-#!/usr/bin/env python3
 """
 Configuration file for Odysseus Music Discovery Tool
 Contains all constants, settings, and global parameters.
+Supports environment variable overrides.
 """
 
 import os
 from pathlib import Path
+from typing import Optional
 
 # Project Information
 PROJECT_NAME = "Odysseus"
@@ -13,23 +14,24 @@ PROJECT_VERSION = "1.0.0"
 PROJECT_DESCRIPTION = "Music Discovery Tool - Search MusicBrainz, find YouTube videos, and download music"
 
 # File Paths
-BASE_DIR = Path(__file__).parent
-DOWNLOADS_DIR = BASE_DIR / "downloads"
-CONFIG_DIR = BASE_DIR / "config"
-LOGS_DIR = BASE_DIR / "logs"
+BASE_DIR = Path(__file__).parent.parent.parent.parent
+DOWNLOADS_DIR = Path(os.getenv("ODYSSEUS_DOWNLOADS_DIR", BASE_DIR / "downloads"))
+CONFIG_DIR = Path(os.getenv("ODYSSEUS_CONFIG_DIR", BASE_DIR / "config"))
 
 # Create directories if they don't exist
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 CONFIG_DIR.mkdir(exist_ok=True)
-LOGS_DIR.mkdir(exist_ok=True)
 
 # MusicBrainz Configuration
 MUSICBRAINZ_CONFIG = {
-    "BASE_URL": "https://musicbrainz.org/ws/2",
-    "USER_AGENT": f"{PROJECT_NAME}/{PROJECT_VERSION} (contact@example.com)",
-    "REQUEST_DELAY": 1.0,  # Rate limiting - MusicBrainz allows 1 request per second
-    "MAX_RESULTS": 3,
-    "TIMEOUT": 30,
+    "BASE_URL": os.getenv("MUSICBRAINZ_BASE_URL", "https://musicbrainz.org/ws/2"),
+    "USER_AGENT": os.getenv(
+        "MUSICBRAINZ_USER_AGENT",
+        f"{PROJECT_NAME}/{PROJECT_VERSION} (contact@example.com)"
+    ),
+    "REQUEST_DELAY": float(os.getenv("MUSICBRAINZ_REQUEST_DELAY", "1.0")),
+    "MAX_RESULTS": int(os.getenv("MUSICBRAINZ_MAX_RESULTS", "3")),
+    "TIMEOUT": int(os.getenv("MUSICBRAINZ_TIMEOUT", "30")),
 }
 
 # YouTube Configuration
@@ -47,11 +49,11 @@ YOUTUBE_CONFIG = {
 
 # Download Configuration
 DOWNLOAD_CONFIG = {
-    "DEFAULT_QUALITY": "best",
-    "AUDIO_FORMAT": "mp3",
+    "DEFAULT_QUALITY": os.getenv("ODYSSEUS_DEFAULT_QUALITY", "best"),
+    "AUDIO_FORMAT": os.getenv("ODYSSEUS_AUDIO_FORMAT", "mp3"),
     "DEFAULT_DIR": str(DOWNLOADS_DIR),
-    "MAX_CONCURRENT_DOWNLOADS": 3,
-    "TIMEOUT": 300,  # 5 minutes
+    "MAX_CONCURRENT_DOWNLOADS": int(os.getenv("ODYSSEUS_MAX_CONCURRENT_DOWNLOADS", "3")),
+    "TIMEOUT": int(os.getenv("ODYSSEUS_DOWNLOAD_TIMEOUT", "300")),  # 5 minutes
 }
 
 # User Interface Configuration
@@ -102,13 +104,11 @@ SEARCH_TYPES = {
     "LABEL": "label",
 }
 
-# Logging Configuration
+# Logging Configuration (console only - no file logging)
+# Default to WARNING to reduce console noise; use DEBUG/INFO only when needed
 LOGGING_CONFIG = {
-    "LEVEL": "INFO",
+    "LEVEL": os.getenv("ODYSSEUS_LOG_LEVEL", "WARNING"),
     "FORMAT": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    "FILE": str(LOGS_DIR / "odysseus.log"),
-    "MAX_SIZE": 10 * 1024 * 1024,  # 10MB
-    "BACKUP_COUNT": 5,
 }
 
 # API Limits

@@ -1,11 +1,10 @@
-#!/usr/bin/env python3
 """
 Color utility module for Odysseus CLI
 Provides colored output functions for better user experience.
 """
 
 import sys
-from config import COLORS
+from ..core.config import COLORS
 
 
 class Colors:

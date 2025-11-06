@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 YouTube Downloader Module
 A module to download YouTube videos using yt-dlp.
@@ -10,10 +9,11 @@ import sys
 import re
 from typing import Dict, Any, Optional, List
 from pathlib import Path
-from config import (
+from ..core.config import (
     DOWNLOAD_CONFIG, ERROR_MESSAGES, SUCCESS_MESSAGES, 
     QUALITY_PRESETS, FILE_EXTENSIONS, DEFAULTS
 )
+from ..utils.colors import Colors
 
 
 class YouTubeDownloader:
@@ -41,7 +41,7 @@ class YouTubeDownloader:
                 
                 # Try to update yt-dlp
                 print("Updating yt-dlp to latest version...")
-                update_result = subprocess.run(['pip', 'install', '--upgrade', 'yt-dlp'], 
+                update_result = subprocess.run(['pip3', 'install', '--upgrade', 'yt-dlp'], 
                                              capture_output=True, text=True)
                 if update_result.returncode == 0:
                     print("✅ yt-dlp updated successfully")
@@ -56,7 +56,7 @@ class YouTubeDownloader:
         """Manually update yt-dlp."""
         try:
             print("Updating yt-dlp...")
-            result = subprocess.run(['pip', 'install', '--upgrade', 'yt-dlp'], 
+            result = subprocess.run(['pip3', 'install', '--upgrade', 'yt-dlp'], 
                                   capture_output=True, text=True, check=True)
             print("✅ yt-dlp updated successfully")
             return True
@@ -141,16 +141,19 @@ class YouTubeDownloader:
             # Set output template
             output_template = str(download_dir / filename_template)
             
-            print(f"Downloading: {url}")
-            print(f"Quality: {quality}")
-            print(f"Audio only: {audio_only}")
-            print(f"Save location: {download_dir}")
+            # Import colors here to avoid circular imports
+            from ..utils.colors import Colors
+            
+            print(f"Downloading: {Colors.blue(url)}")
+            print(f"Quality: {Colors.cyan(quality)}")
+            print(f"Audio only: {Colors.cyan(str(audio_only))}")
+            print(f"Save location: {Colors.blue(str(download_dir))}")
             if metadata:
                 artist = metadata.get('artist', 'Unknown')
                 album = metadata.get('album', 'Unknown')
                 year = metadata.get('year', 'Unknown Year')
                 title = metadata.get('title', 'Unknown Title')
-                print(f"Organized as: {artist}/{album} ({year})/{title}")
+                print(f"Organized as: {Colors.green(artist)}/{Colors.yellow(album)} ({Colors.cyan(str(year))})/{Colors.white(title)}")
             print()
             
             # Try multiple strategies to bypass 403 errors
@@ -164,7 +167,14 @@ class YouTubeDownloader:
             
             for i, strategy in enumerate(strategies, 1):
                 try:
-                    print(f"Trying strategy {i}...")
+                    # Use Rich console if available, otherwise fall back to print
+                    try:
+                        from rich.console import Console
+                        console = Console()
+                        console.print(f"[blue]Trying strategy [bold white]{i}[/bold white]...[/blue]")
+                    except ImportError:
+                        print(f"Trying strategy {Colors.bold(Colors.white(str(i)))}...")
+                    
                     cmd = strategy(url, quality, audio_only, output_template)
                     
                     # Run download
@@ -175,13 +185,28 @@ class YouTubeDownloader:
                     if downloaded_files:
                         # Get the most recently created file
                         latest_file = max(downloaded_files, key=os.path.getctime)
-                        print(f"✅ Success with strategy {i}")
+                        try:
+                            from rich.console import Console
+                            console = Console()
+                            console.print(f"[bold green]✓[/bold green] Success with strategy {i}")
+                        except ImportError:
+                            print(f"{Colors.green('✅')} Success with strategy {i}")
                         return latest_file
                         
                 except subprocess.CalledProcessError as e:
-                    print(f"❌ Strategy {i} failed: {e.stderr if e.stderr else e}")
+                    error_msg = e.stderr if e.stderr else str(e)
+                    try:
+                        from rich.console import Console
+                        console = Console()
+                        console.print(f"[bold red]✗[/bold red] Strategy {i} failed: {error_msg}")
+                        if i < len(strategies):
+                            console.print("[blue]ℹ[/blue] Trying next strategy...")
+                    except ImportError:
+                        print(f"{Colors.red('❌')} Strategy {i} failed: {error_msg}")
+                        if i < len(strategies):
+                            print(f"{Colors.blue('ℹ')} Trying next strategy...")
+                    
                     if i < len(strategies):
-                        print("Trying next strategy...")
                         continue
                     else:
                         raise Exception(f"All download strategies failed. Last error: {e}")
@@ -189,16 +214,36 @@ class YouTubeDownloader:
         except Exception as e:
             raise Exception(f"Error downloading video: {e}") from e
     
+    def _has_chrome_cookies(self) -> bool:
+        """Check if Chrome cookies database exists."""
+        chrome_cookie_paths = [
+            Path.home() / "Library/Application Support/Google/Chrome/Default/Cookies",
+            Path.home() / "Library/Application Support/Google/Chrome/Profile 1/Cookies",
+            Path.home() / ".config/google-chrome/Default/Cookies",
+            Path.home() / ".config/google-chrome/Profile 1/Cookies",
+            Path.home() / "AppData/Local/Google/Chrome/User Data/Default/Cookies",
+            Path.home() / "AppData/Local/Google/Chrome/User Data/Profile 1/Cookies",
+        ]
+        
+        for path in chrome_cookie_paths:
+            if path.exists():
+                return True
+        return False
+    
     def _build_command_strategy_1(self, url: str, quality: str, audio_only: bool, output_template: str) -> List[str]:
-        """Strategy 1: Basic yt-dlp with user agent and cookies"""
+        """Strategy 1: Basic yt-dlp with user agent, optionally with cookies if available"""
         cmd = [
             'yt-dlp',
             '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            '--cookies-from-browser', 'chrome',  # Try to use browser cookies
             '--no-check-certificate',
             '--ignore-errors',
-            '--no-warnings'
+            '--no-warnings',
+            '--extractor-args', 'youtube:player_client=web'
         ]
+        
+        # Only add cookies if Chrome is available
+        if self._has_chrome_cookies():
+            cmd.extend(['--cookies-from-browser', 'chrome'])
         
         if audio_only:
             cmd.extend([
@@ -348,9 +393,12 @@ class YouTubeDownloader:
                 url
             ]
             
-            print(f"Downloading playlist: {url}")
-            print(f"Quality: {quality}")
-            print(f"Save location: {self.download_dir}")
+            # Import colors here to avoid circular imports
+            from ..utils.colors import Colors
+            
+            print(f"Downloading playlist: {Colors.blue(url)}")
+            print(f"Quality: {Colors.cyan(quality)}")
+            print(f"Save location: {Colors.blue(str(self.download_dir))}")
             print()
             
             subprocess.run(cmd, check=True)

@@ -1,247 +1,362 @@
 # Odysseus - Music Discovery Tool
 
-A comprehensive Python tool for discovering and downloading music. Odysseus searches MusicBrainz for song information, finds corresponding YouTube videos, and allows you to download them with a powerful command-line interface.
+A comprehensive Python tool for discovering and downloading music from various sources with proper metadata handling.
 
-## Features
+## 🏗️ New Architecture
 
-- **MusicBrainz Integration**: Search for songs, artists, albums, and releases
-- **YouTube Search**: Find videos for discovered music
-- **Download Support**: Download videos or extract audio using yt-dlp
-- **Multiple Quality Options**: Choose from best quality, audio-only, or specific formats
-- **Three Search Modes**: Recording, Release, and Discography modes
-- **Interactive CLI**: User-friendly command-line interface with clear prompts
-- **Batch Downloads**: Download entire albums or multiple tracks at once
-- **Smart Metadata Selection**: Choose the best metadata from multiple sources (MusicBrainz, YouTube, Discogs, Spotify, Last.fm, Genius) before downloading
+The codebase has been completely refactored with proper separation of concerns and modular design:
 
-## Installation
+```
+src/odysseus/
+├── __init__.py
+├── main.py                 # Main entry point
+├── core/                   # Core configuration and exceptions
+│   ├── __init__.py
+│   ├── config.py          # All configuration constants
+│   └── exceptions.py      # Custom exceptions
+├── models/                 # Data models
+│   ├── __init__.py
+│   ├── song.py           # Song and metadata models
+│   ├── search_results.py # Search result models
+│   └── releases.py       # Release and track models
+├── services/              # Business logic services
+│   ├── __init__.py
+│   ├── search_service.py  # Search coordination
+│   ├── metadata_service.py # Metadata handling
+│   └── download_service.py # Download management
+├── clients/               # External API clients
+│   ├── __init__.py
+│   ├── musicbrainz.py    # MusicBrainz API client
+│   ├── youtube.py        # YouTube search client
+│   └── youtube_downloader.py # YouTube download client
+├── ui/                    # User interface components
+│   ├── __init__.py
+│   ├── cli.py           # Command-line interface
+│   └── display.py       # Display formatting
+└── utils/                 # Utility modules
+    ├── __init__.py
+    ├── colors.py        # Terminal colors
+    └── metadata_merger.py # Metadata merging logic
+```
 
-1. Clone or download this repository
-2. Install required dependencies:
-   ```bash
-   pip install requests
-   pip install yt-dlp
-   ```
+## ✨ Key Improvements
 
-## Usage
+### 1. **Separation of Concerns**
+- **Models**: Clean data structures with validation
+- **Services**: Business logic separated from UI and data access
+- **Clients**: External API interactions isolated
+- **UI**: User interface components separated from business logic
 
-Odysseus provides three main modes for music discovery and downloading:
+### 2. **Modular Design**
+- Each module has a single responsibility
+- Clear interfaces between components
+- Easy to test and maintain
+- Extensible architecture
 
-### 1. Recording Mode - Download Individual Songs
+### 3. **Better Error Handling**
+- Custom exception hierarchy
+- Proper error propagation
+- User-friendly error messages
 
-Search and download specific recordings/songs:
+### 4. **Improved Code Organization**
+- No more 1000+ line files
+- Logical grouping of related functionality
+- Clear import structure
+- Consistent naming conventions
+
+## 🚀 Usage
+
+### Installation
 
 ```bash
-python3 main.py recording --title "Bohemian Rhapsody" --artist "Queen"
+# Clone the repository
+git clone <repository-url>
+cd odysseus
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Install in development mode
+pip install -e .
+
+# Or run directly using the entry point
+odysseus recording --title "Test Song" --artist "Test Artist"
+
+# Or using Python directly
+python -m odysseus.main recording --title "Test Song" --artist "Test Artist"
 ```
 
-**Options:**
-- `--title, -t`: Song title to search for (required)
-- `--artist, -a`: Artist name (required)
-- `--album, -l`: Album name (optional)
-- `--year, -y`: Release year (optional)
-- `--quality, -q`: Download quality: `best`, `audio`, `worst` (default: `audio`)
-- `--no-download`: Search only, do not download
+### Environment Variables
 
-**Example:**
-```bash
-python3 main.py recording --title "Imagine" --artist "John Lennon" --year 1971 --quality audio
-```
-
-### Metadata Selection Feature
-
-Before downloading, Odysseus now allows you to choose the best metadata from multiple sources:
-
-1. **Automatic Source Detection**: The tool searches MusicBrainz, YouTube, Discogs, Spotify, Last.fm, and Genius for metadata
-2. **Interactive Selection**: You'll see all available metadata sources with confidence scores and completeness ratings
-3. **Field-by-Field Choice**: Select the best title, artist, album, and year from different sources
-4. **Download Confirmation**: Review your final metadata selection before proceeding with the download
-
-**Example Metadata Selection:**
-```
-================================================================================
-METADATA SOURCES
-================================================================================
-
-1. MusicBrainz
-   Confidence: 0.95 | Completeness: 0.90
-   Title: Bohemian Rhapsody
-   Artist: Queen
-   Album: A Night at the Opera
-   Year: 1975
-   Genre: Rock, Progressive Rock
-----------------------------------------
-
-2. YouTube
-   Confidence: 0.60 | Completeness: 0.70
-   Title: Queen - Bohemian Rhapsody (Official Video)
-   Artist: Queen Official
-   Album: A Night at the Opera
-   Year: 2008
-----------------------------------------
-
-3. Discogs
-   Confidence: 0.90 | Completeness: 0.80
-   Title: Bohemian Rhapsody
-   Artist: Queen
-   Album: A Night at the Opera
-   Year: 1975
-   Genre: Rock
-----------------------------------------
-```
-
-You can then choose which source to use for each metadata field, ensuring you get the most accurate information for your music files.
-
-### 2. Release Mode - Download Album Tracks
-
-Search and download tracks from a specific release/album:
+Odysseus supports configuration through environment variables:
 
 ```bash
-python3 main.py release --album "Dark Side of the Moon" --artist "Pink Floyd"
+# Download directory
+export ODYSSEUS_DOWNLOADS_DIR="/path/to/downloads"
+
+# Logging (console only)
+export ODYSSEUS_LOG_LEVEL="DEBUG"  # DEBUG, INFO, WARNING, ERROR
+
+# MusicBrainz configuration
+export MUSICBRAINZ_REQUEST_DELAY="1.0"  # Rate limiting delay
+export MUSICBRAINZ_MAX_RESULTS="5"      # Max search results
+export MUSICBRAINZ_TIMEOUT="30"         # Request timeout
+
+# Download configuration
+export ODYSSEUS_DEFAULT_QUALITY="best"     # best, audio, worst
+export ODYSSEUS_AUDIO_FORMAT="mp3"        # Audio format
+export ODYSSEUS_MAX_CONCURRENT_DOWNLOADS="3"
 ```
 
-**Options:**
-- `--album, -l`: Album/release name to search for (required)
-- `--artist, -a`: Artist name (required)
-- `--year, -y`: Release year (optional)
-- `--quality, -q`: Download quality: `best`, `audio`, `worst` (default: `audio`)
-- `--tracks, -k`: Comma-separated track numbers (e.g., `1,3,5`)
-- `--no-download`: Search only, do not download
+### Command Line Interface
 
-**Examples:**
-```bash
-# Download all tracks from an album
-python3 main.py release --album "Abbey Road" --artist "The Beatles"
-
-# Download specific tracks only
-python3 main.py release --album "Abbey Road" --artist "The Beatles" --tracks "1,2,3"
-```
-
-### 3. Discography Mode - Browse Artist's Complete Discography
-
-Browse an artist's discography and download selected releases:
+#### Search and Download a Recording
 
 ```bash
-python3 main.py discography --artist "The Beatles"
+# Basic search
+odysseus recording --title "Bohemian Rhapsody" --artist "Queen"
+
+# With album and year for better matching
+odysseus recording --title "Stairway to Heaven" --artist "Led Zeppelin" --album "Led Zeppelin IV" --year 1971
+
+# Search only (no download)
+odysseus recording --title "Bohemian Rhapsody" --artist "Queen" --no-download
+
+# Specify quality
+odysseus recording --title "Bohemian Rhapsody" --artist "Queen" --quality best
 ```
 
-**Options:**
-- `--artist, -a`: Artist name to browse discography (required)
-- `--year, -y`: Filter releases by year (optional)
-- `--quality, -q`: Download quality: `best`, `audio`, `worst` (default: `audio`)
-- `--no-download`: Browse only, do not download
+#### Search and Download a Release/Album
 
-**Examples:**
 ```bash
-# Browse complete discography
-python3 main.py discography --artist "The Beatles"
+# Download entire album
+odysseus release --album "Dark Side of the Moon" --artist "Pink Floyd"
 
-# Browse releases from a specific year
-python3 main.py discography --artist "The Beatles" --year 1965
+# Download specific tracks
+odysseus release --album "Abbey Road" --artist "The Beatles" --tracks "1,2,3"
+
+# With year filter
+odysseus release --album "Thriller" --artist "Michael Jackson" --year 1982
+
+# Search only
+odysseus release --album "The Wall" --artist "Pink Floyd" --no-download
 ```
 
-### General Options
+#### Browse and Download from Discography
 
-All modes support:
-- `--help`: Show help message
-- `--version`: Show version number
-- `--no-download`: Search/browse only, do not download
+```bash
+# Browse all releases by artist
+odysseus discography --artist "The Beatles"
 
-### Example Session
+# Filter by year
+odysseus discography --artist "Pink Floyd" --year 1970
 
-```
-=== Odysseus - Music Discovery Tool ===
-Version: 1.0.0
-Enter song information (press Enter to skip optional fields):
-
-Song title: Bohemian Rhapsody
-Artist: Queen
-Album (optional): A Night at the Opera
-Release year (optional): 1975
-
-Searching MusicBrainz for: Bohemian Rhapsody by Queen
-
-=== MUSICBRAINZ SEARCH RESULTS ===
-1. Bohemian Rhapsody
-   Artist: Queen
-   Album: A Night at the Opera
-   Release Date: 1975-10-31
-   Score: 100
-
-Select a result (1-1) or 'q' to quit: 1
-
-Selected: Bohemian Rhapsody by Queen
-
-=== SEARCHING YOUTUBE ===
-Search query: Queen Bohemian Rhapsody
-
-=== YOUTUBE SEARCH RESULTS ===
-1. Queen - Bohemian Rhapsody (Official Video)
-   Channel: Queen Official
-   Duration: 5:55
-   Views: 1.2B views
-   Published: 8 years ago
-
-Would you like to download a video? (y/n): y
-Select a video to download (1-1) or 'q' to skip: 1
-
-=== DOWNLOADING VIDEO ===
-Title: Queen - Bohemian Rhapsody (Official Video)
-URL: https://www.youtube.com/watch?v=fJ9rUzIMcZQ
-
-Download options:
-1. Best quality video
-2. Audio only (MP3)
-3. Specific quality
-
-Choose option (1-3): 2
-
-Download completed successfully!: /path/to/downloads/Queen - Bohemian Rhapsody.mp3
+# Browse only (no download)
+odysseus discography --artist "Led Zeppelin" --no-download
 ```
 
-## Project Structure
+### Advanced Usage
 
+#### Quality Options
+
+- `best`: Best available quality (video + audio)
+- `audio`: Audio only (MP3, high quality)
+- `worst`: Lowest quality (for testing)
+
+#### Download Organization
+
+Files are automatically organized in the following structure:
+```
+downloads/
+└── Artist Name/
+    └── Album Name (Year)/
+        ├── Track 1.mp3
+        ├── Track 2.mp3
+        └── ...
+```
+
+## 🔧 Development
+
+### Running Tests
+
+```bash
+# Install development dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+
+# Run with coverage
+pytest --cov=odysseus
+```
+
+### Code Quality
+
+```bash
+# Format code
+black src/
+
+# Lint code
+flake8 src/
+
+# Type checking
+mypy src/
+```
+
+## 📁 File Structure Comparison
+
+### Before (Monolithic)
 ```
 odysseus/
-├── main.py                 # Main application entry point (uses CLI)
-├── cli.py                  # Command-line interface implementation
-├── config.py              # Configuration and constants
-├── musicbrainz_client.py  # MusicBrainz API client
-├── youtube_client.py      # YouTube search client
-├── youtube_downloader.py # YouTube download functionality
-├── metadata_merger.py    # Metadata merging and application
-├── downloads/             # Default download directory
-├── config/                # Configuration files
-└── logs/                  # Log files
+├── cli.py              # 1049 lines - Everything mixed together
+├── metadata_merger.py  # 781 lines - Complex metadata logic
+├── discogs_client.py   # 446 lines - API client
+├── musicbrainz_client.py # 549 lines - Another API client
+├── youtube_client.py   # 145 lines - YouTube client
+├── youtube_downloader.py # 413 lines - Download logic
+├── config.py           # 198 lines - Configuration
+├── colors.py           # 138 lines - UI utilities
+└── ... (many more files)
 ```
 
-## Configuration
+### After (Modular)
+```
+src/odysseus/
+├── core/               # Configuration and exceptions
+├── models/             # Data models (3 files, ~200 lines each)
+├── services/           # Business logic (3 files, ~100 lines each)
+├── clients/            # API clients (3 files, ~200-400 lines each)
+├── ui/                 # User interface (2 files, ~200-300 lines each)
+└── utils/              # Utilities (2 files, ~100-200 lines each)
+```
 
-All settings are centralized in `config.py`:
+## 🎯 Benefits
 
-- **API Configuration**: MusicBrainz and YouTube API settings
-- **Download Settings**: Quality presets, file formats, directories
-- **UI Settings**: Display options, separators, limits
-- **Error Messages**: Standardized error and success messages
-- **Validation Rules**: Input validation parameters
+1. **Maintainability**: Each file has a clear purpose and manageable size
+2. **Testability**: Individual components can be tested in isolation
+3. **Extensibility**: Easy to add new features without affecting existing code
+4. **Readability**: Code is organized logically and easy to navigate
+5. **Reusability**: Components can be reused across different parts of the application
 
-## Dependencies
+## 🔄 Migration Guide
 
-- `requests`: HTTP library for API calls
-- `yt-dlp`: YouTube downloader (installed automatically if missing)
+The old files are still available for reference, but the new structure should be used going forward:
 
-## Error Handling
+- `main.py` → `src/odysseus/main.py`
+- `cli.py` → `src/odysseus/ui/cli.py`
+- `metadata_merger.py` → `src/odysseus/utils/metadata_merger.py`
+- `musicbrainz_client.py` → `src/odysseus/clients/musicbrainz.py`
+- And so on...
 
-The tool includes comprehensive error handling for:
-- Network connectivity issues
-- Invalid user input
-- Missing dependencies
-- API rate limiting
-- Download failures
+## 🔍 Troubleshooting
 
-## License
+### Common Issues
 
-This project is open source. Feel free to modify and distribute.
+#### 1. Download Failures (403 Errors)
 
-## Contributing
+If you encounter 403 errors when downloading from YouTube:
 
-Contributions are welcome! Please feel free to submit issues and pull requests.
+```bash
+# Update yt-dlp to the latest version
+pip install --upgrade yt-dlp
+
+# Or let Odysseus auto-update it
+# The downloader will attempt to update yt-dlp automatically
+```
+
+The downloader uses multiple strategies to bypass restrictions, so it should work even if one strategy fails.
+
+#### 2. No Search Results Found
+
+- Check your internet connection
+- Verify the artist name and song title spelling
+- Try a more general search (e.g., just artist and title, without album)
+- Check MusicBrainz website directly to see if the recording exists
+
+#### 3. Slow Downloads
+
+- Reduce `ODYSSEUS_MAX_CONCURRENT_DOWNLOADS` if downloading multiple files
+- Check your internet connection speed
+- Consider using `--quality audio` for faster audio-only downloads
+
+#### 4. Logging Issues
+
+Enable debug logging for more information (console output only):
+
+```bash
+export ODYSSEUS_LOG_LEVEL="DEBUG"
+odysseus recording --title "Song" --artist "Artist"
+```
+
+All logging output is displayed in the console.
+
+#### 5. Permission Errors
+
+Ensure you have write permissions to the download directory:
+
+```bash
+# Set custom download directory with write permissions
+export ODYSSEUS_DOWNLOADS_DIR="/path/to/writable/directory"
+```
+
+### Dependencies
+
+Make sure all dependencies are installed:
+
+```bash
+pip install -r requirements.txt
+```
+
+Key dependencies:
+- `requests`: For API calls
+- `mutagen`: For metadata handling
+- `yt-dlp`: For YouTube downloads (auto-updated by the tool)
+
+## 📊 Features
+
+- ✅ **MusicBrainz Integration**: Search for recordings, releases, and discographies
+- ✅ **YouTube Search**: Find corresponding videos for any track
+- ✅ **Automatic Metadata**: Fetches and applies cover art, album info, and track metadata
+- ✅ **Organized Downloads**: Files organized by Artist/Album structure
+- ✅ **Multiple Quality Options**: Best, audio-only, or custom quality
+- ✅ **Retry Logic**: Automatic retries with exponential backoff for failed requests
+- ✅ **Console Logging**: Detailed console output for debugging and monitoring
+- ✅ **Environment Configuration**: Flexible configuration via environment variables
+- ✅ **Error Recovery**: Multiple download strategies for reliability
+
+## 🧪 Testing
+
+The project includes a basic test suite:
+
+```bash
+# Install test dependencies
+pip install pytest pytest-cov
+
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=odysseus --cov-report=html
+
+# Run specific test file
+pytest tests/test_config.py
+```
+
+## 📝 Next Steps
+
+- [x] **Testing**: Basic test structure added
+- [x] **Documentation**: Enhanced README with examples and troubleshooting
+- [x] **Configuration**: Environment-based configuration support
+- [x] **Logging**: Proper logging throughout the application
+- [x] **Error Recovery**: Retry logic with exponential backoff
+
+Future enhancements:
+- [ ] Add progress bars for downloads using tqdm
+- [ ] Add support for batch downloads from CSV/JSON files
+- [ ] Add playlist support for YouTube playlists
+- [ ] Add support for other music sources (Spotify, SoundCloud, etc.)
+- [ ] Add GUI interface option
+- [ ] Add Docker containerization
+- [ ] Add CI/CD pipeline
+
+This refactoring provides a solid foundation for future development and makes the codebase much more maintainable and professional.

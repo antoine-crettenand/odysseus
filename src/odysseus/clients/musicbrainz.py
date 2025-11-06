@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 MusicBrainz Client Module
 A client for searching the MusicBrainz database for music information.
@@ -10,55 +9,13 @@ import time
 import ssl
 import urllib3
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
-from config import MUSICBRAINZ_CONFIG, ERROR_MESSAGES, SUCCESS_MESSAGES, DEFAULTS
+from ..models.song import SongData
+from ..models.search_results import MusicBrainzSong
+from ..models.releases import Track, ReleaseInfo
+from ..core.config import MUSICBRAINZ_CONFIG, ERROR_MESSAGES
 
 # Disable SSL warnings for problematic connections
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-
-@dataclass
-class SongData:
-    """Song data structure."""
-    title: str
-    artist: str
-    album: Optional[str] = None
-    release_year: Optional[int] = None
-
-
-@dataclass
-class MusicBrainzSong:
-    """MusicBrainz search result."""
-    title: str
-    artist: str
-    album: Optional[str]
-    release_date: Optional[str]
-    genre: Optional[str]
-    score: int
-    mbid: str
-    url: str
-
-
-@dataclass
-class Track:
-    """Track information from a release."""
-    position: int
-    title: str
-    artist: str
-    duration: Optional[str] = None
-    mbid: Optional[str] = None
-
-
-@dataclass
-class ReleaseInfo:
-    """Detailed release information with tracks."""
-    title: str
-    artist: str
-    release_date: Optional[str]
-    genre: Optional[str]
-    mbid: str
-    url: str
-    tracks: List[Track]
 
 
 class MusicBrainzClient:
@@ -167,12 +124,14 @@ class MusicBrainzClient:
             print(f"HTTP fallback also failed: {e}")
             return None
     
-    def search_recording(self, song_data: SongData) -> List[MusicBrainzSong]:
+    def search_recording(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None) -> List[MusicBrainzSong]:
         """
         Search for recordings in MusicBrainz.
         
         Args:
             song_data: Song information to search for
+            offset: Offset for pagination (default: 0)
+            limit: Maximum number of results (default: uses self.max_results)
             
         Returns:
             List of MusicBrainz results
@@ -199,7 +158,8 @@ class MusicBrainzClient:
         params = {
             'query': query,
             'fmt': 'json',
-            'limit': self.max_results
+            'limit': limit or self.max_results,
+            'offset': offset
         }
         
         try:
@@ -216,12 +176,14 @@ class MusicBrainzClient:
             print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
             return []
     
-    def search_release(self, song_data: SongData) -> List[MusicBrainzSong]:
+    def search_release(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None) -> List[MusicBrainzSong]:
         """
         Search for releases (albums) in MusicBrainz.
         
         Args:
             song_data: Song information to search for
+            offset: Offset for pagination (default: 0)
+            limit: Maximum number of results (default: uses self.max_results)
             
         Returns:
             List of MusicBrainz results
@@ -243,7 +205,8 @@ class MusicBrainzClient:
         params = {
             'query': query,
             'fmt': 'json',
-            'limit': self.max_results
+            'limit': limit or self.max_results,
+            'offset': offset
         }
         
         try:
@@ -272,7 +235,7 @@ class MusicBrainzClient:
         """
         url = f"{self.base_url}/release/{release_mbid}"
         params = {
-            'inc': 'recordings+artist-credits',
+            'inc': 'recordings+artist-credits+media',
             'fmt': 'json'
         }
         
@@ -289,88 +252,6 @@ class MusicBrainzClient:
         except Exception as e:
             print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
             return None
-    
-    def _parse_release_info(self, data: Dict[str, Any]) -> Optional[ReleaseInfo]:
-        """Parse detailed release information."""
-        try:
-            # Basic release info
-            title = data.get('title', '')
-            mbid = data.get('id', '')
-            release_date = data.get('date', '')
-            
-            # Get artist information
-            artist_credits = data.get('artist-credit', [])
-            artist = ''
-            if artist_credits:
-                artist = artist_credits[0].get('name', '')
-            
-            # Get genre information
-            genres = data.get('genres', [])
-            genre = None
-            if genres:
-                genre = genres[0].get('name', '')
-            
-            url = f"https://musicbrainz.org/release/{mbid}"
-            
-            # Parse tracks
-            tracks = []
-            media = data.get('media', [])
-            if media:
-                # Get tracks from the first medium (disc)
-                medium = media[0]
-                track_list = medium.get('tracks', [])
-                
-                for track_data in track_list:
-                    position = track_data.get('position', 0)
-                    recording = track_data.get('recording', {})
-                    track_title = recording.get('title', '')
-                    track_mbid = recording.get('id', '')
-                    
-                    # Get track artist (usually same as release artist)
-                    track_artist_credits = recording.get('artist-credit', [])
-                    track_artist = artist  # Default to release artist
-                    if track_artist_credits:
-                        track_artist = track_artist_credits[0].get('name', artist)
-                    
-                    # Get duration
-                    duration = None
-                    if 'length' in recording and recording['length']:
-                        duration_ms = recording['length']
-                        duration = self._format_duration(duration_ms)
-                    
-                    track = Track(
-                        position=position,
-                        title=track_title,
-                        artist=track_artist,
-                        duration=duration,
-                        mbid=track_mbid
-                    )
-                    tracks.append(track)
-            
-            return ReleaseInfo(
-                title=title,
-                artist=artist,
-                release_date=release_date,
-                genre=genre,
-                mbid=mbid,
-                url=url,
-                tracks=tracks
-            )
-            
-        except Exception as e:
-            print(f"Error parsing release info: {e}")
-            return None
-    
-    def _format_duration(self, duration_ms: int) -> str:
-        """Format duration from milliseconds to MM:SS format."""
-        if not duration_ms:
-            return None
-        
-        seconds = duration_ms // 1000
-        minutes = seconds // 60
-        seconds = seconds % 60
-        
-        return f"{minutes:02d}:{seconds:02d}"
     
     def search_artist_releases(self, artist: str, year: Optional[int] = None) -> List[MusicBrainzSong]:
         """
@@ -491,58 +372,95 @@ class MusicBrainzClient:
         
         return results
     
-    def search(self, song_data: SongData) -> List[MusicBrainzSong]:
-        """
-        Smart search that chooses the appropriate search type based on input data.
-        - If title is provided: search for recordings only
-        - If only album (LP) is known: search for releases only
-        
-        Args:
-            song_data: Song information to search for
+    def _parse_release_info(self, data: Dict[str, Any]) -> Optional[ReleaseInfo]:
+        """Parse detailed release information."""
+        try:
+            # Basic release info
+            title = data.get('title', '')
+            mbid = data.get('id', '')
+            release_date = data.get('date', '')
             
-        Returns:
-            List of MusicBrainz results
+            # Get artist information
+            artist_credits = data.get('artist-credit', [])
+            artist = ''
+            if artist_credits:
+                artist = artist_credits[0].get('name', '')
+            
+            # Get genre information
+            genres = data.get('genres', [])
+            genre = None
+            if genres:
+                genre = genres[0].get('name', '')
+            
+            url = f"https://musicbrainz.org/release/{mbid}"
+            
+            # Parse tracks
+            tracks = []
+            media = data.get('media', [])
+            if media:
+                # Get tracks from the first medium (disc)
+                medium = media[0]
+                track_list = medium.get('tracks', [])
+                
+                for track_data in track_list:
+                    position = track_data.get('position', 0)
+                    recording = track_data.get('recording', {})
+                    track_title = recording.get('title', '')
+                    track_mbid = recording.get('id', '')
+                    
+                    # Get track artist (usually same as release artist)
+                    track_artist_credits = recording.get('artist-credit', [])
+                    track_artist = artist  # Default to release artist
+                    if track_artist_credits:
+                        track_artist = track_artist_credits[0].get('name', artist)
+                    
+                    # Get duration - check track-level length first, then recording-level
+                    duration = None
+                    # Track-level length (if available) - this is the actual length on this release
+                    # Note: MusicBrainz 'length' field in track/recording objects is in milliseconds
+                    if 'length' in track_data and track_data['length']:
+                        duration_value = track_data['length']
+                        duration = self._format_duration(duration_value)
+                    # Fall back to recording-level length if track-level not available
+                    elif 'length' in recording and recording['length']:
+                        duration_value = recording['length']
+                        duration = self._format_duration(duration_value)
+                    
+                    track = Track(
+                        position=position,
+                        title=track_title,
+                        artist=track_artist,
+                        duration=duration,
+                        mbid=track_mbid
+                    )
+                    tracks.append(track)
+            
+            return ReleaseInfo(
+                title=title,
+                artist=artist,
+                release_date=release_date,
+                genre=genre,
+                mbid=mbid,
+                url=url,
+                tracks=tracks
+            )
+            
+        except Exception as e:
+            print(f"Error parsing release info: {e}")
+            return None
+    
+    def _format_duration(self, duration_value: int) -> str:
         """
-        results = []
+        Format duration to MM:SS format.
+        MusicBrainz API 'length' field is in milliseconds.
+        """
+        if not duration_value:
+            return None
         
-        # If title is provided, search for recordings
-        if song_data.title:
-            print(f"Title provided ({song_data.title}) - searching for recordings")
-            results = self.search_recording(song_data)
+        # MusicBrainz 'length' field is in milliseconds
+        # Convert to seconds (round to nearest second for display)
+        seconds = round(duration_value / 1000)
+        minutes = seconds // 60
+        seconds = seconds % 60
         
-        # If only album is known (no title), search for releases
-        elif song_data.album and not song_data.title:
-            print(f"Only album provided ({song_data.album}) - searching for releases")
-            results = self.search_release(song_data)
-        
-        # If both title and album are provided, prioritize recordings
-        elif song_data.title and song_data.album:
-            print(f"Both title ({song_data.title}) and album ({song_data.album}) provided - searching for recordings")
-            results = self.search_recording(song_data)
-        
-        else:
-            print("Insufficient data for search. Please provide at least a title or album.")
-        
-        return results
-
-
-def print_results(results: List[MusicBrainzSong], search_type: str):
-    """Print search results in a formatted way."""
-    if not results:
-        print(f"No {search_type} results found.")
-        return
-    
-    print(f"\n=== {search_type.upper()} RESULTS ===")
-    print("-" * 60)
-    
-    for i, result in enumerate(results, 1):
-        print(f"{i}. {result.title or result.album}")
-        print(f"   Artist: {result.artist}")
-        if result.album and search_type == "recording":
-            print(f"   Album: {result.album}")
-        if result.release_date:
-            print(f"   Release Date: {result.release_date}")
-        print(f"   Score: {result.score}")
-        print(f"   URL: {result.url}")
-        print()
-
+        return f"{minutes:02d}:{seconds:02d}"
