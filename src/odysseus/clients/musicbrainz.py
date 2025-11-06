@@ -159,7 +159,8 @@ class MusicBrainzClient:
             'query': query,
             'fmt': 'json',
             'limit': limit or self.max_results,
-            'offset': offset
+            'offset': offset,
+            'inc': 'releases+release-groups'  # Include release and release-group info for better date enrichment
         }
         
         try:
@@ -176,7 +177,7 @@ class MusicBrainzClient:
             print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
             return []
     
-    def search_release(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None) -> List[MusicBrainzSong]:
+    def search_release(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None, release_type: Optional[str] = None) -> List[MusicBrainzSong]:
         """
         Search for releases (albums) in MusicBrainz.
         
@@ -184,6 +185,7 @@ class MusicBrainzClient:
             song_data: Song information to search for
             offset: Offset for pagination (default: 0)
             limit: Maximum number of results (default: uses self.max_results)
+            release_type: Optional release type filter (e.g., "Album", "Single", "EP", "Compilation", "Live", etc.)
             
         Returns:
             List of MusicBrainz results
@@ -199,6 +201,10 @@ class MusicBrainzClient:
         if song_data.release_year:
             query_parts.append(f'date:{song_data.release_year}')
         
+        # Add release type filter if specified
+        if release_type:
+            query_parts.append(f'type:"{release_type}"')
+        
         query = ' AND '.join(query_parts)
         
         url = f"{self.base_url}/release"
@@ -206,7 +212,8 @@ class MusicBrainzClient:
             'query': query,
             'fmt': 'json',
             'limit': limit or self.max_results,
-            'offset': offset
+            'offset': offset,
+            'inc': 'release-groups'  # Include release-group info to get release type
         }
         
         try:
@@ -235,7 +242,7 @@ class MusicBrainzClient:
         """
         url = f"{self.base_url}/release/{release_mbid}"
         params = {
-            'inc': 'recordings+artist-credits+media',
+            'inc': 'recordings+artist-credits+media+release-groups',
             'fmt': 'json'
         }
         
@@ -253,7 +260,7 @@ class MusicBrainzClient:
             print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
             return None
     
-    def search_artist_releases(self, artist: str, year: Optional[int] = None, max_results: Optional[int] = None) -> List[MusicBrainzSong]:
+    def search_artist_releases(self, artist: str, year: Optional[int] = None, max_results: Optional[int] = None, release_type: Optional[str] = None) -> List[MusicBrainzSong]:
         """
         Search for releases by a specific artist.
         Fetches all available releases using pagination.
@@ -262,6 +269,7 @@ class MusicBrainzClient:
             artist: Artist name to search for
             year: Optional year filter
             max_results: Optional maximum number of results to fetch (None = fetch all)
+            release_type: Optional release type filter (e.g., "Album", "Single", "EP", "Compilation", "Live", etc.)
             
         Returns:
             List of releases by the artist
@@ -270,6 +278,10 @@ class MusicBrainzClient:
         
         if year:
             query_parts.append(f'date:{year}')
+        
+        # Add release type filter if specified
+        if release_type:
+            query_parts.append(f'type:"{release_type}"')
         
         query = ' AND '.join(query_parts)
         
@@ -289,7 +301,8 @@ class MusicBrainzClient:
                     'query': query,
                     'fmt': 'json',
                     'limit': limit,
-                    'offset': offset
+                    'offset': offset,
+                    'inc': 'release-groups'  # Include release-group info to get release type
                 }
                 
                 data = self._make_request(url, params)
@@ -357,6 +370,13 @@ class MusicBrainzClient:
                 release = releases[0]  # Take first release
                 album = release.get('title', '')
                 release_date = release.get('date', '')
+                
+                # If release date is missing, try to get it from release-group's first-release-date
+                if not release_date:
+                    release_group = release.get('release-group')
+                    if release_group and release_group.get('first-release-date'):
+                        release_date = release_group.get('first-release-date')
+                
                 genre = release.get('genres', [])
                 if genre:
                     genre = genre[0]
@@ -393,6 +413,21 @@ class MusicBrainzClient:
             if artist_credits:
                 artist = artist_credits[0].get('name', '')
             
+            # Get release type from release-group
+            release_type = None
+            release_group = release.get('release-group')
+            if release_group:
+                release_type = release_group.get('primary-type')
+                # Also check for secondary types (e.g., "Live" can be a secondary type)
+                secondary_types = release_group.get('secondary-types', [])
+                if secondary_types:
+                    # If there are secondary types, prefer them (e.g., "Live" over "Album")
+                    release_type = secondary_types[0] if secondary_types else release_type
+                
+                # If release date is missing, try to get it from release-group's first-release-date
+                if not release_date and release_group.get('first-release-date'):
+                    release_date = release_group.get('first-release-date')
+            
             url = f"https://musicbrainz.org/release/{mbid}"
             
             result = MusicBrainzSong(
@@ -401,6 +436,7 @@ class MusicBrainzClient:
                 album=album,
                 release_date=release_date,
                 genre=None,  # Releases don't have genre in basic search
+                release_type=release_type,
                 mbid=mbid,
                 score=score,
                 url=url
@@ -428,6 +464,21 @@ class MusicBrainzClient:
             genre = None
             if genres:
                 genre = genres[0].get('name', '')
+            
+            # Get release type from release-group
+            release_type = None
+            release_group = data.get('release-group')
+            if release_group:
+                release_type = release_group.get('primary-type')
+                # Also check for secondary types (e.g., "Live" can be a secondary type)
+                secondary_types = release_group.get('secondary-types', [])
+                if secondary_types:
+                    # If there are secondary types, prefer them (e.g., "Live" over "Album")
+                    release_type = secondary_types[0] if secondary_types else release_type
+                
+                # If release date is missing, try to get it from release-group's first-release-date
+                if not release_date and release_group.get('first-release-date'):
+                    release_date = release_group.get('first-release-date')
             
             url = f"https://musicbrainz.org/release/{mbid}"
             
@@ -477,6 +528,7 @@ class MusicBrainzClient:
                 artist=artist,
                 release_date=release_date,
                 genre=genre,
+                release_type=release_type,
                 mbid=mbid,
                 url=url,
                 tracks=tracks

@@ -140,6 +140,11 @@ Examples:
             help='Release year (optional)'
         )
         parser.add_argument(
+            '--type', '-t',
+            choices=['Album', 'Single', 'EP', 'Compilation', 'Live', 'Soundtrack', 'Spokenword', 'Interview', 'Audiobook', 'Other'],
+            help='Filter by release type (e.g., Album, Single, EP, Compilation, Live, etc.)'
+        )
+        parser.add_argument(
             '--quality', '-q',
             choices=['best', 'audio', 'worst'],
             default='audio',
@@ -166,6 +171,11 @@ Examples:
             '--year', '-y',
             type=int,
             help='Filter releases by year'
+        )
+        parser.add_argument(
+            '--type', '-t',
+            choices=['Album', 'Single', 'EP', 'Compilation', 'Live', 'Soundtrack', 'Spokenword', 'Interview', 'Audiobook', 'Other'],
+            help='Filter by release type (e.g., Album, Single, EP, Compilation, Live, etc.)'
         )
         parser.add_argument(
             '--quality', '-q',
@@ -291,7 +301,8 @@ Examples:
                 f"Searching MusicBrainz releases: {song_data.album} by {song_data.artist}",
                 self.search_service.search_releases,
                 song_data,
-                offset=offset
+                offset=offset,
+                release_type=args.type
             )
         
             if not results:
@@ -333,6 +344,8 @@ Examples:
         subtitle = f"Searching discography for: {args.artist}"
         if args.year:
             subtitle += f" (Year: {args.year})"
+        if args.type:
+            subtitle += f" (Type: {args.type})"
         console.print(self.display_manager._create_header_panel(
             f"📚 {PROJECT_NAME} - Discography Browse",
             subtitle
@@ -344,7 +357,8 @@ Examples:
             f"Searching discography for: {args.artist}",
             self.search_service.search_artist_releases,
             args.artist,
-            args.year
+            year=args.year,
+            release_type=args.type
         )
         
         if not releases:

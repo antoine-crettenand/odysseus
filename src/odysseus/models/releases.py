@@ -23,6 +23,7 @@ class ReleaseInfo:
     artist: str
     release_date: Optional[str] = None
     genre: Optional[str] = None
+    release_type: Optional[str] = None  # e.g., "Album", "Single", "EP", "Compilation", "Live", etc.
     mbid: str = ""
     url: str = ""
     tracks: List[Track] = None

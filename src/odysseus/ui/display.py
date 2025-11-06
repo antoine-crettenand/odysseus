@@ -3,6 +3,7 @@ Display management for Odysseus CLI with Rich components.
 Modern, beautiful terminal interface with animations and colors.
 """
 
+import unicodedata
 from typing import List, Optional, Any, Dict, Union
 from rich.console import Console
 from rich.table import Table
@@ -74,6 +75,7 @@ class DisplayManager:
         table.add_column("Title", style="white", width=30)
         table.add_column("Artist", style="green", width=25)
         table.add_column("Album", style="yellow", width=25, no_wrap=False)
+        table.add_column("Type", style="magenta", width=12, justify="center")
         table.add_column("Release Date", style="cyan", width=12, justify="center")
         table.add_column("Score", style="bold", width=8, justify="center")
         
@@ -82,12 +84,15 @@ class DisplayManager:
             artist = result.artist or "Unknown"
             album = ""
             release_date = ""
+            release_type = Text("—", style="dim")
             score = Text("—", style="dim")
             
             if hasattr(result, 'album') and result.album:
                 album = result.album
             if hasattr(result, 'release_date') and result.release_date:
                 release_date = result.release_date
+            if hasattr(result, 'release_type') and result.release_type:
+                release_type = Text(result.release_type, style="bold magenta")
             if hasattr(result, 'score') and result.score:
                 score = self._format_score(result.score)
             
@@ -96,6 +101,7 @@ class DisplayManager:
                 title,
                 artist,
                 album,
+                release_type,
                 release_date,
                 score
             )
@@ -157,6 +163,8 @@ class DisplayManager:
         # Create header panel
         header_content = f"[bold yellow]{release_info.title}[/bold yellow]"
         header_content += f"\n[green]by {release_info.artist}[/green]"
+        if release_info.release_type:
+            header_content += f"\n[bold magenta]Type: {release_info.release_type}[/bold magenta]"
         if release_info.release_date:
             header_content += f"\n[cyan]Released: {release_info.release_date}[/cyan]"
         if release_info.genre:
@@ -201,7 +209,7 @@ class DisplayManager:
         self.console.print()
     
     def display_discography(self, releases: List[MusicBrainzSong]):
-        """Display discography grouped by year with global numbering."""
+        """Display discography grouped by year with global numbering, sorted by type within each year."""
         # Create header
         self.console.print()
         self.console.print(self._create_header_panel(
@@ -209,6 +217,25 @@ class DisplayManager:
             f"Found {len(releases)} release{'s' if len(releases) != 1 else ''}"
         ))
         self.console.print()
+        
+        # Define type priority for sorting (lower number = higher priority)
+        type_priority = {
+            'Album': 1,
+            'EP': 2,
+            'Single': 3,
+            'Compilation': 4,
+            'Live': 5,
+            'Soundtrack': 6,
+            'Spokenword': 7,
+            'Interview': 8,
+            'Audiobook': 9,
+            'Other': 10
+        }
+        
+        def get_type_priority(release: MusicBrainzSong) -> int:
+            """Get priority for sorting releases by type."""
+            release_type = release.release_type or "Other"
+            return type_priority.get(release_type, 99)
         
         # Group releases by year
         releases_by_year = {}
@@ -227,6 +254,12 @@ class DisplayManager:
         
         for year in sorted_years:
             year_releases = releases_by_year[year]
+            
+            # Sort releases within year by type priority, then by release date
+            year_releases.sort(key=lambda r: (
+                get_type_priority(r),
+                r.release_date or ""
+            ))
             
             # Year header
             self.console.print(Panel(
@@ -248,17 +281,24 @@ class DisplayManager:
             table.add_column("#", style="bold white", width=4, justify="right")
             table.add_column("Album", style="yellow", width=40)
             table.add_column("Artist", style="green", width=25)
+            table.add_column("Type", style="magenta", width=12, justify="center")
             table.add_column("Release Date", style="cyan", width=15)
             table.add_column("Score", style="bold", width=8, justify="center")
             
             for release in year_releases:
-                release_date = release.release_date if release.release_date and len(release.release_date) > 4 else "—"
+                # Show release date if available (even if just a year like "2015")
+                if release.release_date and len(release.release_date) >= 4:
+                    release_date = release.release_date
+                else:
+                    release_date = "—"
+                release_type = Text(release.release_type, style="bold magenta") if release.release_type else Text("—", style="dim")
                 score = self._format_score(release.score) if release.score else Text("—", style="dim")
                 
                 table.add_row(
                     str(global_counter),
                     release.album,
                     release.artist,
+                    release_type,
                     release_date,
                     score
                 )
@@ -570,21 +610,109 @@ class DisplayManager:
         
         return formatted_size, total_tracks, total_minutes
     
+    def _normalize_string(self, s: Optional[str]) -> str:
+        """Normalize a string for comparison (lowercase, strip whitespace, normalize special characters)."""
+        if not s:
+            return ""
+        # First, normalize Unicode characters (NFKD normalization helps with apostrophes and special chars)
+        normalized = unicodedata.normalize('NFKD', s)
+        # Convert to lowercase and strip whitespace
+        normalized = normalized.lower().strip()
+        # Normalize "&" to "and" for better matching
+        normalized = normalized.replace(" & ", " and ")
+        normalized = normalized.replace("&", " and ")
+        # Normalize all apostrophe variants to a standard apostrophe
+        # This handles: ', ', ', ', ʼ, ʻ, ʼ, ʽ, ʾ, ʿ, ˊ, ˋ, etc.
+        # After NFKD normalization, many apostrophes become U+0027 or similar
+        apostrophe_chars = ["'", "'", "'", "'", "ʼ", "ʻ", "ʼ", "ʽ", "ʾ", "ʿ", "ˊ", "ˋ", "\u2018", "\u2019", "\u201A", "\u201B", "\u2032", "\u2035"]
+        for char in apostrophe_chars:
+            normalized = normalized.replace(char, "'")
+        # Normalize different types of quotes to a standard form
+        normalized = normalized.replace(""", '"')  # Left double quotation mark
+        normalized = normalized.replace(""", '"')  # Right double quotation mark
+        normalized = normalized.replace(""", "'")  # Left single quotation mark (if not already handled)
+        normalized = normalized.replace(""", "'")  # Right single quotation mark (if not already handled)
+        # Normalize dashes
+        normalized = normalized.replace("–", "-")  # En dash
+        normalized = normalized.replace("—", "-")  # Em dash
+        # Remove multiple spaces
+        normalized = " ".join(normalized.split())
+        return normalized
+    
+    def _filter_unknown_year_duplicates(self, releases: List[MusicBrainzSong]) -> List[MusicBrainzSong]:
+        """Filter out releases in 'Unknown Year' that are duplicates of releases with dates."""
+        # Build a set of (normalized_album, normalized_artist) tuples for releases with dates
+        releases_with_dates = set()
+        for release in releases:
+            if release.release_date and len(release.release_date) >= 4:
+                album = self._normalize_string(release.album)
+                artist = self._normalize_string(release.artist)
+                if album and artist:
+                    releases_with_dates.add((album, artist))
+        
+        # Filter out releases without dates that match releases with dates
+        filtered = []
+        filtered_count = 0
+        for release in releases:
+            has_date = release.release_date and len(release.release_date) >= 4
+            if has_date:
+                # Always keep releases with dates
+                filtered.append(release)
+            else:
+                # Check if this release without a date matches a release with a date
+                album = self._normalize_string(release.album)
+                artist = self._normalize_string(release.artist)
+                if album and artist and (album, artist) in releases_with_dates:
+                    # This is a duplicate - skip it
+                    filtered_count += 1
+                else:
+                    # Unique release without a date - keep it
+                    filtered.append(release)
+        
+        if filtered_count > 0:
+            self.console.print(f"[blue]ℹ[/blue] Filtered out {filtered_count} duplicate release{'s' if filtered_count != 1 else ''} from 'Unknown Year' category.")
+        
+        return filtered
+    
     def _confirm_all_releases(self, releases: List[MusicBrainzSong], quality: str = "audio", search_service=None) -> List[MusicBrainzSong]:
         """Confirm downloading all releases with disk space estimate."""
-        self.console.print(f"[bold yellow]⚠[/bold yellow] This will download ALL {len(releases)} release{'s' if len(releases) != 1 else ''}!")
+        # Filter out "Unknown Year" duplicates before processing
+        filtered_releases = self._filter_unknown_year_duplicates(releases)
+        
+        if len(filtered_releases) < len(releases):
+            self.console.print(f"[blue]ℹ[/blue] Filtered releases: {len(releases)} → {len(filtered_releases)} (removed duplicates from 'Unknown Year')")
+        
+        # Ask if user wants to exclude "Unknown Year" releases
+        unknown_year_count = sum(1 for r in filtered_releases if not r.release_date or len(r.release_date) < 4)
+        if unknown_year_count > 0:
+            self.console.print(f"\n[blue]ℹ[/blue] Found {unknown_year_count} release{'s' if unknown_year_count != 1 else ''} in 'Unknown Year' category.")
+            exclude_unknown = Confirm.ask(
+                "[bold]Exclude 'Unknown Year' releases from download?[/bold]",
+                default=True
+            )
+            
+            if exclude_unknown:
+                releases_with_dates = [r for r in filtered_releases if r.release_date and len(r.release_date) >= 4]
+                self.console.print(f"[blue]ℹ[/blue] Excluding {unknown_year_count} release{'s' if unknown_year_count != 1 else ''} from 'Unknown Year' category.")
+                filtered_releases = releases_with_dates
+        
+        if not filtered_releases:
+            self.console.print("[yellow]⚠[/yellow] No releases to download after filtering.")
+            return []
+        
+        self.console.print(f"[bold yellow]⚠[/bold yellow] This will download ALL {len(filtered_releases)} release{'s' if len(filtered_releases) != 1 else ''}!")
         
         # Estimate disk space (with loading indicator if we need to fetch release info)
         if search_service:
             estimated_size, total_tracks, total_minutes = self.show_loading_spinner(
                 "Calculating disk space estimate...",
                 self._estimate_disk_space,
-                releases,
+                filtered_releases,
                 quality,
                 search_service
             )
         else:
-            estimated_size, total_tracks, total_minutes = self._estimate_disk_space(releases, quality, search_service)
+            estimated_size, total_tracks, total_minutes = self._estimate_disk_space(filtered_releases, quality, search_service)
         
         # Format time estimate (rough estimate: 1 minute per track for download + processing)
         estimated_time_minutes = total_tracks
@@ -602,15 +730,15 @@ class DisplayManager:
         
         # Show a preview
         self.console.print("\n[bold]Preview of releases to download:[/bold]")
-        for i, release in enumerate(releases[:5], 1):
+        for i, release in enumerate(filtered_releases[:5], 1):
             self.console.print(f"  {i}. [yellow]{release.album}[/yellow] by [green]{release.artist}[/green]")
         
-        if len(releases) > 5:
-            self.console.print(f"  ... and {len(releases) - 5} more release{'s' if len(releases) - 5 != 1 else ''}")
+        if len(filtered_releases) > 5:
+            self.console.print(f"  ... and {len(filtered_releases) - 5} more release{'s' if len(filtered_releases) - 5 != 1 else ''}")
         
         if Confirm.ask("\n[bold red]Are you sure you want to download ALL releases?[/bold red]", default=False):
-            self.console.print(f"[bold green]✓[/bold green] Confirmed! Will download all {len(releases)} release{'s' if len(releases) != 1 else ''}.")
-            return releases
+            self.console.print(f"[bold green]✓[/bold green] Confirmed! Will download all {len(filtered_releases)} release{'s' if len(filtered_releases) != 1 else ''}.")
+            return filtered_releases
         else:
             self.console.print("[yellow]⚠[/yellow] Download cancelled.")
             return []
