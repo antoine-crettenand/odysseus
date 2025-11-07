@@ -310,8 +310,14 @@ class MetadataMerger:
         self.final_metadata = metadata
         logger.debug(f"Set final metadata manually: {metadata.title} by {metadata.artist}")
     
-    def apply_metadata_to_file(self, file_path) -> bool:
-        """Apply the merged metadata to an audio file."""
+    def apply_metadata_to_file(self, file_path, quiet: bool = False) -> bool:
+        """
+        Apply the merged metadata to an audio file.
+        
+        Args:
+            file_path: Path to the audio file
+            quiet: If True, suppress success messages (useful when progress bars are active)
+        """
         if not self.final_metadata:
             logger.error("No merged metadata available")
             return False
@@ -439,7 +445,8 @@ class MetadataMerger:
                             audio_file.tags.add(apic)
                             
                             message = f"✓ Added cover art to {file_path.name} ({len(self.final_metadata.cover_art_data)} bytes)"
-                            print(message)
+                            if not quiet:
+                                print(message)
                             logger.debug(f"Added cover art to {file_path} ({len(self.final_metadata.cover_art_data)} bytes)")
                             
                         except Exception as e:
@@ -532,7 +539,8 @@ class MetadataMerger:
             # Save the file (this will save metadata changes)
             audio_file.save()
             message = f"✓ Applied metadata to {file_path.name}"
-            print(message)
+            if not quiet:
+                print(message)
             logger.debug(f"Applied metadata to {file_path}")
             return True
             

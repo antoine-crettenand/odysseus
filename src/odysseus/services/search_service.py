@@ -3,10 +3,12 @@ Search service that coordinates searches across multiple sources.
 """
 
 import unicodedata
+import concurrent.futures
 from typing import List, Optional, Dict, Any, Tuple
 from ..models.song import SongData
-from ..models.search_results import SearchResult, MusicBrainzSong, YouTubeVideo
+from ..models.search_results import SearchResult, MusicBrainzSong, YouTubeVideo, DiscogsRelease
 from ..clients.musicbrainz import MusicBrainzClient
+from ..clients.discogs import DiscogsClient
 from ..clients.youtube import YouTubeClient
 
 
@@ -15,6 +17,7 @@ class SearchService:
     
     def __init__(self):
         self.musicbrainz_client = MusicBrainzClient()
+        self.discogs_client = DiscogsClient()
         self.youtube_client = None  # Will be initialized when needed
     
     def _normalize_string(self, s: Optional[str]) -> str:
@@ -174,7 +177,7 @@ class SearchService:
         return self._deduplicate_results(results)
     
     def search_releases(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None, release_type: Optional[str] = None) -> List[MusicBrainzSong]:
-        """Search for releases in MusicBrainz.
+        """Search for releases in MusicBrainz and Discogs in parallel.
         
         Args:
             song_data: Song information to search for
@@ -182,55 +185,118 @@ class SearchService:
             limit: Maximum number of results
             release_type: Optional release type filter (e.g., "Album", "Single", "EP", "Compilation", "Live", etc.)
         """
-        # Note: We still pass release_type to the API query, but also filter client-side
-        # because MusicBrainz API filtering by type can be unreliable
-        results = self.musicbrainz_client.search_release(song_data, offset=offset, limit=limit, release_type=None)  # Get all results
-        results = self._deduplicate_results(results)
+        # Search both sources in parallel
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            mb_future = executor.submit(
+                self.musicbrainz_client.search_release,
+                song_data, offset, limit, None  # Get all results, filter later
+            )
+            discogs_future = executor.submit(
+                self.discogs_client.search_release,
+                song_data, offset, limit, release_type
+            )
+            
+            mb_results = mb_future.result()
+            discogs_results = discogs_future.result()
+        
+        # Convert Discogs results to MusicBrainzSong format for consistency
+        mb_formatted_results = self._deduplicate_results(mb_results)
+        discogs_formatted = self._convert_discogs_to_mb_format(discogs_results)
+        
+        # Combine results
+        all_results = mb_formatted_results + discogs_formatted
         
         # Apply client-side filtering by release type if specified
         if release_type:
             filtered_results = []
-            for result in results:
+            for result in all_results:
                 if result.release_type and result.release_type.lower() == release_type.lower():
                     filtered_results.append(result)
-            results = filtered_results
+            all_results = filtered_results
             # Deduplicate again after filtering to ensure clean results
-            results = self._deduplicate_results(results)
+            all_results = self._deduplicate_results(all_results)
         
         # Apply limit after filtering if specified
-        if limit and len(results) > limit:
-            results = results[:limit]
+        if limit and len(all_results) > limit:
+            all_results = all_results[:limit]
         
-        return results
+        return all_results
     
     def search_artist_releases(self, artist: str, year: Optional[int] = None, release_type: Optional[str] = None) -> List[MusicBrainzSong]:
-        """Search for releases by a specific artist.
+        """Search for releases by a specific artist in MusicBrainz and Discogs in parallel.
         
         Args:
             artist: Artist name to search for
             year: Optional year filter
             release_type: Optional release type filter (e.g., "Album", "Single", "EP", "Compilation", "Live", etc.)
         """
-        # Note: We still pass release_type to the API query, but also filter client-side
-        # because MusicBrainz API filtering by type can be unreliable
-        results = self.musicbrainz_client.search_artist_releases(artist, year, release_type=None)  # Get all results
-        results = self._deduplicate_results(results)
+        # Search both sources in parallel
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            mb_future = executor.submit(
+                self.musicbrainz_client.search_artist_releases,
+                artist, year, None  # Get all results, filter later
+            )
+            discogs_future = executor.submit(
+                self.discogs_client.search_artist_releases,
+                artist, year, None, None  # Get all results, filter later
+            )
+            
+            mb_results = mb_future.result()
+            discogs_results = discogs_future.result()
+        
+        # Convert Discogs results to MusicBrainzSong format for consistency
+        mb_formatted_results = self._deduplicate_results(mb_results)
+        discogs_formatted = self._convert_discogs_to_mb_format(discogs_results)
+        
+        # Combine results
+        all_results = mb_formatted_results + discogs_formatted
         
         # Apply client-side filtering by release type if specified
         if release_type:
             filtered_results = []
-            for result in results:
+            for result in all_results:
                 if result.release_type and result.release_type.lower() == release_type.lower():
                     filtered_results.append(result)
-            results = filtered_results
+            all_results = filtered_results
             # Deduplicate again after filtering to ensure clean results
-            results = self._deduplicate_results(results)
+            all_results = self._deduplicate_results(all_results)
         
-        return results
+        return all_results
     
-    def get_release_info(self, release_mbid: str) -> Optional[Any]:
-        """Get detailed release information."""
-        return self.musicbrainz_client.get_release_info(release_mbid)
+    def get_release_info(self, release_mbid: str, batch_progress: Optional[tuple[int, int]] = None, source: str = "musicbrainz") -> Optional[Any]:
+        """Get detailed release information from MusicBrainz or Discogs.
+        
+        Args:
+            release_mbid: Release ID (MBID for MusicBrainz, Discogs ID for Discogs)
+            batch_progress: Optional tuple (current, total) for batch operations
+            source: Source to query ("musicbrainz" or "discogs")
+        """
+        if source == "discogs":
+            return self.discogs_client.get_release_info(release_mbid, batch_progress=batch_progress)
+        else:
+            return self.musicbrainz_client.get_release_info(release_mbid, batch_progress=batch_progress)
+    
+    def _convert_discogs_to_mb_format(self, discogs_results: List[DiscogsRelease]) -> List[MusicBrainzSong]:
+        """Convert DiscogsRelease results to MusicBrainzSong format for consistency."""
+        mb_results = []
+        for discogs_result in discogs_results:
+            # Convert year to release_date string format
+            release_date = str(discogs_result.year) if discogs_result.year else None
+            
+            mb_result = MusicBrainzSong(
+                title=discogs_result.title or discogs_result.album or "",
+                artist=discogs_result.artist,
+                album=discogs_result.album,
+                release_date=release_date,
+                genre=discogs_result.genre,
+                release_type=discogs_result.format,
+                mbid=discogs_result.discogs_id,  # Store Discogs ID in mbid field
+                score=discogs_result.score,
+                url=discogs_result.url,
+                source="discogs"  # Mark as from Discogs
+            )
+            mb_results.append(mb_result)
+        return mb_results
     
     def search_youtube(self, query: str, max_results: int = 3, offset: int = 0) -> List[YouTubeVideo]:
         """Search YouTube for videos."""
@@ -249,6 +315,14 @@ class SearchService:
         except Exception as e:
             print(f"MusicBrainz search failed: {e}")
             results['musicbrainz'] = []
+        
+        # Search Discogs
+        try:
+            discogs_results = self.discogs_client.search_release(song_data)
+            results['discogs'] = discogs_results
+        except Exception as e:
+            print(f"Discogs search failed: {e}")
+            results['discogs'] = []
         
         # Search YouTube
         try:

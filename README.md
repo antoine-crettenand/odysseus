@@ -319,6 +319,7 @@ Key dependencies:
 - ✅ **Automatic Metadata**: Fetches and applies cover art, album info, and track metadata
 - ✅ **Organized Downloads**: Files organized by Artist/Album structure
 - ✅ **Multiple Quality Options**: Best, audio-only, or custom quality
+- ✅ **Progress Bars**: Real-time download progress with speed and ETA indicators
 - ✅ **Retry Logic**: Automatic retries with exponential backoff for failed requests
 - ✅ **Console Logging**: Detailed console output for debugging and monitoring
 - ✅ **Environment Configuration**: Flexible configuration via environment variables
@@ -351,7 +352,7 @@ pytest tests/test_config.py
 - [x] **Error Recovery**: Retry logic with exponential backoff
 
 Future enhancements:
-- [ ] Add progress bars for downloads using tqdm
+- [x] **Progress bars for downloads** - Real-time download progress with speed and ETA using Rich Progress
 - [ ] Add support for batch downloads from CSV/JSON files
 - [ ] Add playlist support for YouTube playlists
 - [ ] Add support for other music sources (Spotify, SoundCloud, etc.)

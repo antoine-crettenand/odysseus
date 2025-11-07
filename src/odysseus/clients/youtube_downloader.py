@@ -7,7 +7,10 @@ import os
 import subprocess
 import sys
 import re
-from typing import Dict, Any, Optional, List
+import json
+import threading
+from queue import Queue
+from typing import Dict, Any, Optional, List, Callable
 from pathlib import Path
 from ..core.config import (
     DOWNLOAD_CONFIG, ERROR_MESSAGES, SUCCESS_MESSAGES, 
@@ -122,8 +125,229 @@ class YouTubeDownloader:
         
         return organized_dir
     
+    def _parse_progress_hook(self, line: str, progress_callback: Optional[Callable] = None) -> Optional[Dict[str, Any]]:
+        """
+        Parse yt-dlp progress output line.
+        Returns progress info dict or None if not a progress line.
+        Handles multiple yt-dlp progress output formats.
+        """
+        if not line or not line.strip():
+            return None
+        
+        try:
+            # Format 1: [download] X.X% of Y.YMiB at Z.ZMiB/s ETA MM:SS
+            # Format 2: [download] X.X% of ~Y.YMiB at Z.ZMiB/s ETA MM:SS
+            # Format 3: [download] X.X% at Z.ZMiB/s ETA MM:SS
+            # Format 4: [download] 100% of Y.YMiB in MM:SS
+            
+            line_lower = line.lower()
+            
+            # Check if this is a download progress line
+            # yt-dlp can output progress in various formats
+            # Also check for extractor progress: [extractor] or [ExtractAudio]
+            if '[download]' not in line_lower and '[extractaudio]' not in line_lower:
+                # Also check for percentage without [download] tag (some formats)
+                if '%' in line and ('downloading' in line_lower or 'of' in line_lower):
+                    pass  # Might be a progress line
+                else:
+                    return None
+            
+            # Extract percentage
+            percent_match = re.search(r'(\d+\.?\d*)%', line)
+            if not percent_match:
+                return None
+            
+            percent = float(percent_match.group(1))
+            
+            # Try to extract speed (various formats)
+            speed = None
+            speed_patterns = [
+                r'at\s+([\d.]+)\s*([KMGT]?i?B/s)',  # "at 1.5MiB/s"
+                r'([\d.]+)\s*([KMGT]?i?B/s)',        # "1.5MiB/s"
+            ]
+            for pattern in speed_patterns:
+                speed_match = re.search(pattern, line, re.IGNORECASE)
+                if speed_match:
+                    speed_val = float(speed_match.group(1))
+                    speed_unit = speed_match.group(2)
+                    speed = f"{speed_val} {speed_unit}"
+                    break
+            
+            # Try to extract ETA (various formats)
+            eta = None
+            eta_patterns = [
+                r'ETA\s+(\d+):(\d+)',           # "ETA 01:23"
+                r'ETA\s+(\d+)h\s*(\d+)m',       # "ETA 1h 23m"
+                r'ETA\s+(\d+)m\s*(\d+)s',       # "ETA 1m 23s"
+            ]
+            for pattern in eta_patterns:
+                eta_match = re.search(pattern, line, re.IGNORECASE)
+                if eta_match:
+                    if ':' in pattern:
+                        minutes, seconds = eta_match.groups()
+                        eta = f"{minutes}:{seconds.zfill(2)}"
+                    elif 'h' in pattern:
+                        hours, minutes = eta_match.groups()
+                        eta = f"{hours}h {minutes}m"
+                    else:
+                        minutes, seconds = eta_match.groups()
+                        eta = f"{minutes}m {seconds}s"
+                    break
+            
+            progress_info = {
+                'percent': percent,
+                'speed': speed,
+                'eta': eta,
+                'status': 'downloading' if percent < 100 else 'completed'
+            }
+            
+            if progress_callback:
+                progress_callback(progress_info)
+            
+            return progress_info
+            
+        except Exception:
+            # Silently fail - not a progress line or parsing error
+            pass
+        
+        return None
+    
+    def _run_download_with_progress(self, cmd: List[str], progress_callback: Optional[Callable] = None) -> subprocess.CompletedProcess:
+        """
+        Run download command with progress tracking and timeout protection.
+        """
+        import time
+        
+        # Remove --no-warnings to ensure progress output is visible
+        # Also ensure --newline is present for line-by-line output
+        modified_cmd = []
+        for arg in cmd:
+            if arg != '--no-warnings':
+                modified_cmd.append(arg)
+        
+        # Add --newline before the URL (last argument) if not present
+        if '--newline' not in modified_cmd:
+            modified_cmd.insert(-1, '--newline')
+        
+        # Run with real-time output processing
+        # yt-dlp writes progress to stderr, so we need to capture both
+        process = subprocess.Popen(
+            modified_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+        
+        # Read output from both stdout and stderr
+        output_lines = []
+        start_time = time.time()
+        timeout = self.timeout
+        
+        # Use threading to read from both streams simultaneously
+        
+        def read_stream(stream, queue):
+            """Read from a stream and put lines in queue."""
+            try:
+                # Read line by line, but handle carriage returns for progress updates
+                for line in iter(stream.readline, ''):
+                    if not line:
+                        break
+                    # Strip carriage returns and newlines, but keep the content
+                    cleaned_line = line.rstrip('\r\n')
+                    if cleaned_line:  # Only queue non-empty lines
+                        queue.put(('line', cleaned_line))
+            except Exception:
+                pass
+            finally:
+                queue.put(('done', None))
+        
+        # Create queues for stdout and stderr
+        stdout_queue = Queue()
+        stderr_queue = Queue()
+        
+        # Start threads to read from both streams
+        stdout_thread = threading.Thread(target=read_stream, args=(process.stdout, stdout_queue), daemon=True)
+        stderr_thread = threading.Thread(target=read_stream, args=(process.stderr, stderr_queue), daemon=True)
+        
+        stdout_thread.start()
+        stderr_thread.start()
+        
+        # Process output from both queues with timeout protection
+        stdout_done = False
+        stderr_done = False
+        last_activity_time = time.time()
+        no_activity_timeout = 60  # If no output for 60 seconds, consider it stuck
+        
+        while not (stdout_done and stderr_done):
+            # Check for overall timeout
+            elapsed = time.time() - start_time
+            if elapsed > timeout:
+                process.kill()
+                raise subprocess.TimeoutExpired(cmd, timeout, "Download operation timed out")
+            
+            # Check for no activity timeout (process might be stuck)
+            if time.time() - last_activity_time > no_activity_timeout:
+                # Check if process is still running
+                if process.poll() is None:
+                    process.kill()
+                    raise subprocess.TimeoutExpired(cmd, no_activity_timeout, "Download operation appears stuck (no output)")
+            
+            # Check stdout
+            if not stdout_done:
+                try:
+                    item_type, line = stdout_queue.get(timeout=0.1)
+                    if item_type == 'done':
+                        stdout_done = True
+                    else:
+                        output_lines.append(line)
+                        last_activity_time = time.time()  # Update activity time
+                        # Some progress might be in stdout too
+                        if progress_callback:
+                            self._parse_progress_hook(line, progress_callback)
+                except:
+                    pass
+            
+            # Check stderr (where progress usually goes)
+            if not stderr_done:
+                try:
+                    item_type, line = stderr_queue.get(timeout=0.1)
+                    if item_type == 'done':
+                        stderr_done = True
+                    else:
+                        output_lines.append(line)
+                        last_activity_time = time.time()  # Update activity time
+                        # Progress output is usually in stderr
+                        if progress_callback:
+                            self._parse_progress_hook(line, progress_callback)
+                except:
+                    pass
+        
+        # Wait for threads to finish
+        stdout_thread.join(timeout=1)
+        stderr_thread.join(timeout=1)
+        
+        # Wait for process with timeout
+        try:
+            process.wait(timeout=10)  # Give it 10 seconds to finish after streams close
+        except subprocess.TimeoutExpired:
+            process.kill()
+            raise subprocess.TimeoutExpired(cmd, 10, "Process did not terminate after streams closed")
+        
+        # Create CompletedProcess-like object
+        result = subprocess.CompletedProcess(
+            modified_cmd,
+            process.returncode,
+            stdout='\n'.join(output_lines),
+            stderr=''
+        )
+        
+        return result
+    
     def download(self, url: str, quality: str = "bestaudio", 
-                      audio_only: bool = True, metadata: Optional[Dict[str, Any]] = None, quiet: bool = False) -> Optional[Path]:
+                      audio_only: bool = True, metadata: Optional[Dict[str, Any]] = None, 
+                      quiet: bool = False, progress_callback: Optional[Callable] = None) -> Optional[Path]:
         try:
             # Determine download directory based on metadata
             download_dir = self._create_organized_path(metadata)
@@ -145,6 +369,65 @@ class YouTubeDownloader:
             
             # Set output template
             output_template = str(download_dir / filename_template)
+            
+            # Check if file already exists before attempting download
+            audio_extensions = ['.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav', '.aac', '.webm']
+            system_files = {'.DS_Store', '.Thumbs.db', 'desktop.ini'}
+            
+            if metadata and metadata.get('title'):
+                title = self._sanitize_filename(metadata['title'])
+                track_number = metadata.get('track_number')
+                
+                if track_number:
+                    track_prefix = f"{track_number:02d} - "
+                    expected_base = f"{track_prefix}{title}"
+                else:
+                    expected_base = title
+                
+                # Check for existing files matching the expected pattern
+                for ext in audio_extensions:
+                    potential_file = download_dir / f"{expected_base}{ext}"
+                    if potential_file.exists() and potential_file.is_file():
+                        # File already exists, return it without downloading
+                        # Update progress callback to 100% if provided (so UI shows completion)
+                        if progress_callback:
+                            progress_callback({
+                                'percent': 100.0,
+                                'status': 'completed',
+                                'speed': None,
+                                'eta': None
+                            })
+                        if not quiet:
+                            from ..utils.colors import Colors
+                            print(f"{Colors.yellow('⏭')} Skipping download - file already exists: {Colors.blue(str(potential_file))}")
+                        # Return existing file - metadata will still be applied by the caller
+                        return potential_file
+                
+                # Also check for files with similar names (in case of slight variations)
+                # Look for files starting with the expected base name
+                existing_files = [
+                    f for f in download_dir.glob(f"{expected_base}*")
+                    if f.is_file() 
+                    and f.suffix.lower() in audio_extensions
+                    and f.name not in system_files
+                ]
+                
+                if existing_files:
+                    # Return the first matching file (most likely the correct one)
+                    existing_file = existing_files[0]
+                    # Update progress callback to 100% if provided (so UI shows completion)
+                    if progress_callback:
+                        progress_callback({
+                            'percent': 100.0,
+                            'status': 'completed',
+                            'speed': None,
+                            'eta': None
+                        })
+                    if not quiet:
+                        from ..utils.colors import Colors
+                        print(f"{Colors.yellow('⏭')} Skipping download - file already exists: {Colors.blue(str(existing_file))}")
+                    # Return existing file - metadata will still be applied by the caller
+                    return existing_file
             
             # Only print download info if not in quiet mode (Rich UI handles this)
             if not quiet:
@@ -174,44 +457,120 @@ class YouTubeDownloader:
             
             for i, strategy in enumerate(strategies, 1):
                 try:
-                    # Use Rich console if available, otherwise fall back to print
-                    try:
-                        from rich.console import Console
-                        console = Console()
-                        console.print(f"[blue]Trying strategy [bold white]{i}[/bold white]...[/blue]")
-                    except ImportError:
-                        print(f"Trying strategy {Colors.bold(Colors.white(str(i)))}...")
-                    
-                    cmd = strategy(url, quality, audio_only, output_template)
-                    
-                    # Run download
-                    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-                    
-                    # Find the downloaded file
-                    downloaded_files = list(download_dir.glob("*"))
-                    if downloaded_files:
-                        # Get the most recently created file
-                        latest_file = max(downloaded_files, key=os.path.getctime)
+                    # Only print strategy messages if not in quiet mode and no progress callback
+                    # (progress bars handle their own display)
+                    if not quiet and not progress_callback:
                         try:
                             from rich.console import Console
                             console = Console()
-                            console.print(f"[bold green]✓[/bold green] Success with strategy {i}")
+                            console.print(f"[blue]Trying strategy [bold white]{i}[/bold white]...[/blue]")
                         except ImportError:
-                            print(f"{Colors.green('✅')} Success with strategy {i}")
-                        return latest_file
+                            print(f"Trying strategy {Colors.bold(Colors.white(str(i)))}...")
+                    
+                    cmd = strategy(url, quality, audio_only, output_template)
+                    
+                    # List existing files BEFORE download to identify newly created files
+                    audio_extensions = ['.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav', '.aac', '.webm']
+                    system_files = {'.DS_Store', '.Thumbs.db', 'desktop.ini'}
+                    
+                    existing_files = {
+                        f.name for f in download_dir.glob("*")
+                        if f.is_file() and f.name not in system_files
+                    }
+                    
+                    # Run download with progress tracking if callback provided
+                    if progress_callback:
+                        result = self._run_download_with_progress(cmd, progress_callback)
+                        # Check return code for progress-based downloads
+                        if result.returncode != 0:
+                            # Download failed - continue to next strategy
+                            continue
+                    else:
+                        result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=self.timeout)
+                    
+                    # Find the downloaded file - look for NEW files that weren't there before
+                    # Find all audio files in the directory, excluding system files
+                    all_files = [
+                        f for f in download_dir.glob("*")
+                        if f.is_file() 
+                        and f.suffix.lower() in audio_extensions
+                        and f.name not in system_files
+                    ]
+                    
+                    # Filter to only NEW files (files that didn't exist before download)
+                    new_files = [
+                        f for f in all_files
+                        if f.name not in existing_files
+                    ]
+                    
+                    # CRITICAL: Only return NEW files - if no new files, download failed
+                    if not new_files:
+                        # No new files created - download likely failed
+                        downloaded_file = None
+                    else:
+                        # We have new files - find the one matching our expected pattern
+                        if metadata and metadata.get('title'):
+                            title = self._sanitize_filename(metadata['title'])
+                            track_number = metadata.get('track_number')
+                            
+                            if track_number:
+                                track_prefix = f"{track_number:02d} - "
+                                expected_base = f"{track_prefix}{title}"
+                            else:
+                                expected_base = title
+                            
+                            # Look for files matching the expected pattern (stem = filename without extension)
+                            matching_files = [
+                                f for f in new_files
+                                if f.stem == expected_base
+                            ]
+                            
+                            if matching_files:
+                                # Among matching files, get the most recently created
+                                downloaded_file = max(matching_files, key=os.path.getctime)
+                            else:
+                                # No exact match found - try partial match
+                                partial_matches = [
+                                    f for f in new_files
+                                    if f.stem.startswith(expected_base)
+                                ]
+                                
+                                if partial_matches:
+                                    # Get the most recently created partial match
+                                    downloaded_file = max(partial_matches, key=os.path.getctime)
+                                else:
+                                    # No match found, but we have new files - use the most recently created new file
+                                    # This handles cases where yt-dlp modified the filename
+                                    downloaded_file = max(new_files, key=os.path.getctime)
+                        else:
+                            # No metadata - use the most recently created new file
+                            downloaded_file = max(new_files, key=os.path.getctime)
+                    
+                    if downloaded_file:
+                        # Only print success message if not in quiet mode and no progress callback
+                        if not quiet and not progress_callback:
+                            try:
+                                from rich.console import Console
+                                console = Console()
+                                console.print(f"[bold green]✓[/bold green] Success with strategy {i}")
+                            except ImportError:
+                                print(f"{Colors.green('✅')} Success with strategy {i}")
+                        return downloaded_file
                         
                 except subprocess.CalledProcessError as e:
                     error_msg = e.stderr if e.stderr else str(e)
-                    try:
-                        from rich.console import Console
-                        console = Console()
-                        console.print(f"[bold red]✗[/bold red] Strategy {i} failed: {error_msg}")
-                        if i < len(strategies):
-                            console.print("[blue]ℹ[/blue] Trying next strategy...")
-                    except ImportError:
-                        print(f"{Colors.red('❌')} Strategy {i} failed: {error_msg}")
-                        if i < len(strategies):
-                            print(f"{Colors.blue('ℹ')} Trying next strategy...")
+                    # Only print error messages if not in quiet mode and no progress callback
+                    if not quiet and not progress_callback:
+                        try:
+                            from rich.console import Console
+                            console = Console()
+                            console.print(f"[bold red]✗[/bold red] Strategy {i} failed: {error_msg}")
+                            if i < len(strategies):
+                                console.print("[blue]ℹ[/blue] Trying next strategy...")
+                        except ImportError:
+                            print(f"{Colors.red('❌')} Strategy {i} failed: {error_msg}")
+                            if i < len(strategies):
+                                print(f"{Colors.blue('ℹ')} Trying next strategy...")
                     
                     if i < len(strategies):
                         continue
@@ -368,7 +727,8 @@ class YouTubeDownloader:
         cmd.extend(['-o', output_template, url])
         return cmd
     
-    def download_high_quality_audio(self, url: str, metadata: Optional[Dict[str, Any]] = None, quiet: bool = False) -> Optional[Path]:
+    def download_high_quality_audio(self, url: str, metadata: Optional[Dict[str, Any]] = None, 
+                                     quiet: bool = False, progress_callback: Optional[Callable] = None) -> Optional[Path]:
         """
         Download high-quality audio from YouTube video.
         
@@ -376,11 +736,13 @@ class YouTubeDownloader:
             url: YouTube video URL
             metadata: Optional metadata for organized file structure
             quiet: If True, suppress console output (for Rich UI)
+            progress_callback: Optional callback function for progress updates
             
         Returns:
             Path to downloaded audio file or None if failed
         """
-        return self.download(url, quality="bestaudio", audio_only=True, metadata=metadata, quiet=quiet)
+        return self.download(url, quality="bestaudio", audio_only=True, metadata=metadata, 
+                           quiet=quiet, progress_callback=progress_callback)
     
     def download_playlist(self, url: str, quality: str = "bestaudio") -> List[str]:
         """

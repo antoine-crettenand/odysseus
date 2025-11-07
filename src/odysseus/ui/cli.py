@@ -6,6 +6,7 @@ A comprehensive command-line interface for music discovery and downloading.
 import argparse
 import sys
 import logging
+import subprocess
 import requests
 from typing import List, Optional, Dict, Any
 from pathlib import Path
@@ -17,7 +18,6 @@ from ..services.search_service import SearchService
 from ..services.download_service import DownloadService
 from ..services.metadata_service import MetadataService
 from ..ui.display import DisplayManager
-from ..utils.colors import Colors
 from rich.table import Table
 from rich.panel import Panel
 from rich import box
@@ -373,14 +373,16 @@ Examples:
             return
         
         # Get user selection for releases to download
-        selected_releases = self.display_manager.get_release_selection(ordered_releases, args.quality, self.search_service)
+        selected_releases, auto_download_all_tracks = self.display_manager.get_release_selection(
+            ordered_releases, args.quality, self.search_service
+        )
         
         if not selected_releases:
             console.print("[yellow]⚠[/yellow] No releases selected for download.")
             return
         
         # Download selected releases
-        self._download_selected_releases(selected_releases, args.quality)
+        self._download_selected_releases(selected_releases, args.quality, auto_download_all_tracks=auto_download_all_tracks)
     
     def _search_and_download_recording(self, selected_song: MusicBrainzSong, quality: str):
         """Search YouTube and download a recording."""
@@ -453,10 +455,12 @@ Examples:
         console.print()
         
         # Get detailed release information with tracks
+        source = getattr(selected_release, 'source', 'musicbrainz')
         release_info = self.display_manager.show_loading_spinner(
             f"Fetching release details for: {selected_release.album}",
             self.search_service.get_release_info,
-            selected_release.mbid
+            selected_release.mbid,
+            source=source
         )
         
         if not release_info:
@@ -476,13 +480,22 @@ Examples:
         # Download selected tracks
         self._download_release_tracks(release_info, track_numbers, quality)
     
-    def _download_selected_releases(self, releases: List[MusicBrainzSong], quality: str):
-        """Download selected releases."""
+    def _download_selected_releases(self, releases: List[MusicBrainzSong], quality: str, auto_download_all_tracks: bool = False):
+        """
+        Download selected releases.
+        
+        Args:
+            releases: List of releases to download
+            quality: Download quality
+            auto_download_all_tracks: If True, automatically download all tracks from all releases
+                                     without prompting for each release
+        """
         console = self.display_manager.console
         console.print()
         console.print(self.display_manager._create_header_panel(
             "⬇️  DOWNLOADING RELEASES",
-            f"Releases to download: {len(releases)} | Quality: {quality}"
+            f"Releases to download: {len(releases)} | Quality: {quality}" + 
+            (f" | [bold green]Auto-download all tracks[/bold green]" if auto_download_all_tracks else "")
         ))
         console.print()
         
@@ -492,11 +505,14 @@ Examples:
         for i, release in enumerate(releases, 1):
             self.display_manager.display_download_progress(i, len(releases), release.album)
             
-            # Get detailed release information
+            # Get detailed release information with batch progress
+            source = getattr(release, 'source', 'musicbrainz')
             release_info = self.display_manager.show_loading_spinner(
                 f"Fetching release details: {release.album}",
                 self.search_service.get_release_info,
-                release.mbid
+                release.mbid,
+                batch_progress=(i, len(releases)),
+                source=source
             )
             if not release_info:
                 console.print(f"[bold red]✗[/bold red] Failed to get details for: [yellow]{release.album}[/yellow]")
@@ -506,95 +522,158 @@ Examples:
             # Display track listing
             self.display_manager.display_track_listing_simple(release_info.tracks, release.album)
             
-            # Ask if user wants to download all tracks or select specific ones
-            self.display_manager.display_download_options()
-            
-            from rich.prompt import Prompt
-            while True:
-                choice = Prompt.ask("[bold]Choose option[/bold]", choices=["1", "2", "3"], default="3")
+            # If auto_download_all_tracks is True, skip manual selection and download all tracks
+            if auto_download_all_tracks:
+                console.print(f"[cyan]Auto-downloading all {len(release_info.tracks)} track{'s' if len(release_info.tracks) != 1 else ''}...[/cyan]")
+                track_numbers = list(range(1, len(release_info.tracks) + 1))
+                downloaded, failed = self._download_release_tracks_silent(release_info, track_numbers, quality)
+                total_downloaded += downloaded
+                total_failed += failed
+            else:
+                # Ask if user wants to download all tracks or select specific ones
+                self.display_manager.display_download_options()
                 
-                if choice == '1':
-                    # Download all tracks
-                    track_numbers = list(range(1, len(release_info.tracks) + 1))
-                    downloaded, failed = self._download_release_tracks_silent(release_info, track_numbers, quality)
-                    total_downloaded += downloaded
-                    total_failed += failed
-                    break
-                elif choice == '2':
-                    # Select specific tracks
-                    track_numbers = self._parse_track_selection(None, len(release_info.tracks))
-                    if track_numbers:
+                from rich.prompt import Prompt
+                while True:
+                    choice = Prompt.ask("[bold]Choose option[/bold]", choices=["1", "2", "3"], default="3")
+                    
+                    if choice == '1':
+                        # Download all tracks
+                        track_numbers = list(range(1, len(release_info.tracks) + 1))
                         downloaded, failed = self._download_release_tracks_silent(release_info, track_numbers, quality)
                         total_downloaded += downloaded
                         total_failed += failed
-                    break
-                elif choice == '3':
-                    console.print(f"[yellow]⚠[/yellow] Skipped: [yellow]{release.album}[/yellow]")
-                    break
+                        break
+                    elif choice == '2':
+                        # Select specific tracks
+                        track_numbers = self._parse_track_selection(None, len(release_info.tracks))
+                        if track_numbers:
+                            downloaded, failed = self._download_release_tracks_silent(release_info, track_numbers, quality)
+                            total_downloaded += downloaded
+                            total_failed += failed
+                        break
+                    elif choice == '3':
+                        console.print(f"[yellow]⚠[/yellow] Skipped: [yellow]{release.album}[/yellow]")
+                        break
         
         # Final summary
         self.display_manager.display_download_summary(total_downloaded, total_failed, len(releases))
     
     def _download_release_tracks_silent(self, release_info: ReleaseInfo, track_numbers: List[int], quality: str) -> tuple[int, int]:
-        """Download tracks silently and return counts."""
+        """Download tracks with progress bars and return counts."""
+        console = self.display_manager.console
         downloaded_count = 0
         failed_count = 0
         
-        for track_num in track_numbers:
-            # Find the track
-            track = None
-            for t in release_info.tracks:
-                if t.position == track_num:
-                    track = t
-                    break
+        # Create progress bar for overall track progress
+        progress = self.display_manager.create_progress_bar(len(track_numbers), f"Downloading {release_info.title}")
+        
+        with progress:
+            task = progress.add_task("[cyan]Downloading tracks...", total=len(track_numbers))
             
-            if not track:
-                failed_count += 1
-                continue
-            
-            # Search YouTube for this track
-            search_query = f"{track.artist} {track.title}"
-            try:
-                videos = self.search_service.search_youtube(search_query, 1)  # Only get the best match
+            for track_num in track_numbers:
+                # Find the track
+                track = None
+                for t in release_info.tracks:
+                    if t.position == track_num:
+                        track = t
+                        break
                 
-                if not videos:
+                if not track:
                     failed_count += 1
+                    progress.update(task, advance=1)
                     continue
                 
-                # Use the first (best) result
-                selected_video = videos[0]
+                progress.update(task, description=f"[cyan]Downloading: {track.title[:40]}")
                 
-                # Create metadata for download
-                metadata_dict = {
-                    'title': track.title,
-                    'artist': track.artist,
-                    'album': release_info.title,
-                    'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
-                    'track_number': track.position,
-                    'total_tracks': len(release_info.tracks)
-                }
-                
-                # Download the track
-                youtube_url = selected_video.youtube_url
-                
-                if quality == 'audio':
-                    downloaded_path = self.download_service.download_high_quality_audio(youtube_url, metadata=metadata_dict)
-                else:
-                    downloaded_path = self.download_service.download_video(youtube_url, quality=quality, audio_only=(quality == 'audio'), metadata=metadata_dict)
-                
-                if downloaded_path:
-                    # Apply metadata with cover art (same as _download_release_tracks)
-                    try:
-                        self._apply_metadata_with_cover_art(downloaded_path, track, release_info)
-                    except Exception:
-                        # If metadata application fails, still count as downloaded
-                        pass
-                    downloaded_count += 1
-                else:
-                    failed_count += 1
+                # Search YouTube for this track
+                search_query = f"{track.artist} {track.title}"
+                try:
+                    videos = self.search_service.search_youtube(search_query, 1)  # Only get the best match
                     
-            except Exception:
-                failed_count += 1
+                    if not videos:
+                        failed_count += 1
+                        progress.update(task, advance=1)
+                        continue
+                    
+                    # Use the first (best) result
+                    selected_video = videos[0]
+                    
+                    # Create metadata for download
+                    metadata_dict = {
+                        'title': track.title,
+                        'artist': track.artist,
+                        'album': release_info.title,
+                        'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
+                        'track_number': track.position,
+                        'total_tracks': len(release_info.tracks)
+                    }
+                    
+                    # Create nested progress bar for file download
+                    file_progress, file_task_id = self.display_manager.create_download_progress_bar(
+                        f"Track {track.position}: {track.title[:40]}"
+                    )
+                    
+                    # Progress callback for file download
+                    def update_file_progress(progress_info: Dict[str, Any]):
+                        """Update file-level progress bar."""
+                        percent = progress_info.get('percent', 0)
+                        speed = progress_info.get('speed', '')
+                        eta = progress_info.get('eta', '')
+                        
+                        file_progress.update(file_task_id, completed=percent)
+                        
+                        desc = f"Track {track.position}: {track.title[:35]}"
+                        if speed:
+                            desc += f" @ {speed}"
+                        if eta:
+                            desc += f" ETA: {eta}"
+                        file_progress.update(file_task_id, description=desc)
+                    
+                    # Download the track with progress
+                    youtube_url = selected_video.youtube_url
+                    
+                    with file_progress:
+                        if quality == 'audio':
+                            downloaded_path = self.download_service.download_high_quality_audio(
+                                youtube_url, 
+                                metadata=metadata_dict, 
+                                quiet=True,
+                                progress_callback=update_file_progress
+                            )
+                        else:
+                            downloaded_path = self.download_service.download_video(
+                                youtube_url, 
+                                quality=quality, 
+                                audio_only=(quality == 'audio'), 
+                                metadata=metadata_dict, 
+                                quiet=True,
+                                progress_callback=update_file_progress
+                            )
+                        
+                        file_progress.update(file_task_id, completed=100)
+                    
+                    if downloaded_path:
+                        # Apply metadata with cover art (same as _download_release_tracks)
+                        try:
+                            self._apply_metadata_with_cover_art(downloaded_path, track, release_info)
+                        except Exception:
+                            # If metadata application fails, still count as downloaded
+                            pass
+                        downloaded_count += 1
+                    else:
+                        failed_count += 1
+                        
+                except subprocess.TimeoutExpired:
+                    # Timeout occurred during download
+                    failed_count += 1
+                    console.print(f"[yellow]⚠[/yellow] Timeout downloading track {track.position}: {track.title}")
+                except Exception as e:
+                    # Log other exceptions but continue with next track
+                    failed_count += 1
+                    console.print(f"[yellow]⚠[/yellow] Error downloading track {track.position}: {track.title} - {str(e)[:50]}")
+                
+                progress.update(task, advance=1)
         
         return downloaded_count, failed_count
     
@@ -658,16 +737,54 @@ Examples:
                         'title': track.title,
                         'artist': track.artist,
                         'album': release_info.title,
-                        'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None
+                        'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
+                        'track_number': track.position,
+                        'total_tracks': len(release_info.tracks)
                     }
                     
-                    # Download the track
+                    # Create nested progress bar for file download
+                    file_progress, file_task_id = self.display_manager.create_download_progress_bar(
+                        f"Track {track.position}: {track.title[:40]}"
+                    )
+                    
+                    # Progress callback for file download
+                    def update_file_progress(progress_info: Dict[str, Any]):
+                        """Update file-level progress bar."""
+                        percent = progress_info.get('percent', 0)
+                        speed = progress_info.get('speed', '')
+                        eta = progress_info.get('eta', '')
+                        
+                        file_progress.update(file_task_id, completed=percent)
+                        
+                        desc = f"Track {track.position}: {track.title[:35]}"
+                        if speed:
+                            desc += f" @ {speed}"
+                        if eta:
+                            desc += f" ETA: {eta}"
+                        file_progress.update(file_task_id, description=desc)
+                    
+                    # Download the track with progress
                     youtube_url = selected_video.youtube_url
                     
-                    if quality == 'audio':
-                        downloaded_path = self.download_service.download_high_quality_audio(youtube_url, metadata=metadata_dict)
-                    else:
-                        downloaded_path = self.download_service.download_video(youtube_url, quality=quality, audio_only=(quality == 'audio'), metadata=metadata_dict)
+                    with file_progress:
+                        if quality == 'audio':
+                            downloaded_path = self.download_service.download_high_quality_audio(
+                                youtube_url, 
+                                metadata=metadata_dict,
+                                quiet=True,
+                                progress_callback=update_file_progress
+                            )
+                        else:
+                            downloaded_path = self.download_service.download_video(
+                                youtube_url, 
+                                quality=quality, 
+                                audio_only=(quality == 'audio'), 
+                                metadata=metadata_dict,
+                                quiet=True,
+                                progress_callback=update_file_progress
+                            )
+                        
+                        file_progress.update(file_task_id, completed=100)
                     
                     if downloaded_path:
                         # Apply metadata with cover art
@@ -733,25 +850,53 @@ Examples:
             'year': song_data.release_year
         }
         
-        # Download with progress indicator
+        # Download with progress bar
         console.print("[cyan]Starting download...[/cyan]")
         
-        if quality == 'audio':
-            downloaded_path = self.display_manager.show_loading_spinner(
-                f"Downloading audio: {video_title}",
-                self.download_service.download_high_quality_audio,
-                youtube_url,
-                metadata=metadata_dict
-            )
-        else:
-            downloaded_path = self.display_manager.show_loading_spinner(
-                f"Downloading video: {video_title}",
-                self.download_service.download_video,
-                youtube_url,
-                quality=quality,
-                audio_only=(quality == 'audio'),
-                metadata=metadata_dict
-            )
+        # Create progress bar for file download
+        progress, task_id = self.display_manager.create_download_progress_bar(
+            f"Downloading: {video_title[:50]}"
+        )
+        
+        # Progress callback to update the progress bar
+        def update_progress(progress_info: Dict[str, Any]):
+            """Update progress bar with download info."""
+            percent = progress_info.get('percent', 0)
+            speed = progress_info.get('speed', '')
+            eta = progress_info.get('eta', '')
+            
+            # Update progress
+            progress.update(task_id, completed=percent)
+            
+            # Update description with speed and ETA if available
+            desc = f"Downloading: {video_title[:40]}"
+            if speed:
+                desc += f" @ {speed}"
+            if eta:
+                desc += f" ETA: {eta}"
+            progress.update(task_id, description=desc)
+        
+        # Download with progress tracking
+        with progress:
+            if quality == 'audio':
+                downloaded_path = self.download_service.download_high_quality_audio(
+                    youtube_url,
+                    metadata=metadata_dict,
+                    quiet=True,
+                    progress_callback=update_progress
+                )
+            else:
+                downloaded_path = self.download_service.download_video(
+                    youtube_url,
+                    quality=quality,
+                    audio_only=(quality == 'audio'),
+                    metadata=metadata_dict,
+                    quiet=True,
+                    progress_callback=update_progress
+                )
+            
+            # Mark as complete
+            progress.update(task_id, completed=100, description=f"Completed: {video_title[:40]}")
         
         if downloaded_path:
             # Apply metadata with cover art (consistent with release mode)
@@ -770,7 +915,7 @@ Examples:
                     console.print(f"[blue]ℹ[/blue] ✓ Fetched cover art for [white]{song_data.title}[/white]")
             
             self.metadata_service.merger.set_final_metadata(audio_metadata)
-            self.metadata_service.apply_metadata_to_file(str(downloaded_path))
+            self.metadata_service.apply_metadata_to_file(str(downloaded_path), quiet=True)
             console.print(f"[bold green]✓[/bold green] Download completed: [green]{downloaded_path}[/green]")
         else:
             console.print("[bold red]✗[/bold red] Download failed")
@@ -826,14 +971,14 @@ Examples:
                 cover_art_data = self._fetch_musicbrainz_cover_art(release_info.mbid)
                 if cover_art_data:
                     metadata.cover_art_data = cover_art_data
-                    self.display_manager.console.print(f"[blue]ℹ[/blue] ✓ Fetched cover art for [white]{track.title}[/white]")
+                    self.display_manager.console.print(f"[blue]ℹ[/blue] ✓ Fetched metadata and cover art for [white]{track.title}[/white]")
             
-            # Apply metadata
+            # Apply metadata (quiet=True to suppress messages when progress bars are active)
             self.metadata_service.merger.set_final_metadata(metadata)
-            self.metadata_service.apply_metadata_to_file(str(file_path))
+            self.metadata_service.apply_metadata_to_file(str(file_path), quiet=True)
             
         except Exception as e:
-            self.display_manager.console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
+            self.display_manager.console.print(f"[yellow]⚠[/yellow] Could not apply metadata and cover art to {track.title}: {e}")
     
     def _parse_track_selection(self, tracks_arg: Optional[str], total_tracks: int) -> List[int]:
         """Parse track selection from command line argument or user input."""

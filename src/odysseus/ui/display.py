@@ -4,11 +4,11 @@ Modern, beautiful terminal interface with animations and colors.
 """
 
 import unicodedata
-from typing import List, Optional, Any, Dict, Union
+from typing import List, Optional, Any, Dict, Union, Tuple
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn, TimeRemainingColumn, DownloadColumn, TransferSpeedColumn
 from rich.text import Text
 from rich.prompt import Prompt, IntPrompt, Confirm
 from rich.layout import Layout
@@ -387,8 +387,11 @@ class DisplayManager:
                 else:
                     self.console.print("[bold red]✗[/bold red] Please enter a valid number or 'q' to skip")
     
-    def get_release_selection(self, releases: List[MusicBrainzSong], quality: str = "audio", search_service=None) -> List[MusicBrainzSong]:
-        """Get user selection for releases to download."""
+    def get_release_selection(self, releases: List[MusicBrainzSong], quality: str = "audio", search_service=None) -> Tuple[List[MusicBrainzSong], bool]:
+        """
+        Get user selection for releases to download.
+        Returns: (list of releases, auto_download_all_tracks flag)
+        """
         self.console.print()
         self.console.print(self._create_header_panel(
             "📦 RELEASE SELECTION",
@@ -414,16 +417,19 @@ class DisplayManager:
             choice = Prompt.ask("[bold]Choose selection mode[/bold]", choices=["1", "2", "3", "4", "5"], default="5")
             
             if choice == '1':
-                return self._select_single_release(releases)
+                selected = self._select_single_release(releases)
+                return (selected, False)  # Manual track selection for single release
             elif choice == '2':
-                return self._select_multiple_releases(releases)
+                selected = self._select_multiple_releases(releases)
+                return (selected, False)  # Manual track selection for multiple releases
             elif choice == '3':
-                return self._select_range_releases(releases)
+                selected = self._select_range_releases(releases)
+                return (selected, False)  # Manual track selection for range
             elif choice == '4':
                 return self._confirm_all_releases(releases, quality, search_service)
             elif choice == '5':
                 self.console.print("[yellow]⚠[/yellow] Selection cancelled.")
-                return []
+                return ([], False)
     
     def _select_single_release(self, releases: List[MusicBrainzSong]) -> List[MusicBrainzSong]:
         """Select a single release."""
@@ -569,7 +575,8 @@ class DisplayManager:
             
             for release in sample_releases:
                 try:
-                    release_info = search_service.get_release_info(release.mbid)
+                    source = getattr(release, 'source', 'musicbrainz')
+                    release_info = search_service.get_release_info(release.mbid, source=source)
                     if release_info and release_info.tracks:
                         sample_tracks += len(release_info.tracks)
                         for track in release_info.tracks:
@@ -738,10 +745,24 @@ class DisplayManager:
         
         if Confirm.ask("\n[bold red]Are you sure you want to download ALL releases?[/bold red]", default=False):
             self.console.print(f"[bold green]✓[/bold green] Confirmed! Will download all {len(filtered_releases)} release{'s' if len(filtered_releases) != 1 else ''}.")
-            return filtered_releases
+            
+            # Ask if user wants to automatically download all tracks from all releases
+            self.console.print()
+            auto_download_all = Confirm.ask(
+                "[bold cyan]Automatically download ALL tracks from ALL releases?[/bold cyan]\n"
+                "[dim]If yes, will skip manual track selection for each release.[/dim]",
+                default=True
+            )
+            
+            if auto_download_all:
+                self.console.print("[bold green]✓[/bold green] Will automatically download all tracks from all releases.")
+                return (filtered_releases, True)
+            else:
+                self.console.print("[blue]ℹ[/blue] Will prompt for track selection for each release.")
+                return (filtered_releases, False)
         else:
             self.console.print("[yellow]⚠[/yellow] Download cancelled.")
-            return []
+            return ([], False)
     
     def display_download_progress(self, current: int, total: int, release_name: str):
         """Display download progress for releases."""
@@ -856,6 +877,24 @@ class DisplayManager:
             console=self.console,
             expand=True
         )
+    
+    def create_download_progress_bar(self, description: str = "Downloading") -> tuple[Progress, Any]:
+        """
+        Create a progress bar specifically for file downloads with speed and ETA.
+        Returns (Progress instance, task_id).
+        """
+        progress = Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            DownloadColumn(),
+            TransferSpeedColumn(),
+            TimeRemainingColumn(),
+            console=self.console,
+            expand=True
+        )
+        task_id = progress.add_task(description, total=100)
+        return progress, task_id
     
     def _format_track_number(self, number: int) -> str:
         """Format track number with color."""

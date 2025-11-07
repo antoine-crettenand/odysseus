@@ -58,15 +58,31 @@ class MusicBrainzClient:
         except Exception as e:
             print(f"Warning: Could not configure SSL settings: {e}")
     
-    def _make_request(self, url: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Make a request with SSL error handling and retries."""
+    def _make_request(self, url: str, params: Dict[str, Any], batch_progress: Optional[tuple[int, int]] = None) -> Optional[Dict[str, Any]]:
+        """
+        Make a request with SSL error handling and retries.
+        
+        Args:
+            url: Request URL
+            params: Request parameters
+            batch_progress: Optional tuple (current, total) for batch operations (e.g., (1, 5))
+        """
         max_retries = 3
         retry_delay = 2
+        
+        # Build progress prefix if batch progress is provided
+        progress_prefix = ""
+        if batch_progress:
+            current, total = batch_progress
+            progress_prefix = f"[{current}/{total}] "
         
         # Try HTTPS first
         for attempt in range(max_retries):
             try:
-                print(f"Making request to MusicBrainz (attempt {attempt + 1}/{max_retries})")
+                if batch_progress:
+                    print(f"{progress_prefix}Making request to MusicBrainz (attempt {attempt + 1}/{max_retries})")
+                else:
+                    print(f"Making request to MusicBrainz (attempt {attempt + 1}/{max_retries})")
                 response = self.session.get(url, params=params, timeout=self.timeout)
                 response.raise_for_status()
                 
@@ -76,40 +92,70 @@ class MusicBrainzClient:
                 return response.json()
                 
             except requests.exceptions.SSLError as e:
-                print(f"SSL Error (attempt {attempt + 1}): {e}")
+                if batch_progress:
+                    print(f"{progress_prefix}SSL Error (attempt {attempt + 1}): {e}")
+                else:
+                    print(f"SSL Error (attempt {attempt + 1}): {e}")
                 if attempt < max_retries - 1:
-                    print(f"Retrying in {retry_delay} seconds...")
+                    if batch_progress:
+                        print(f"{progress_prefix}Retrying in {retry_delay} seconds...")
+                    else:
+                        print(f"Retrying in {retry_delay} seconds...")
                     time.sleep(retry_delay)
                     retry_delay *= 2  # Exponential backoff
                 else:
-                    print("All SSL retry attempts failed, trying HTTP fallback...")
-                    return self._try_http_fallback(url, params)
+                    if batch_progress:
+                        print(f"{progress_prefix}All SSL retry attempts failed, trying HTTP fallback...")
+                    else:
+                        print("All SSL retry attempts failed, trying HTTP fallback...")
+                    return self._try_http_fallback(url, params, batch_progress)
                     
             except requests.exceptions.ConnectionError as e:
-                print(f"Connection Error (attempt {attempt + 1}): {e}")
+                if batch_progress:
+                    print(f"{progress_prefix}Connection Error (attempt {attempt + 1}): {e}")
+                else:
+                    print(f"Connection Error (attempt {attempt + 1}): {e}")
                 if attempt < max_retries - 1:
-                    print(f"Retrying in {retry_delay} seconds...")
+                    if batch_progress:
+                        print(f"{progress_prefix}Retrying in {retry_delay} seconds...")
+                    else:
+                        print(f"Retrying in {retry_delay} seconds...")
                     time.sleep(retry_delay)
                     retry_delay *= 2
                 else:
-                    print("All connection retry attempts failed, trying HTTP fallback...")
-                    return self._try_http_fallback(url, params)
+                    if batch_progress:
+                        print(f"{progress_prefix}All connection retry attempts failed, trying HTTP fallback...")
+                    else:
+                        print("All connection retry attempts failed, trying HTTP fallback...")
+                    return self._try_http_fallback(url, params, batch_progress)
                     
             except requests.exceptions.RequestException as e:
-                print(f"Request Error: {e}")
+                if batch_progress:
+                    print(f"{progress_prefix}Request Error: {e}")
+                else:
+                    print(f"Request Error: {e}")
                 return None
                 
         return None
     
-    def _try_http_fallback(self, url: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _try_http_fallback(self, url: str, params: Dict[str, Any], batch_progress: Optional[tuple[int, int]] = None) -> Optional[Dict[str, Any]]:
         """Try HTTP fallback if HTTPS fails."""
         if self.use_http_fallback:
             return None  # Already tried HTTP
             
+        # Build progress prefix if batch progress is provided
+        progress_prefix = ""
+        if batch_progress:
+            current, total = batch_progress
+            progress_prefix = f"[{current}/{total}] "
+            
         try:
             # Convert HTTPS URL to HTTP
             http_url = url.replace('https://', 'http://')
-            print(f"Trying HTTP fallback: {http_url}")
+            if batch_progress:
+                print(f"{progress_prefix}Trying HTTP fallback: {http_url}")
+            else:
+                print(f"Trying HTTP fallback: {http_url}")
             
             response = self.session.get(http_url, params=params, timeout=self.timeout)
             response.raise_for_status()
@@ -121,7 +167,10 @@ class MusicBrainzClient:
             return response.json()
             
         except Exception as e:
-            print(f"HTTP fallback also failed: {e}")
+            if batch_progress:
+                print(f"{progress_prefix}HTTP fallback also failed: {e}")
+            else:
+                print(f"HTTP fallback also failed: {e}")
             return None
     
     def search_recording(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None) -> List[MusicBrainzSong]:
@@ -230,12 +279,13 @@ class MusicBrainzClient:
             print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
             return []
     
-    def get_release_info(self, release_mbid: str) -> Optional[ReleaseInfo]:
+    def get_release_info(self, release_mbid: str, batch_progress: Optional[tuple[int, int]] = None) -> Optional[ReleaseInfo]:
         """
         Get detailed release information including track listing.
         
         Args:
             release_mbid: MusicBrainz release ID
+            batch_progress: Optional tuple (current, total) for batch operations (e.g., (1, 5))
             
         Returns:
             ReleaseInfo with tracks or None if failed
@@ -247,8 +297,9 @@ class MusicBrainzClient:
         }
         
         try:
-            print(f"Fetching release details for MBID: {release_mbid}")
-            data = self._make_request(url, params)
+            if not batch_progress:
+                print(f"Fetching release details for MBID: {release_mbid}")
+            data = self._make_request(url, params, batch_progress=batch_progress)
             
             if data:
                 return self._parse_release_info(data)

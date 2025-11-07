@@ -34,9 +34,9 @@ class MetadataService:
             for source in self.merger.sources
         ]
     
-    def apply_metadata_to_file(self, file_path: str) -> bool:
+    def apply_metadata_to_file(self, file_path: str, quiet: bool = False) -> bool:
         """Apply merged metadata to a file."""
-        return self.merger.apply_metadata_to_file(file_path)
+        return self.merger.apply_metadata_to_file(file_path, quiet=quiet)
     
     def get_user_metadata_selection(self) -> AudioMetadata:
         """Allow user to select metadata from available sources."""

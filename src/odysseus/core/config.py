@@ -34,6 +34,19 @@ MUSICBRAINZ_CONFIG = {
     "TIMEOUT": int(os.getenv("MUSICBRAINZ_TIMEOUT", "30")),
 }
 
+# Discogs Configuration
+DISCOGS_CONFIG = {
+    "BASE_URL": os.getenv("DISCOGS_BASE_URL", "https://api.discogs.com"),
+    "USER_AGENT": os.getenv(
+        "DISCOGS_USER_AGENT",
+        f"{PROJECT_NAME}/{PROJECT_VERSION} (contact@example.com)"
+    ),
+    "USER_TOKEN": os.getenv("DISCOGS_USER_TOKEN", "iePSXUkJUzpmuTjcthOkvPYXZqYdCXRTMqMrwIkY"),  # Optional, for higher rate limits
+    "REQUEST_DELAY": float(os.getenv("DISCOGS_REQUEST_DELAY", "1.0")),
+    "MAX_RESULTS": int(os.getenv("DISCOGS_MAX_RESULTS", "3")),
+    "TIMEOUT": int(os.getenv("DISCOGS_TIMEOUT", "30")),
+}
+
 # YouTube Configuration
 YOUTUBE_CONFIG = {
     "BASE_URL": "https://www.youtube.com",
