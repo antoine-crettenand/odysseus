@@ -432,9 +432,16 @@ class MetadataMerger:
                             except:
                                 pass  # Tags already exist
                             
-                            # Remove existing APIC frames to avoid duplicates
-                            if 'APIC' in audio_file.tags:
-                                del audio_file.tags['APIC']
+                            # Remove all existing APIC frames to avoid duplicates
+                            # APIC can appear multiple times, so we need to remove all instances
+                            if audio_file.tags is not None:
+                                # Get all APIC frame keys
+                                apic_keys = [key for key in audio_file.tags.keys() if key.startswith('APIC')]
+                                for key in apic_keys:
+                                    try:
+                                        del audio_file.tags[key]
+                                    except:
+                                        pass
                             
                             # Add the cover art
                             apic = APIC(
@@ -446,15 +453,16 @@ class MetadataMerger:
                             )
                             audio_file.tags.add(apic)
                             
-                            message = f"✓ Added cover art to {file_path.name} ({len(self.final_metadata.cover_art_data)} bytes)"
+                            message = f"✓ Added cover art to {file_path.name} ({len(self.final_metadata.cover_art_data)} bytes, {mime_type})"
                             if not quiet:
                                 print(message)
-                            logger.debug(f"Added cover art to {file_path} ({len(self.final_metadata.cover_art_data)} bytes)")
+                            logger.debug(f"Added cover art to {file_path} ({len(self.final_metadata.cover_art_data)} bytes, {mime_type})")
                             
                         except Exception as e:
                             message = f"⚠ Could not add cover art to MP3 file {file_path.name}: {e}"
-                            print(message)
-                            logger.warning(f"Could not add cover art to MP3 file {file_path}: {e}")
+                            if not quiet:
+                                print(message)
+                            logger.warning(f"Could not add cover art to MP3 file {file_path}: {e}", exc_info=True)
                     
                     # Handle other formats (M4A, OGG, FLAC, etc.)
                     else:

@@ -148,10 +148,9 @@ class DownloadOrchestrator:
             )
             # Try to get cover art from MusicBrainz if we have MBID
             if hasattr(metadata, 'mbid') and metadata.mbid:
-                cover_art_data = self.metadata_service.fetch_cover_art(metadata.mbid)
+                cover_art_data = self.metadata_service.fetch_cover_art(metadata.mbid, console)
                 if cover_art_data:
                     audio_metadata.cover_art_data = cover_art_data
-                    console.print(f"[blue]ℹ[/blue] ✓ Fetched cover art for [white]{song_data.title}[/white]")
             
             self.metadata_service.merger.set_final_metadata(audio_metadata)
             self.metadata_service.apply_metadata_to_file(str(downloaded_path), quiet=True)
@@ -795,8 +794,10 @@ class DownloadOrchestrator:
                                 split_file, track, release_info, console
                             )
                             downloaded_count += 1
-                        except Exception:
+                        except Exception as e:
                             downloaded_count += 1  # Count as downloaded even if metadata fails
+                            if not silent and console:
+                                console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
                     
                     if not silent:
                         console.print(f"[bold green]✓[/bold green] Successfully downloaded and split {downloaded_count} tracks from full album video")
@@ -1105,9 +1106,10 @@ class DownloadOrchestrator:
                                     self.metadata_service.apply_metadata_with_cover_art(
                                         downloaded_path, track, release_info, console
                                     )
-                                except Exception:
-                                    # If metadata application fails, still count as downloaded
-                                    pass
+                                except Exception as e:
+                                    # If metadata application fails, still count as downloaded but log the error
+                                    if not silent and console:
+                                        console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
                                 if not silent:
                                     self.display_manager.display_track_download_result(
                                         track.title, True, str(downloaded_path)
@@ -1285,9 +1287,10 @@ class DownloadOrchestrator:
                             self.metadata_service.apply_metadata_with_cover_art(
                                 downloaded_path, track, release_info, console
                             )
-                        except Exception:
-                            # If metadata application fails, still count as downloaded
-                            pass
+                        except Exception as e:
+                            # If metadata application fails, still count as downloaded but log the error
+                            if not silent and console:
+                                console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
                         if not silent:
                             self.display_manager.display_track_download_result(
                                 track.title, True, str(downloaded_path)

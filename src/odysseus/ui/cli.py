@@ -13,7 +13,7 @@ from ..services.search_service import SearchService
 from ..services.download_service import DownloadService
 from ..services.metadata_service import MetadataService
 from ..ui.display import DisplayManager
-from ..ui.handlers import RecordingHandler, ReleaseHandler, DiscographyHandler
+from ..ui.handlers import RecordingHandler, ReleaseHandler, DiscographyHandler, MetadataHandler
 from ..core.config import PROJECT_NAME, PROJECT_VERSION
 
 
@@ -45,6 +45,12 @@ class OdysseusCLI:
             self.metadata_service,
             self.display_manager
         )
+        self.metadata_handler = MetadataHandler(
+            self.search_service,
+            self.download_service,
+            self.metadata_service,
+            self.display_manager
+        )
     
     def create_parser(self) -> argparse.ArgumentParser:
         """Create the argument parser."""
@@ -57,6 +63,8 @@ Examples:
   %(prog)s recording --title "Bohemian Rhapsody" --artist "Queen"
   %(prog)s release --album "Dark Side of the Moon" --artist "Pink Floyd"
   %(prog)s discography --artist "The Beatles" --year 1965
+  %(prog)s metadata /path/to/file.mp3 --album "Album Name" --artist "Artist Name"
+  %(prog)s metadata /path/to/directory --album "Album Name" --artist "Artist Name"
             """
         )
         
@@ -89,6 +97,12 @@ Examples:
             help='Browse artist discography and download selected releases'
         )
         self._add_discography_args(discography_parser)
+        
+        metadata_parser = subparsers.add_parser(
+            'metadata',
+            help='Apply metadata and cover art to existing audio files'
+        )
+        self._add_metadata_args(metadata_parser)
         
         return parser
     
@@ -192,6 +206,30 @@ Examples:
             help='Browse only, do not download'
         )
     
+    def _add_metadata_args(self, parser: argparse.ArgumentParser):
+        """Add arguments for metadata mode."""
+        parser.add_argument(
+            'file',
+            help='Path to audio file or directory containing audio files'
+        )
+        parser.add_argument(
+            '--album', '-l',
+            help='Album name (optional, will try to extract from path)'
+        )
+        parser.add_argument(
+            '--artist', '-a',
+            help='Artist name (optional, will try to extract from path)'
+        )
+        parser.add_argument(
+            '--year', '-y',
+            type=int,
+            help='Release year (optional)'
+        )
+        parser.add_argument(
+            '--mbid', '-m',
+            help='MusicBrainz release ID (optional, if provided will skip search)'
+        )
+    
     def run(self, args: List[str] = None):
         """Run the CLI with given arguments."""
         parser = self.create_parser()
@@ -247,6 +285,15 @@ Examples:
                     if not Confirm.ask("[bold]Go back to discography display?[/bold]", default=False):
                         break
                     self.display_manager.console.print()
+            elif parsed_args.mode == 'metadata':
+                self.metadata_handler.handle(
+                    file_path=parsed_args.file,
+                    album=parsed_args.album,
+                    artist=parsed_args.artist,
+                    year=parsed_args.year,
+                    mbid=parsed_args.mbid
+                )
+                sys.exit(0)
         except KeyboardInterrupt:
             self.display_manager.console.print("\n[yellow]⚠[/yellow] Operation cancelled by user.")
             sys.exit(1)
