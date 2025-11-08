@@ -56,8 +56,8 @@ def retry_with_backoff(
                             f"Function {func.__name__} failed after {max_retries + 1} attempts"
                         ) from e
                     
-                    # Calculate backoff time
-                    wait_time = backoff_factor ** attempt
+                    # Calculate backoff time (exponential: base * 2^attempt)
+                    wait_time = backoff_factor * (2 ** attempt)
                     
                     # Add jitter to prevent thundering herd
                     if jitter:

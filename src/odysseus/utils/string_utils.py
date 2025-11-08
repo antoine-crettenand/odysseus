@@ -19,6 +19,8 @@ def normalize_string(s: Optional[str]) -> str:
     if not s:
         return ""
     normalized = unicodedata.normalize('NFKD', s)
+    # Remove combining characters (diacritics)
+    normalized = ''.join(c for c in normalized if not unicodedata.combining(c))
     normalized = normalized.lower().strip()
     normalized = normalized.replace(" & ", " and ")
     normalized = normalized.replace("&", " and ")

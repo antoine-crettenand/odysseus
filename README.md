@@ -73,8 +73,10 @@ If you're pulling this repository for the first time on a new computer, follow t
 #### 1. Prerequisites
 
 - Python 3.8 or higher
-- pip (Python package manager)
+- pip (Python package manager) - setuptools will be installed automatically by pip
 - Internet connection
+
+**Note:** Do not run `python setup.py` directly. Always use `pip install -e .` instead, as it automatically handles all dependencies including setuptools.
 
 #### 2. Clone and Install
 
@@ -322,6 +324,18 @@ venv\Scripts\activate  # Windows
 ```
 
 The application will automatically check for required dependencies on startup and provide helpful error messages if any are missing.
+
+**If you see "ModuleNotFoundError: No module named 'setuptools'":**
+
+```bash
+# Don't run: python setup.py
+# Instead, use pip which handles setuptools automatically:
+pip install -e .
+
+# Or if setuptools is really missing, install it first:
+pip install setuptools
+pip install -e .
+```
 
 #### 2. Download Failures (403 Errors)
 

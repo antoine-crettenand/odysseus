@@ -63,10 +63,10 @@ class AudioMetadata:
             logger.debug(f"Invalid year: {self.year}")
             self.year = None
         
-        if self.track_number and self.track_number < 1:
+        if self.track_number is not None and self.track_number < 1:
             logger.debug(f"Invalid track number: {self.track_number}")
             self.track_number = None
             
-        if self.total_tracks and self.total_tracks < 1:
+        if self.total_tracks is not None and self.total_tracks < 1:
             logger.debug(f"Invalid total tracks: {self.total_tracks}")
             self.total_tracks = None

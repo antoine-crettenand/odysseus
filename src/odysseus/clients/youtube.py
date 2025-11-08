@@ -37,10 +37,14 @@ class YouTubeClient:
                 continue  # Optionally, add a delay here
             html = response.text
             if "ytInitialData" in html:
-                results = self._parse_html(html)
-                if self.max_results is not None:
-                    return results[: self.max_results]
-                return results
+                try:
+                    results = self._parse_html(html)
+                    if self.max_results is not None:
+                        return results[: self.max_results]
+                    return results
+                except Exception:
+                    # Parsing failed, continue to next attempt
+                    continue
         # If we exit the loop, we were not able to parse the page.
         raise Exception(f"{ERROR_MESSAGES['NETWORK_ERROR']}: Failed to retrieve valid YouTube search data.")
 

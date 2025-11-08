@@ -59,7 +59,9 @@ class MetadataMerger:
         """Merge metadata from all sources and return the best combination."""
         if not self.sources:
             logger.warning("No metadata sources available")
-            return AudioMetadata()
+            empty_metadata = AudioMetadata()
+            self.final_metadata = empty_metadata
+            return empty_metadata
         
         # Sort sources by combined score (confidence * completeness)
         sorted_sources = sorted(

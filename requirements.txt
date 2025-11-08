@@ -8,9 +8,10 @@ rich>=13.0.0
 # youtube-dl>=2021.12.17  # Optional: used as fallback if yt-dlp fails
 
 # Development dependencies (optional)
-# pytest>=6.0
-# pytest-cov>=2.0
-# black>=21.0
-# flake8>=3.8
-# mypy>=0.800
+pytest>=6.0
+pytest-cov>=2.0
+pytest-mock>=3.0
+black>=21.0
+flake8>=3.8
+mypy>=0.800
 

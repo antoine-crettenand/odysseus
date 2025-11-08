@@ -76,8 +76,8 @@ class DiscographyHandler(BaseHandler):
         )
         
         if not selected_releases:
-            console.print("[yellow]⚠[/yellow] No releases selected for download.")
-            return releases
+            # User cancelled or didn't select anything - exit without prompting to go back
+            return None
         
         self._download_selected_releases(
             selected_releases, quality, auto_download_all_tracks=auto_download_all_tracks

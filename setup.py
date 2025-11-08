@@ -2,12 +2,39 @@
 Setup script for Odysseus Music Discovery Tool
 """
 
-from setuptools import setup, find_packages
+import sys
+
+try:
+    from setuptools import setup, find_packages
+except ImportError:
+    print("ERROR: setuptools is not installed.")
+    print("\nPlease install setuptools first:")
+    print("  pip install setuptools")
+    print("\nOr better yet, use pip to install this package directly:")
+    print("  pip install -e .")
+    print("\nThis will automatically handle all dependencies including setuptools.")
+    raise SystemExit(1)
+
 from pathlib import Path
 
 # Read the README file
 this_directory = Path(__file__).parent
 long_description = (this_directory / "README.md").read_text()
+
+# Check if setup.py is being run without arguments
+if len(sys.argv) == 1:
+    print("=" * 70)
+    print("NOTE: You're running setup.py without any commands.")
+    print("=" * 70)
+    print("\nThe recommended way to install this package is:")
+    print("  pip install -e .")
+    print("\nThis will install the package in development mode and handle")
+    print("all dependencies automatically.")
+    print("\nIf you need to use setup.py directly, try:")
+    print("  python setup.py --help")
+    print("  python setup.py install")
+    print("\n" + "=" * 70)
+    sys.exit(0)
 
 setup(
     name="odysseus",
@@ -18,12 +45,12 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/antoinecrettenand/odysseus",
+    license="MIT",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: End Users/Desktop",
-        "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.8",

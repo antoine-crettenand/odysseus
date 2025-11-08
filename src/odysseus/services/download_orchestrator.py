@@ -362,6 +362,37 @@ class DownloadOrchestrator:
         normalized = ' '.join(normalized.split())
         return normalized
     
+    def _artist_matches(self, video_title: str, artist: str) -> bool:
+        """Check if video title contains artist name (with flexible matching)."""
+        if not video_title or not artist:
+            return False
+        
+        video_normalized = self._normalize_for_matching(video_title)
+        artist_normalized = self._normalize_for_matching(artist)
+        
+        # Direct match
+        if artist_normalized in video_normalized:
+            return True
+        
+        # Flexible matching: remove common prefixes like "the", "a", "an"
+        artist_words = artist_normalized.split()
+        if len(artist_words) > 1 and artist_words[0] in ['the', 'a', 'an']:
+            # Try without the prefix
+            artist_without_prefix = ' '.join(artist_words[1:])
+            if artist_without_prefix in video_normalized:
+                return True
+        
+        # Check if significant words from artist name are in video title
+        # For example: "The Jimi Hendrix Experience" should match "Jimi Hendrix"
+        significant_words = [w for w in artist_words if len(w) > 2 and w not in ['the', 'a', 'an']]
+        if len(significant_words) >= 2:
+            # If at least 2 significant words match, consider it a match
+            matching_words = sum(1 for word in significant_words if word in video_normalized)
+            if matching_words >= min(2, len(significant_words)):
+                return True
+        
+        return False
+    
     def _title_matches_album(self, video_title: str, album_title: str, artist: str) -> bool:
         """Check if video title contains album title and artist (with fuzzy matching)."""
         if not video_title or not album_title or not artist:
@@ -369,10 +400,11 @@ class DownloadOrchestrator:
         
         video_normalized = self._normalize_for_matching(video_title)
         album_normalized = self._normalize_for_matching(album_title)
-        artist_normalized = self._normalize_for_matching(artist)
         
-        # Check if artist is in video title
-        artist_in_title = artist_normalized in video_normalized
+        # Check if artist matches (with flexible matching)
+        artist_matches = self._artist_matches(video_title, artist)
+        if not artist_matches:
+            return False
         
         # Check if album title is in video title (or significant parts of it)
         # Split album title into words and check if most words are present
@@ -385,7 +417,7 @@ class DownloadOrchestrator:
             matching_words = sum(1 for word in album_words if word in video_normalized)
             album_in_title = matching_words >= (len(album_words) * 0.7)
         
-        return artist_in_title and album_in_title
+        return album_in_title
     
     def _validate_video_for_album(
         self,

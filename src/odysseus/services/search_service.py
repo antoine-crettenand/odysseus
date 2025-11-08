@@ -125,6 +125,32 @@ class SearchService:
         
         return deduplicated
     
+    def _deduplicate_with_priority(self, mb_results: List[MusicBrainzSong], discogs_results: List[MusicBrainzSong]) -> List[MusicBrainzSong]:
+        """
+        Deduplicate results prioritizing MusicBrainz over Discogs.
+        Only keeps Discogs results that don't have a matching MusicBrainz result.
+        This ensures Discogs complements MusicBrainz without polluting good results.
+        """
+        # First, deduplicate MusicBrainz results internally
+        mb_deduped = self._deduplicate_results(mb_results)
+        
+        # Create a set of keys for MusicBrainz results
+        mb_keys = set()
+        for result in mb_deduped:
+            key = self._create_deduplication_key(result)
+            if key[0]:  # Only add non-empty keys
+                mb_keys.add(key)
+        
+        # Only keep Discogs results that don't match any MusicBrainz result
+        complementary_discogs = []
+        for discogs_result in discogs_results:
+            key = self._create_deduplication_key(discogs_result)
+            if key[0] and key not in mb_keys:
+                complementary_discogs.append(discogs_result)
+        
+        # Combine: MusicBrainz first (prioritized), then complementary Discogs
+        return mb_deduped + complementary_discogs
+    
     def search_recordings(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None) -> List[MusicBrainzSong]:
         """Search for recordings in MusicBrainz."""
         results = self.musicbrainz_client.search_recording(song_data, offset=offset, limit=limit)
@@ -132,6 +158,7 @@ class SearchService:
     
     def search_releases(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None, release_type: Optional[str] = None) -> List[MusicBrainzSong]:
         """Search for releases in MusicBrainz and Discogs in parallel.
+        MusicBrainz results are prioritized; Discogs only fills gaps.
         
         Args:
             song_data: Song information to search for
@@ -153,10 +180,11 @@ class SearchService:
             mb_results = mb_future.result()
             discogs_results = discogs_future.result()
         
-        mb_formatted_results = self._deduplicate_results(mb_results)
+        # Convert Discogs to MusicBrainz format
         discogs_formatted = self._convert_discogs_to_mb_format(discogs_results)
         
-        all_results = mb_formatted_results + discogs_formatted
+        # Use priority-based deduplication: MusicBrainz first, Discogs only fills gaps
+        all_results = self._deduplicate_with_priority(mb_results, discogs_formatted)
         
         if release_type:
             filtered_results = []
@@ -164,7 +192,6 @@ class SearchService:
                 if result.release_type and result.release_type.lower() == release_type.lower():
                     filtered_results.append(result)
             all_results = filtered_results
-            all_results = self._deduplicate_results(all_results)
         
         if limit and len(all_results) > limit:
             all_results = all_results[:limit]
@@ -173,6 +200,7 @@ class SearchService:
     
     def search_artist_releases(self, artist: str, year: Optional[int] = None, release_type: Optional[str] = None) -> List[MusicBrainzSong]:
         """Search for releases by a specific artist in MusicBrainz and Discogs in parallel.
+        MusicBrainz results are prioritized; Discogs only fills gaps.
         
         Args:
             artist: Artist name to search for
@@ -193,10 +221,11 @@ class SearchService:
             mb_results = mb_future.result()
             discogs_results = discogs_future.result()
         
-        mb_formatted_results = self._deduplicate_results(mb_results)
+        # Convert Discogs to MusicBrainz format
         discogs_formatted = self._convert_discogs_to_mb_format(discogs_results)
         
-        all_results = mb_formatted_results + discogs_formatted
+        # Use priority-based deduplication: MusicBrainz first, Discogs only fills gaps
+        all_results = self._deduplicate_with_priority(mb_results, discogs_formatted)
         
         if release_type:
             filtered_results = []
@@ -204,7 +233,6 @@ class SearchService:
                 if result.release_type and result.release_type.lower() == release_type.lower():
                     filtered_results.append(result)
             all_results = filtered_results
-            all_results = self._deduplicate_results(all_results)
         
         return all_results
     

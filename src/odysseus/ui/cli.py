@@ -234,8 +234,12 @@ Examples:
                         cached_releases=cached_releases
                     )
                     
+                    # If user cancelled, exit immediately without prompting
+                    if releases is None:
+                        break
+                    
                     # Cache the releases for next iteration (if search was performed)
-                    if releases is not None and cached_releases is None:
+                    if cached_releases is None:
                         cached_releases = releases
                     
                     # Ask if user wants to go back to discography display
