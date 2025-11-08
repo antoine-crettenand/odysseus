@@ -66,17 +66,69 @@ src/odysseus/
 
 ## 🚀 Usage
 
-### Installation
+### First Time Setup
+
+If you're pulling this repository for the first time on a new computer, follow these steps:
+
+#### 1. Prerequisites
+
+- Python 3.8 or higher
+- pip (Python package manager)
+- Internet connection
+
+#### 2. Clone and Install
 
 ```bash
 # Clone the repository
 git clone <repository-url>
 cd odysseus
 
+# Create a virtual environment (recommended)
+python3 -m venv venv
+
+# Activate virtual environment
+# On macOS/Linux:
+source venv/bin/activate
+# On Windows:
+# venv\Scripts\activate
+
 # Install dependencies
 pip install -r requirements.txt
 
-# Install in development mode
+# Install the package in development mode
+pip install -e .
+```
+
+#### 3. Verify Installation
+
+```bash
+# Check if the command is available
+odysseus --help
+
+# Or test with Python directly
+python -m odysseus.main --help
+```
+
+#### 4. Optional: Configure Environment Variables
+
+You can customize the behavior by setting environment variables (see [Environment Variables](#environment-variables) section below).
+
+#### 5. Test the Installation
+
+```bash
+# Try a simple search (no download)
+odysseus recording --title "Bohemian Rhapsody" --artist "Queen" --no-download
+```
+
+### Installation (Alternative Methods)
+
+If you've already set up the environment:
+
+```bash
+# Install dependencies only
+pip install -r requirements.txt
+
+# Install in development mode (recommended for development)
 pip install -e .
 
 # Or run directly using the entry point
@@ -88,24 +140,27 @@ python -m odysseus.main recording --title "Test Song" --artist "Test Artist"
 
 ### Environment Variables
 
-Odysseus supports configuration through environment variables:
+Odysseus supports configuration through environment variables. These are optional and have sensible defaults:
 
 ```bash
-# Download directory
+# Download directory (default: ./downloads in project root)
 export ODYSSEUS_DOWNLOADS_DIR="/path/to/downloads"
 
-# Logging (console only)
+# Logging level (default: WARNING)
 export ODYSSEUS_LOG_LEVEL="DEBUG"  # DEBUG, INFO, WARNING, ERROR
 
 # MusicBrainz configuration
-export MUSICBRAINZ_REQUEST_DELAY="1.0"  # Rate limiting delay
+export MUSICBRAINZ_REQUEST_DELAY="1.0"  # Rate limiting delay (seconds)
 export MUSICBRAINZ_MAX_RESULTS="5"      # Max search results
-export MUSICBRAINZ_TIMEOUT="30"         # Request timeout
+export MUSICBRAINZ_TIMEOUT="30"         # Request timeout (seconds)
 
 # Download configuration
 export ODYSSEUS_DEFAULT_QUALITY="best"     # best, audio, worst
-export ODYSSEUS_AUDIO_FORMAT="mp3"        # Audio format
+export ODYSSEUS_AUDIO_FORMAT="mp3"        # Audio format (mp3, wav, flac, aac, ogg)
 export ODYSSEUS_MAX_CONCURRENT_DOWNLOADS="3"
+
+# Discogs configuration (optional - for higher rate limits)
+export DISCOGS_USER_TOKEN="your_token_here"  # Get token at https://www.discogs.com/settings/developers
 ```
 
 ### Command Line Interface
@@ -252,7 +307,23 @@ The old files are still available for reference, but the new structure should be
 
 ### Common Issues
 
-#### 1. Download Failures (403 Errors)
+#### 1. Missing Dependencies
+
+If you see an error about missing dependencies:
+
+```bash
+# Make sure you've installed all requirements
+pip install -r requirements.txt
+
+# If using a virtual environment, make sure it's activated
+source venv/bin/activate  # macOS/Linux
+# or
+venv\Scripts\activate  # Windows
+```
+
+The application will automatically check for required dependencies on startup and provide helpful error messages if any are missing.
+
+#### 2. Download Failures (403 Errors)
 
 If you encounter 403 errors when downloading from YouTube:
 
@@ -266,20 +337,20 @@ pip install --upgrade yt-dlp
 
 The downloader uses multiple strategies to bypass restrictions, so it should work even if one strategy fails.
 
-#### 2. No Search Results Found
+#### 3. No Search Results Found
 
 - Check your internet connection
 - Verify the artist name and song title spelling
 - Try a more general search (e.g., just artist and title, without album)
 - Check MusicBrainz website directly to see if the recording exists
 
-#### 3. Slow Downloads
+#### 4. Slow Downloads
 
 - Reduce `ODYSSEUS_MAX_CONCURRENT_DOWNLOADS` if downloading multiple files
 - Check your internet connection speed
 - Consider using `--quality audio` for faster audio-only downloads
 
-#### 4. Logging Issues
+#### 5. Logging Issues
 
 Enable debug logging for more information (console output only):
 
@@ -290,7 +361,7 @@ odysseus recording --title "Song" --artist "Artist"
 
 All logging output is displayed in the console.
 
-#### 5. Permission Errors
+#### 6. Permission Errors
 
 Ensure you have write permissions to the download directory:
 
@@ -299,18 +370,30 @@ Ensure you have write permissions to the download directory:
 export ODYSSEUS_DOWNLOADS_DIR="/path/to/writable/directory"
 ```
 
+#### 7. Path Issues on Different Operating Systems
+
+The application automatically detects the project root directory. If you encounter path-related issues:
+
+- Make sure you're running from the project directory or have installed the package with `pip install -e .`
+- You can explicitly set the download directory using the `ODYSSEUS_DOWNLOADS_DIR` environment variable
+- The application will create necessary directories automatically if they don't exist
+
 ### Dependencies
 
-Make sure all dependencies are installed:
+All required dependencies are listed in `requirements.txt`. Install them with:
 
 ```bash
 pip install -r requirements.txt
 ```
 
 Key dependencies:
-- `requests`: For API calls
-- `mutagen`: For metadata handling
-- `yt-dlp`: For YouTube downloads (auto-updated by the tool)
+- `requests>=2.25.0`: For API calls to MusicBrainz and other services
+- `mutagen>=1.45.0`: For metadata handling in audio files
+- `yt-dlp>=2023.12.30`: For YouTube downloads (auto-updated by the tool)
+- `rich>=13.0.0`: For beautiful terminal output and progress bars
+
+Optional dependencies:
+- `youtube-dl`: Used as a fallback if yt-dlp fails (not required)
 
 ## 📊 Features
 

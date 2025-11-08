@@ -118,6 +118,23 @@ class ReleaseHandler(BaseHandler):
             console.print("[bold red]✗[/bold red] Failed to get release details.")
             return
         
+        # Validate that the fetched release matches what we expected
+        # Normalize strings for comparison (case-insensitive, ignore whitespace)
+        from ...utils.string_utils import normalize_string
+        expected_album = normalize_string(selected_release.album or "")
+        expected_artist = normalize_string(selected_release.artist or "")
+        fetched_album = normalize_string(release_info.title or "")
+        fetched_artist = normalize_string(release_info.artist or "")
+        
+        # Check if the fetched release matches the expected one
+        if expected_album and fetched_album and expected_album != fetched_album:
+            console.print(f"[bold yellow]⚠[/bold yellow] Warning: Fetched release doesn't match expected release!")
+            console.print(f"  Expected: [yellow]{selected_release.album}[/yellow] by [green]{selected_release.artist}[/green]")
+            console.print(f"  Fetched:  [yellow]{release_info.title}[/yellow] by [green]{release_info.artist}[/green]")
+            console.print(f"  Release ID used: [cyan]{selected_release.mbid}[/cyan] (source: {source})")
+            console.print(f"[bold red]✗[/bold red] Cannot proceed with download due to release mismatch.")
+            return
+        
         self.display_manager.display_track_listing(release_info)
         
         track_numbers = self.user_interaction.parse_track_selection(

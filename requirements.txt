@@ -4,6 +4,9 @@ mutagen>=1.45.0
 yt-dlp>=2023.12.30
 rich>=13.0.0
 
+# Optional dependencies (for fallback download strategies)
+# youtube-dl>=2021.12.17  # Optional: used as fallback if yt-dlp fails
+
 # Development dependencies (optional)
 # pytest>=6.0
 # pytest-cov>=2.0

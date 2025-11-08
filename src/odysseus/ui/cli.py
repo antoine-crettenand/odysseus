@@ -7,6 +7,8 @@ import argparse
 import sys
 from typing import List
 
+from rich.prompt import Confirm
+
 from ..services.search_service import SearchService
 from ..services.download_service import DownloadService
 from ..services.metadata_service import MetadataService
@@ -205,6 +207,8 @@ Examples:
                     quality=parsed_args.quality,
                     no_download=parsed_args.no_download
                 )
+                # Exit after recording - no search info for another recording
+                sys.exit(0)
             elif parsed_args.mode == 'release':
                 self.release_handler.handle(
                     album=parsed_args.album,
@@ -215,14 +219,30 @@ Examples:
                     tracks=parsed_args.tracks,
                     no_download=parsed_args.no_download
                 )
+                # Exit after release - no search info for another release
+                sys.exit(0)
             elif parsed_args.mode == 'discography':
-                self.discography_handler.handle(
-                    artist=parsed_args.artist,
-                    year=parsed_args.year,
-                    release_type=parsed_args.type,
-                    quality=parsed_args.quality,
-                    no_download=parsed_args.no_download
-                )
+                # Loop for discography - allow user to go back to discography display
+                cached_releases = None
+                while True:
+                    releases = self.discography_handler.handle(
+                        artist=parsed_args.artist,
+                        year=parsed_args.year,
+                        release_type=parsed_args.type,
+                        quality=parsed_args.quality,
+                        no_download=parsed_args.no_download,
+                        cached_releases=cached_releases
+                    )
+                    
+                    # Cache the releases for next iteration (if search was performed)
+                    if releases is not None and cached_releases is None:
+                        cached_releases = releases
+                    
+                    # Ask if user wants to go back to discography display
+                    self.display_manager.console.print()
+                    if not Confirm.ask("[bold]Go back to discography display?[/bold]", default=False):
+                        break
+                    self.display_manager.console.print()
         except KeyboardInterrupt:
             self.display_manager.console.print("\n[yellow]⚠[/yellow] Operation cancelled by user.")
             sys.exit(1)

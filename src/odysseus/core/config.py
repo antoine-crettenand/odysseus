@@ -14,7 +14,25 @@ PROJECT_VERSION = "1.0.0"
 PROJECT_DESCRIPTION = "Music Discovery Tool - Search MusicBrainz, find YouTube videos, and download music"
 
 # File Paths
-BASE_DIR = Path(__file__).parent.parent.parent.parent
+# Determine BASE_DIR: works both when installed as package and when run from source
+# If ODYSSEUS_DOWNLOADS_DIR is set, use its parent; otherwise try to find project root
+def _get_base_dir() -> Path:
+    """Get the base directory for the project."""
+    # If downloads dir is explicitly set, use its parent
+    downloads_env = os.getenv("ODYSSEUS_DOWNLOADS_DIR")
+    if downloads_env:
+        return Path(downloads_env).parent
+    
+    # Try to find project root by looking for setup.py or README.md
+    current = Path(__file__).resolve()
+    for parent in [current.parent, current.parent.parent, current.parent.parent.parent, current.parent.parent.parent.parent]:
+        if (parent / "setup.py").exists() or (parent / "README.md").exists():
+            return parent
+    
+    # Fallback: use current working directory
+    return Path.cwd()
+
+BASE_DIR = _get_base_dir()
 DOWNLOADS_DIR = Path(os.getenv("ODYSSEUS_DOWNLOADS_DIR", BASE_DIR / "downloads"))
 CONFIG_DIR = Path(os.getenv("ODYSSEUS_CONFIG_DIR", BASE_DIR / "config"))
 
@@ -41,7 +59,7 @@ DISCOGS_CONFIG = {
         "DISCOGS_USER_AGENT",
         f"{PROJECT_NAME}/{PROJECT_VERSION} (contact@example.com)"
     ),
-    "USER_TOKEN": os.getenv("DISCOGS_USER_TOKEN", "iePSXUkJUzpmuTjcthOkvPYXZqYdCXRTMqMrwIkY"),  # Optional, for higher rate limits
+    "USER_TOKEN": os.getenv("DISCOGS_USER_TOKEN", ""),  # Optional, for higher rate limits. Get your token at https://www.discogs.com/settings/developers
     "REQUEST_DELAY": float(os.getenv("DISCOGS_REQUEST_DELAY", "1.0")),
     "MAX_RESULTS": int(os.getenv("DISCOGS_MAX_RESULTS", "3")),
     "TIMEOUT": int(os.getenv("DISCOGS_TIMEOUT", "30")),

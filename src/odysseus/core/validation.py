@@ -2,6 +2,8 @@
 Configuration validation utilities.
 """
 
+import importlib
+import subprocess
 from pathlib import Path
 from typing import List, Tuple
 from .config import (
@@ -11,8 +13,44 @@ from .config import (
     DOWNLOAD_CONFIG,
     LOGGING_CONFIG,
     VALIDATION_RULES,
+    ERROR_MESSAGES,
 )
 from .exceptions import ConfigurationError
+
+
+def check_dependencies() -> Tuple[bool, List[str]]:
+    """
+    Check if all required dependencies are installed.
+    
+    Returns:
+        Tuple of (all_installed, list_of_missing_dependencies)
+    """
+    required_packages = {
+        "requests": "requests",
+        "mutagen": "mutagen",
+        "yt_dlp": "yt-dlp",
+        "rich": "rich",
+    }
+    
+    missing = []
+    for module_name, package_name in required_packages.items():
+        try:
+            importlib.import_module(module_name)
+        except ImportError:
+            missing.append(package_name)
+    
+    # Check for yt-dlp command line tool
+    try:
+        subprocess.run(
+            ["yt-dlp", "--version"],
+            capture_output=True,
+            check=True,
+            timeout=5
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        missing.append("yt-dlp (command line tool)")
+    
+    return len(missing) == 0, missing
 
 
 def validate_configuration() -> Tuple[bool, List[str]]:
@@ -24,11 +62,16 @@ def validate_configuration() -> Tuple[bool, List[str]]:
     """
     errors = []
     
+    # Check dependencies first
+    deps_ok, missing_deps = check_dependencies()
+    if not deps_ok:
+        errors.append(
+            f"Missing required dependencies: {', '.join(missing_deps)}. "
+            f"Please install them with: pip install -r requirements.txt"
+        )
+    
     # Validate directories
     try:
-        if not DOWNLOADS_DIR.parent.exists():
-            errors.append(f"Base directory does not exist: {DOWNLOADS_DIR.parent}")
-        
         # Check if directories are writable (will be created if they don't exist)
         for dir_path in [DOWNLOADS_DIR, CONFIG_DIR]:
             try:

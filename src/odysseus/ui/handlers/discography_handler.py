@@ -30,8 +30,9 @@ class DiscographyHandler(BaseHandler):
         year: Optional[int] = None,
         release_type: Optional[str] = None,
         quality: str = "audio",
-        no_download: bool = False
-    ):
+        no_download: bool = False,
+        cached_releases: Optional[List[MusicBrainzSong]] = None
+    ) -> Optional[List[MusicBrainzSong]]:
         """Handle discography browse and download."""
         console = self.display_manager.console
         console.print()
@@ -46,23 +47,29 @@ class DiscographyHandler(BaseHandler):
         ))
         console.print()
         
-        releases = self.display_manager.show_loading_spinner(
-            f"Searching discography for: {artist}",
-            self.search_service.search_artist_releases,
-            artist,
-            year=year,
-            release_type=release_type
-        )
+        # Use cached releases if provided, otherwise search
+        if cached_releases is not None:
+            releases = cached_releases
+            console.print(f"[blue]ℹ[/blue] Using cached discography results ({len(releases)} release{'s' if len(releases) != 1 else ''})")
+            console.print()
+        else:
+            releases = self.display_manager.show_loading_spinner(
+                f"Searching discography for: {artist}",
+                self.search_service.search_artist_releases,
+                artist,
+                year=year,
+                release_type=release_type
+            )
         
         if not releases:
             console.print(f"[bold red]✗[/bold red] {ERROR_MESSAGES['NO_RESULTS']}")
-            return
+            return None
         
         ordered_releases = self.display_manager.display_discography(releases)
         
         if no_download:
             console.print("[blue]ℹ[/blue] Discography browse completed. Use without --no-download to download releases.")
-            return
+            return releases
         
         selected_releases, auto_download_all_tracks = self.display_manager.get_release_selection(
             ordered_releases, quality, self.search_service
@@ -70,11 +77,14 @@ class DiscographyHandler(BaseHandler):
         
         if not selected_releases:
             console.print("[yellow]⚠[/yellow] No releases selected for download.")
-            return
+            return releases
         
         self._download_selected_releases(
             selected_releases, quality, auto_download_all_tracks=auto_download_all_tracks
         )
+        
+        # Return releases for caching
+        return releases
     
     def _download_selected_releases(
         self,
@@ -113,6 +123,24 @@ class DiscographyHandler(BaseHandler):
             )
             if not release_info:
                 console.print(f"[bold red]✗[/bold red] Failed to get release details for: [yellow]{release.album}[/yellow]")
+                total_failed += 1
+                continue
+            
+            # Validate that the fetched release matches what we expected
+            # Normalize strings for comparison (case-insensitive, ignore whitespace)
+            from ...utils.string_utils import normalize_string
+            expected_album = normalize_string(release.album or "")
+            expected_artist = normalize_string(release.artist or "")
+            fetched_album = normalize_string(release_info.title or "")
+            fetched_artist = normalize_string(release_info.artist or "")
+            
+            # Check if the fetched release matches the expected one
+            if expected_album and fetched_album and expected_album != fetched_album:
+                console.print(f"[bold yellow]⚠[/bold yellow] Warning: Fetched release doesn't match expected release!")
+                console.print(f"  Expected: [yellow]{release.album}[/yellow] by [green]{release.artist}[/green]")
+                console.print(f"  Fetched:  [yellow]{release_info.title}[/yellow] by [green]{release_info.artist}[/green]")
+                console.print(f"  Release ID used: [cyan]{release.mbid}[/cyan] (source: {source})")
+                console.print(f"[yellow]⚠[/yellow] Skipping this release due to mismatch.")
                 total_failed += 1
                 continue
             

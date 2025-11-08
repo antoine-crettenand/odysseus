@@ -38,7 +38,7 @@ setup(
         "requests>=2.25.0",
         "mutagen>=1.45.0",
         "yt-dlp>=2023.12.30",
-        "youtube-dl>=2021.12.17",
+        "rich>=13.0.0",
     ],
     extras_require={
         "dev": [
