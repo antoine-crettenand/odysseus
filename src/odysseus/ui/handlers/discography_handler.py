@@ -46,7 +46,6 @@ class DiscographyHandler(BaseHandler):
         ))
         console.print()
         
-        # Search for artist releases with loading spinner
         releases = self.display_manager.show_loading_spinner(
             f"Searching discography for: {artist}",
             self.search_service.search_artist_releases,
@@ -59,14 +58,12 @@ class DiscographyHandler(BaseHandler):
             console.print(f"[bold red]✗[/bold red] {ERROR_MESSAGES['NO_RESULTS']}")
             return
         
-        # Display releases grouped by year
         ordered_releases = self.display_manager.display_discography(releases)
         
         if no_download:
             console.print("[blue]ℹ[/blue] Discography browse completed. Use without --no-download to download releases.")
             return
         
-        # Get user selection for releases to download
         selected_releases, auto_download_all_tracks = self.display_manager.get_release_selection(
             ordered_releases, quality, self.search_service
         )
@@ -75,7 +72,6 @@ class DiscographyHandler(BaseHandler):
             console.print("[yellow]⚠[/yellow] No releases selected for download.")
             return
         
-        # Download selected releases
         self._download_selected_releases(
             selected_releases, quality, auto_download_all_tracks=auto_download_all_tracks
         )
@@ -107,7 +103,6 @@ class DiscographyHandler(BaseHandler):
             ))
             console.print()
             
-            # Get detailed release information with batch progress
             source = getattr(release, 'source', 'musicbrainz')
             release_info = self.display_manager.show_loading_spinner(
                 f"Fetching release details for: {release.album}",
@@ -121,10 +116,8 @@ class DiscographyHandler(BaseHandler):
                 total_failed += 1
                 continue
             
-            # Display track listing (same as release mode)
             self.display_manager.display_track_listing(release_info)
             
-            # If auto_download_all_tracks is True, skip manual selection and download all tracks
             if auto_download_all_tracks:
                 console.print(f"[cyan]Auto-downloading all {len(release_info.tracks)} track{'s' if len(release_info.tracks) != 1 else ''}...[/cyan]")
                 console.print()
@@ -135,14 +128,12 @@ class DiscographyHandler(BaseHandler):
                 total_downloaded += downloaded
                 total_failed += failed
             else:
-                # Ask if user wants to download all tracks or select specific ones
                 self.display_manager.display_download_options()
                 
                 while True:
                     choice = Prompt.ask("[bold]Choose option[/bold]", choices=["1", "2", "3"], default="3")
                     
                     if choice == '1':
-                        # Download all tracks
                         console.print()
                         track_numbers = list(range(1, len(release_info.tracks) + 1))
                         downloaded, failed = self.download_orchestrator.download_release_tracks(
@@ -152,7 +143,6 @@ class DiscographyHandler(BaseHandler):
                         total_failed += failed
                         break
                     elif choice == '2':
-                        # Select specific tracks
                         console.print()
                         track_numbers = self.user_interaction.parse_track_selection(
                             None, len(release_info.tracks)
@@ -168,7 +158,6 @@ class DiscographyHandler(BaseHandler):
                         console.print(f"[yellow]⚠[/yellow] Skipped: [yellow]{release.album}[/yellow]")
                         break
         
-        # Final summary
         console.print()
         self.display_manager.display_download_summary(total_downloaded, total_failed, len(releases))
 

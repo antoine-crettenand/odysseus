@@ -25,7 +25,6 @@ class OdysseusCLI:
         self.metadata_service = MetadataService()
         self.display_manager = DisplayManager()
         
-        # Initialize handlers
         self.recording_handler = RecordingHandler(
             self.search_service,
             self.download_service,
@@ -59,35 +58,30 @@ Examples:
             """
         )
         
-        # Add version
         parser.add_argument(
             '--version', 
             action='version', 
             version=f'{PROJECT_NAME} {PROJECT_VERSION}'
         )
         
-        # Create subparsers for different modes
         subparsers = parser.add_subparsers(
             dest='mode',
             help='Available modes',
             required=True
         )
         
-        # Recording mode (current main.py functionality)
         recording_parser = subparsers.add_parser(
             'recording',
             help='Search and download a specific recording/song'
         )
         self._add_recording_args(recording_parser)
         
-        # Release mode (LP/album search and download)
         release_parser = subparsers.add_parser(
             'release',
             help='Search and download tracks from a release/album'
         )
         self._add_release_args(release_parser)
         
-        # Discography mode (artist discography lookup and selective download)
         discography_parser = subparsers.add_parser(
             'discography',
             help='Browse artist discography and download selected releases'

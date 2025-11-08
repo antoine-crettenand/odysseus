@@ -889,12 +889,43 @@ class DownloadOrchestrator:
                 if not silent:
                     console.print(f"[green]✓[/green] Found {len(playlist_videos)} videos in playlist")
                 
+                # Check if this is a Side 1 or Side 2 playlist
+                playlist_title = playlist_info.get('title', '').lower()
+                is_side_1 = any(keyword in playlist_title for keyword in ['side 1', 'side a', 'side one'])
+                is_side_2 = any(keyword in playlist_title for keyword in ['side 2', 'side b', 'side two'])
+                
                 # Filter tracks to selected ones
                 selected_tracks = [
                     t for t in release_info.tracks
                     if t.position in track_numbers
                 ]
                 selected_tracks.sort(key=lambda x: x.position)
+                
+                # If this is a Side 1 or Side 2 playlist, we might need to adjust track matching
+                # Side 1 typically contains first half of tracks, Side 2 contains second half
+                if is_side_1 or is_side_2:
+                    total_tracks = len(release_info.tracks)
+                    if is_side_1:
+                        # Side 1: typically tracks 1 to approximately total_tracks/2
+                        # Filter to only tracks that are likely on Side 1
+                        side_1_tracks = [t for t in selected_tracks if t.position <= (total_tracks + 1) // 2]
+                        if side_1_tracks:
+                            if not silent:
+                                console.print(f"[blue]ℹ[/blue] Detected Side 1 playlist - focusing on tracks 1-{(total_tracks + 1) // 2}")
+                            # Use side 1 tracks if we have them, otherwise use all selected tracks
+                            if len(side_1_tracks) >= len(selected_tracks) * 0.5:
+                                selected_tracks = side_1_tracks
+                    elif is_side_2:
+                        # Side 2: typically tracks from approximately total_tracks/2 + 1 to end
+                        # Filter to only tracks that are likely on Side 2
+                        side_2_start = (total_tracks + 1) // 2 + 1
+                        side_2_tracks = [t for t in selected_tracks if t.position >= side_2_start]
+                        if side_2_tracks:
+                            if not silent:
+                                console.print(f"[blue]ℹ[/blue] Detected Side 2 playlist - focusing on tracks {side_2_start}-{total_tracks}")
+                            # Use side 2 tracks if we have them, otherwise use all selected tracks
+                            if len(side_2_tracks) >= len(selected_tracks) * 0.5:
+                                selected_tracks = side_2_tracks
                 
                 # Match playlist videos to tracks
                 if not silent:

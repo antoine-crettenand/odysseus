@@ -14,7 +14,7 @@ class Colors:
     def colorize(text: str, color: str) -> str:
         """Apply color to text if terminal supports it."""
         if not sys.stdout.isatty():
-            return text  # Don't use colors if not in terminal
+            return text
         
         color_code = COLORS.get(color.upper(), "")
         end_code = COLORS["END"]

@@ -43,7 +43,6 @@ class ReleaseHandler(BaseHandler):
         ))
         console.print()
         
-        # Create song data for release search
         song_data = SongData(
             title="",  # No title for release search
             artist=artist,
@@ -51,10 +50,8 @@ class ReleaseHandler(BaseHandler):
             release_year=year
         )
         
-        # Search loop with reshuffle support
         offset = 0
         while True:
-            # Search MusicBrainz for releases with loading spinner
             if offset > 0:
                 console.print(f"[blue]ℹ[/blue] Showing results starting from position {offset + 1}")
             
@@ -75,14 +72,11 @@ class ReleaseHandler(BaseHandler):
                     offset = 0
                     continue
             
-            # Display results
             self.display_manager.display_search_results(results, "RELEASES")
             
-            # Get user selection
             selected_release = self.display_manager.get_user_selection(results)
             
             if selected_release == 'RESHUFFLE':
-                # Move to next page of results
                 offset += len(results)
                 console.print()
                 continue
@@ -94,7 +88,6 @@ class ReleaseHandler(BaseHandler):
                 console.print("[blue]ℹ[/blue] Search completed. Use without --no-download to download.")
                 return
             
-            # Get track listing and download selected tracks
             self._search_and_download_release(selected_release, quality, tracks)
             break
     
@@ -113,7 +106,6 @@ class ReleaseHandler(BaseHandler):
         ))
         console.print()
         
-        # Get detailed release information with tracks
         source = getattr(selected_release, 'source', 'musicbrainz')
         release_info = self.display_manager.show_loading_spinner(
             f"Fetching release details for: {selected_release.album}",
@@ -126,10 +118,8 @@ class ReleaseHandler(BaseHandler):
             console.print("[bold red]✗[/bold red] Failed to get release details.")
             return
         
-        # Display track listing
         self.display_manager.display_track_listing(release_info)
         
-        # Parse track selection
         track_numbers = self.user_interaction.parse_track_selection(
             tracks, len(release_info.tracks)
         )
@@ -138,7 +128,6 @@ class ReleaseHandler(BaseHandler):
             console.print("[yellow]⚠[/yellow] No tracks selected for download.")
             return
         
-        # Download selected tracks
         self.download_orchestrator.download_release_tracks(
             release_info, track_numbers, quality, silent=False
         )
