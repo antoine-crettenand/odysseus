@@ -3,7 +3,6 @@ Display management for Odysseus CLI with Rich components.
 Modern, beautiful terminal interface with animations and colors.
 """
 
-import unicodedata
 from typing import List, Optional, Any, Dict, Union, Tuple
 from rich.console import Console
 from rich.table import Table
@@ -11,13 +10,12 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn, TimeRemainingColumn, DownloadColumn, TransferSpeedColumn
 from rich.text import Text
 from rich.prompt import Prompt, IntPrompt, Confirm
-from rich.layout import Layout
 from rich.align import Align
 from rich import box
 
 from ..models.search_results import SearchResult, MusicBrainzSong, YouTubeVideo
 from ..models.releases import ReleaseInfo, Track
-from ..utils.colors import Colors
+from ..utils.string_utils import normalize_string
 
 
 class DisplayManager:
@@ -617,34 +615,6 @@ class DisplayManager:
         
         return formatted_size, total_tracks, total_minutes
     
-    def _normalize_string(self, s: Optional[str]) -> str:
-        """Normalize a string for comparison (lowercase, strip whitespace, normalize special characters)."""
-        if not s:
-            return ""
-        # First, normalize Unicode characters (NFKD normalization helps with apostrophes and special chars)
-        normalized = unicodedata.normalize('NFKD', s)
-        # Convert to lowercase and strip whitespace
-        normalized = normalized.lower().strip()
-        # Normalize "&" to "and" for better matching
-        normalized = normalized.replace(" & ", " and ")
-        normalized = normalized.replace("&", " and ")
-        # Normalize all apostrophe variants to a standard apostrophe
-        # This handles: ', ', ', ', ʼ, ʻ, ʼ, ʽ, ʾ, ʿ, ˊ, ˋ, etc.
-        # After NFKD normalization, many apostrophes become U+0027 or similar
-        apostrophe_chars = ["'", "'", "'", "'", "ʼ", "ʻ", "ʼ", "ʽ", "ʾ", "ʿ", "ˊ", "ˋ", "\u2018", "\u2019", "\u201A", "\u201B", "\u2032", "\u2035"]
-        for char in apostrophe_chars:
-            normalized = normalized.replace(char, "'")
-        # Normalize different types of quotes to a standard form
-        normalized = normalized.replace(""", '"')  # Left double quotation mark
-        normalized = normalized.replace(""", '"')  # Right double quotation mark
-        normalized = normalized.replace(""", "'")  # Left single quotation mark (if not already handled)
-        normalized = normalized.replace(""", "'")  # Right single quotation mark (if not already handled)
-        # Normalize dashes
-        normalized = normalized.replace("–", "-")  # En dash
-        normalized = normalized.replace("—", "-")  # Em dash
-        # Remove multiple spaces
-        normalized = " ".join(normalized.split())
-        return normalized
     
     def _filter_unknown_year_duplicates(self, releases: List[MusicBrainzSong]) -> List[MusicBrainzSong]:
         """Filter out releases in 'Unknown Year' that are duplicates of releases with dates."""
@@ -652,8 +622,8 @@ class DisplayManager:
         releases_with_dates = set()
         for release in releases:
             if release.release_date and len(release.release_date) >= 4:
-                album = self._normalize_string(release.album)
-                artist = self._normalize_string(release.artist)
+                album = normalize_string(release.album)
+                artist = normalize_string(release.artist)
                 if album and artist:
                     releases_with_dates.add((album, artist))
         
@@ -667,8 +637,8 @@ class DisplayManager:
                 filtered.append(release)
             else:
                 # Check if this release without a date matches a release with a date
-                album = self._normalize_string(release.album)
-                artist = self._normalize_string(release.artist)
+                album = normalize_string(release.album)
+                artist = normalize_string(release.artist)
                 if album and artist and (album, artist) in releases_with_dates:
                     # This is a duplicate - skip it
                     filtered_count += 1
@@ -878,22 +848,24 @@ class DisplayManager:
             expand=True
         )
     
-    def create_download_progress_bar(self, description: str = "Downloading") -> tuple[Progress, Any]:
+    def create_download_progress_bar(self, description: str = "Downloading", total: Optional[float] = None) -> tuple[Progress, Any]:
         """
-        Create a progress bar specifically for file downloads with speed and ETA.
+        Create a progress bar specifically for file downloads.
         Returns (Progress instance, task_id).
+        
+        Args:
+            description: Description text for the progress bar
+            total: Total size in bytes (if known, otherwise will be updated dynamically)
         """
         progress = Progress(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TaskProgressColumn(),
-            DownloadColumn(),
-            TransferSpeedColumn(),
-            TimeRemainingColumn(),
             console=self.console,
             expand=True
         )
-        task_id = progress.add_task(description, total=100)
+        # Start with None total, will be updated when we know the file size
+        task_id = progress.add_task(description, total=total or 100)
         return progress, task_id
     
     def _format_track_number(self, number: int) -> str:

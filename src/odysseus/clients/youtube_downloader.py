@@ -77,7 +77,7 @@ class YouTubeDownloader:
             ]
             
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            return eval(result.stdout)  # Parse JSON output
+            return json.loads(result.stdout)  # Parse JSON output
             
         except subprocess.CalledProcessError as e:
             print(f"Error getting video info: {e}")
@@ -85,6 +85,134 @@ class YouTubeDownloader:
         except Exception as e:
             print(f"Unexpected error: {e}")
             return None
+    
+    def get_video_chapters(self, url: str) -> Optional[List[Dict[str, Any]]]:
+        """
+        Extract chapters from a YouTube video.
+        Returns list of chapters with start_time and title, or None if no chapters.
+        """
+        try:
+            video_info = self.get_video_info(url)
+            if not video_info:
+                return None
+            
+            # yt-dlp provides chapters in the 'chapters' field
+            chapters = video_info.get('chapters', [])
+            if not chapters:
+                return None
+            
+            # Format chapters: [{'start_time': seconds, 'title': 'Chapter Title'}, ...]
+            formatted_chapters = []
+            for chapter in chapters:
+                start_time = chapter.get('start_time', 0)
+                title = chapter.get('title', '')
+                formatted_chapters.append({
+                    'start_time': start_time,
+                    'title': title
+                })
+            
+            return formatted_chapters if formatted_chapters else None
+            
+        except Exception as e:
+            print(f"Error extracting chapters: {e}")
+            return None
+    
+    def split_video_into_tracks(
+        self,
+        video_path: Path,
+        track_timestamps: List[Dict[str, Any]],
+        output_dir: Path,
+        metadata_list: List[Dict[str, Any]],
+        progress_callback: Optional[Callable] = None
+    ) -> List[Path]:
+        """
+        Split a full album video into individual tracks using ffmpeg.
+        
+        Args:
+            video_path: Path to the full album video file
+            track_timestamps: List of dicts with 'start_time' (seconds) and 'end_time' (seconds) for each track
+            output_dir: Directory to save split tracks
+            metadata_list: List of metadata dicts for each track (must match track_timestamps length)
+            progress_callback: Optional callback for progress updates
+            
+        Returns:
+            List of paths to the split track files
+        """
+        if not video_path.exists():
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+        
+        if len(track_timestamps) != len(metadata_list):
+            raise ValueError("track_timestamps and metadata_list must have the same length")
+        
+        output_files = []
+        
+        for i, (timestamp_info, metadata) in enumerate(zip(track_timestamps, metadata_list)):
+            start_time = timestamp_info.get('start_time', 0)
+            end_time = timestamp_info.get('end_time')
+            
+            # Create output filename
+            title = self._sanitize_filename(metadata.get('title', f'track_{i+1}'))
+            track_number = metadata.get('track_number', i + 1)
+            track_prefix = f"{track_number:02d} - " if track_number else ""
+            output_filename = f"{track_prefix}{title}.mp3"
+            output_path = output_dir / output_filename
+            
+            # Build ffmpeg command
+            cmd = [
+                'ffmpeg',
+                '-i', str(video_path),
+                '-ss', str(start_time),  # Start time
+                '-acodec', 'libmp3lame',
+                '-ab', '320k',  # High quality audio
+                '-y',  # Overwrite output file
+            ]
+            
+            # Add end time if specified
+            if end_time:
+                duration = end_time - start_time
+                cmd.extend(['-t', str(duration)])
+            
+            cmd.append(str(output_path))
+            
+            # Run ffmpeg
+            try:
+                if progress_callback:
+                    # For splitting, we can estimate progress based on track number
+                    progress = (i / len(track_timestamps)) * 100
+                    progress_callback({
+                        'percent': progress,
+                        'status': 'splitting',
+                        'speed': None,
+                        'eta': None
+                    })
+                
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=300  # 5 minute timeout per track
+                )
+                
+                if output_path.exists():
+                    output_files.append(output_path)
+                    
+            except subprocess.CalledProcessError as e:
+                print(f"Error splitting track {i+1}: {e.stderr if e.stderr else e}")
+                continue
+            except subprocess.TimeoutExpired:
+                print(f"Timeout splitting track {i+1}")
+                continue
+        
+        if progress_callback:
+            progress_callback({
+                'percent': 100.0,
+                'status': 'completed',
+                'speed': None,
+                'eta': None
+            })
+        
+        return output_files
     
     def _sanitize_filename(self, filename: str) -> str:
         # Remove or replace invalid characters for filesystem
@@ -125,6 +253,38 @@ class YouTubeDownloader:
         
         return organized_dir
     
+    def _convert_size_to_bytes(self, size_str: str) -> Optional[float]:
+        """Convert size string (e.g., '5.2MiB', '1.5GB') to bytes."""
+        if not size_str:
+            return None
+        
+        # Remove ~ prefix if present
+        size_str = size_str.strip().lstrip('~')
+        
+        # Match number and unit
+        match = re.match(r'([\d.]+)\s*([KMGT]?i?B)', size_str, re.IGNORECASE)
+        if not match:
+            return None
+        
+        value = float(match.group(1))
+        unit = match.group(2).upper()
+        
+        # Convert to bytes
+        multipliers = {
+            'B': 1,
+            'KB': 1024,
+            'KIB': 1024,
+            'MB': 1024 ** 2,
+            'MIB': 1024 ** 2,
+            'GB': 1024 ** 3,
+            'GIB': 1024 ** 3,
+            'TB': 1024 ** 4,
+            'TIB': 1024 ** 4,
+        }
+        
+        multiplier = multipliers.get(unit, 1)
+        return value * multiplier
+    
     def _parse_progress_hook(self, line: str, progress_callback: Optional[Callable] = None) -> Optional[Dict[str, Any]]:
         """
         Parse yt-dlp progress output line.
@@ -159,8 +319,21 @@ class YouTubeDownloader:
             
             percent = float(percent_match.group(1))
             
-            # Try to extract speed (various formats)
-            speed = None
+            # Extract total file size (e.g., "of 5.2MiB" or "of ~5.2MiB")
+            total_size_bytes = None
+            total_size_match = re.search(r'of\s+(~?[\d.]+\s*[KMGT]?i?B)', line, re.IGNORECASE)
+            if total_size_match:
+                total_size_str = total_size_match.group(1)
+                total_size_bytes = self._convert_size_to_bytes(total_size_str)
+            
+            # Calculate downloaded bytes from percentage and total
+            downloaded_bytes = None
+            if total_size_bytes and percent:
+                downloaded_bytes = (percent / 100.0) * total_size_bytes
+            
+            # Try to extract speed (various formats) and convert to bytes/s
+            speed_bytes_per_sec = None
+            speed_str = None
             speed_patterns = [
                 r'at\s+([\d.]+)\s*([KMGT]?i?B/s)',  # "at 1.5MiB/s"
                 r'([\d.]+)\s*([KMGT]?i?B/s)',        # "1.5MiB/s"
@@ -170,11 +343,14 @@ class YouTubeDownloader:
                 if speed_match:
                     speed_val = float(speed_match.group(1))
                     speed_unit = speed_match.group(2)
-                    speed = f"{speed_val} {speed_unit}"
+                    speed_str = f"{speed_val} {speed_unit}"
+                    # Convert to bytes/s for Rich progress bar
+                    speed_bytes_per_sec = self._convert_size_to_bytes(f"{speed_val} {speed_unit.rstrip('/s')}")
                     break
             
-            # Try to extract ETA (various formats)
-            eta = None
+            # Try to extract ETA (various formats) and convert to seconds
+            eta_seconds = None
+            eta_str = None
             eta_patterns = [
                 r'ETA\s+(\d+):(\d+)',           # "ETA 01:23"
                 r'ETA\s+(\d+)h\s*(\d+)m',       # "ETA 1h 23m"
@@ -185,19 +361,26 @@ class YouTubeDownloader:
                 if eta_match:
                     if ':' in pattern:
                         minutes, seconds = eta_match.groups()
-                        eta = f"{minutes}:{seconds.zfill(2)}"
+                        eta_str = f"{minutes}:{seconds.zfill(2)}"
+                        eta_seconds = int(minutes) * 60 + int(seconds)
                     elif 'h' in pattern:
                         hours, minutes = eta_match.groups()
-                        eta = f"{hours}h {minutes}m"
+                        eta_str = f"{hours}h {minutes}m"
+                        eta_seconds = int(hours) * 3600 + int(minutes) * 60
                     else:
                         minutes, seconds = eta_match.groups()
-                        eta = f"{minutes}m {seconds}s"
+                        eta_str = f"{minutes}m {seconds}s"
+                        eta_seconds = int(minutes) * 60 + int(seconds)
                     break
             
             progress_info = {
                 'percent': percent,
-                'speed': speed,
-                'eta': eta,
+                'total_bytes': total_size_bytes,
+                'downloaded_bytes': downloaded_bytes,
+                'speed': speed_str,
+                'speed_bytes_per_sec': speed_bytes_per_sec,
+                'eta': eta_str,
+                'eta_seconds': eta_seconds,
                 'status': 'downloading' if percent < 100 else 'completed'
             }
             
@@ -743,6 +926,115 @@ class YouTubeDownloader:
         """
         return self.download(url, quality="bestaudio", audio_only=True, metadata=metadata, 
                            quiet=quiet, progress_callback=progress_callback)
+    
+    def get_playlist_info(self, url: str) -> Optional[List[Dict[str, Any]]]:
+        """
+        Get information about videos in a YouTube playlist.
+        
+        Args:
+            url: YouTube playlist URL
+            
+        Returns:
+            List of video information dicts with 'title', 'url', 'playlist_index', 'id', etc.
+        """
+        # Try with --flat-playlist first (faster, less info)
+        try:
+            cmd = [
+                'yt-dlp',
+                '--dump-json',
+                '--flat-playlist',
+                '--no-download',
+                '--no-warnings',
+                url
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
+            
+            # Parse JSON lines (one per video)
+            videos = []
+            output_lines = result.stdout.strip().split('\n')
+            
+            if output_lines and output_lines[0].strip():
+                for line in output_lines:
+                    if line.strip():
+                        try:
+                            video_info = json.loads(line)
+                            # With --flat-playlist, some fields might be missing
+                            # Extract what we can
+                            video_id = video_info.get('id') or video_info.get('url', '')
+                            if not video_id:
+                                continue
+                            
+                            videos.append({
+                                'title': video_info.get('title', ''),
+                                'url': video_info.get('url', ''),
+                                'id': video_id,
+                                'playlist_index': video_info.get('playlist_index', video_info.get('playlist_auto_number', 0)),
+                                'duration': video_info.get('duration'),
+                                'webpage_url': video_info.get('webpage_url', '')
+                            })
+                        except json.JSONDecodeError:
+                            # Skip invalid JSON lines
+                            continue
+                
+                if videos:
+                    return videos
+        except subprocess.CalledProcessError as e:
+            # Check if it's a fatal error (playlist doesn't exist, etc.)
+            error_msg = (e.stderr or '').lower()
+            if 'playlist does not exist' in error_msg or 'does not exist' in error_msg:
+                # Playlist doesn't exist, don't try fallback
+                return None
+            # For other errors, try fallback
+            pass
+        except (subprocess.TimeoutExpired, Exception):
+            # Try fallback
+            pass
+        
+        # Fallback: Try without --flat-playlist (slower but more reliable, gets full info)
+        # Limit to first 50 videos to avoid timeout
+        try:
+            cmd = [
+                'yt-dlp',
+                '--dump-json',
+                '--no-download',
+                '--no-warnings',
+                '--playlist-end', '50',  # Limit to first 50 videos
+                url
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=120)
+            
+            videos = []
+            output_lines = result.stdout.strip().split('\n')
+            
+            if output_lines and output_lines[0].strip():
+                for line in output_lines:
+                    if line.strip():
+                        try:
+                            video_info = json.loads(line)
+                            video_id = video_info.get('id')
+                            if not video_id:
+                                continue
+                            
+                            videos.append({
+                                'title': video_info.get('title', ''),
+                                'url': video_info.get('url', ''),
+                                'id': video_id,
+                                'playlist_index': video_info.get('playlist_index', video_info.get('playlist_auto_number', 0)),
+                                'duration': video_info.get('duration'),
+                                'webpage_url': video_info.get('webpage_url', video_info.get('url', ''))
+                            })
+                        except json.JSONDecodeError:
+                            continue
+                
+                if videos:
+                    return videos
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, Exception):
+            # Both methods failed
+            return None
+        
+        return None
     
     def download_playlist(self, url: str, quality: str = "bestaudio") -> List[str]:
         """

@@ -2,14 +2,15 @@
 Search service that coordinates searches across multiple sources.
 """
 
-import unicodedata
 import concurrent.futures
+import re
 from typing import List, Optional, Dict, Any, Tuple
 from ..models.song import SongData
 from ..models.search_results import SearchResult, MusicBrainzSong, YouTubeVideo, DiscogsRelease
 from ..clients.musicbrainz import MusicBrainzClient
 from ..clients.discogs import DiscogsClient
 from ..clients.youtube import YouTubeClient
+from ..utils.string_utils import normalize_string
 
 
 class SearchService:
@@ -20,34 +21,6 @@ class SearchService:
         self.discogs_client = DiscogsClient()
         self.youtube_client = None  # Will be initialized when needed
     
-    def _normalize_string(self, s: Optional[str]) -> str:
-        """Normalize a string for comparison (lowercase, strip whitespace, normalize special characters)."""
-        if not s:
-            return ""
-        # First, normalize Unicode characters (NFKD normalization helps with apostrophes and special chars)
-        normalized = unicodedata.normalize('NFKD', s)
-        # Convert to lowercase and strip whitespace
-        normalized = normalized.lower().strip()
-        # Normalize "&" to "and" for better matching
-        normalized = normalized.replace(" & ", " and ")
-        normalized = normalized.replace("&", " and ")
-        # Normalize all apostrophe variants to a standard apostrophe
-        # This handles: ', ', ', ', ʼ, ʻ, ʼ, ʽ, ʾ, ʿ, ˊ, ˋ, etc.
-        # After NFKD normalization, many apostrophes become U+0027 or similar
-        apostrophe_chars = ["'", "'", "'", "'", "ʼ", "ʻ", "ʼ", "ʽ", "ʾ", "ʿ", "ˊ", "ˋ", "\u2018", "\u2019", "\u201A", "\u201B", "\u2032", "\u2035"]
-        for char in apostrophe_chars:
-            normalized = normalized.replace(char, "'")
-        # Normalize different types of quotes to a standard form
-        normalized = normalized.replace(""", '"')  # Left double quotation mark
-        normalized = normalized.replace(""", '"')  # Right double quotation mark
-        normalized = normalized.replace(""", "'")  # Left single quotation mark (if not already handled)
-        normalized = normalized.replace(""", "'")  # Right single quotation mark (if not already handled)
-        # Normalize dashes
-        normalized = normalized.replace("–", "-")  # En dash
-        normalized = normalized.replace("—", "-")  # Em dash
-        # Remove multiple spaces
-        normalized = " ".join(normalized.split())
-        return normalized
     
     def _get_release_year(self, release_date: Optional[str]) -> Optional[str]:
         """Extract year from release date string."""
@@ -64,9 +37,9 @@ class SearchService:
         For recordings: uses title and artist (album is optional)
         """
         # Normalize title and album
-        title = self._normalize_string(result.title)
-        album = self._normalize_string(result.album)
-        artist = self._normalize_string(result.artist)
+        title = normalize_string(result.title)
+        album = normalize_string(result.album)
+        artist = normalize_string(result.artist)
         
         # For releases, prioritize album; for recordings, prioritize title
         # If both title and album exist and are the same, use album
@@ -304,6 +277,94 @@ class SearchService:
         # YouTube doesn't have offset, so we'll just search again which may return different results
         self.youtube_client = YouTubeClient(query, max_results)
         return self.youtube_client.videos
+    
+    def search_full_album(self, artist: str, album: str, max_results: int = 5) -> List[YouTubeVideo]:
+        """Search YouTube for full album videos (complete album in one video)."""
+        # Search for full album - common patterns include "full album", "complete album", "album full"
+        # Exclude live versions in search queries
+        queries = [
+            f"{artist} {album} full album",
+            f"{artist} {album} complete album",
+            f"{artist} {album} album full",
+            f"{artist} {album} full",
+            f"{artist} {album} full album -live -concert",  # Try to exclude live versions
+        ]
+        
+        all_results = []
+        seen_ids = set()
+        
+        # Keywords that indicate live versions or non-album content (to filter out)
+        live_keywords = ['live', 'concert', 'performance', 'on stage', 'recorded live']
+        non_album_keywords = [
+            'reaction', 'react', 'reacting', 'reacts', 'first reaction', 'first time listening',
+            'review', 'album review', 'unboxing', 'reaction to', 'reacting to', 'my reaction',
+            'listening to', 'listening session', 'rate', 'rating', 'ranking', 'breakdown',
+            'analysis', 'explained', 'discussion', 'podcast', 'interview', 'trailer', 'teaser',
+            'preview', 'snippet', 'clip', 'mashup', 'remix', 'cover', 'covers', 'tribute',
+            'parody', 'meme', 'tier list', 'top 10', 'top 5'
+        ]
+        
+        for query in queries:
+            client = YouTubeClient(query, max_results)
+            for video in client.videos:
+                if video.video_id and video.video_id not in seen_ids:
+                    # Check if video title suggests it's a full album
+                    title_lower = video.title.lower()
+                    
+                    # Must contain full album keywords
+                    has_full_album_keyword = any(
+                        keyword in title_lower 
+                        for keyword in ['full album', 'complete album', 'album full', 'full lp']
+                    )
+                    
+                    if not has_full_album_keyword:
+                        continue
+                    
+                    # Filter out obvious live versions and non-album content in initial search
+                    is_live = any(keyword in title_lower for keyword in live_keywords)
+                    is_non_album = any(keyword in title_lower for keyword in non_album_keywords)
+                    if is_live or is_non_album:
+                        continue  # Skip live versions and non-album content in initial search
+                    
+                    all_results.append(video)
+                    seen_ids.add(video.video_id)
+                    if len(all_results) >= max_results:
+                        return all_results[:max_results]
+        
+        return all_results[:max_results]
+    
+    def search_playlist(self, artist: str, album: str, max_results: int = 5) -> List[Dict[str, Any]]:
+        """Search YouTube for playlists matching the album."""
+        # Search for playlists - YouTube playlist URLs start with "playlist?list="
+        queries = [
+            f"{artist} {album} playlist",
+            f"{artist} {album} album playlist",
+        ]
+        
+        all_results = []
+        seen_ids = set()
+        
+        for query in queries:
+            client = YouTubeClient(query, max_results * 2)  # Get more results to find playlists
+            for video in client.videos:
+                # Check if this video is part of a playlist by checking URL
+                if video.url_suffix and 'list=' in video.url_suffix:
+                    # Extract playlist ID
+                    match = re.search(r'list=([^&]+)', video.url_suffix)
+                    if match:
+                        playlist_id = match.group(1)
+                        if playlist_id not in seen_ids:
+                            all_results.append({
+                                'playlist_id': playlist_id,
+                                'title': video.title,
+                                'url': f"https://www.youtube.com/playlist?list={playlist_id}",
+                                'video': video
+                            })
+                            seen_ids.add(playlist_id)
+                            if len(all_results) >= max_results:
+                                return all_results[:max_results]
+        
+        return all_results[:max_results]
     
     def search_all_sources(self, song_data: SongData) -> Dict[str, List[SearchResult]]:
         """Search all available sources for a song."""
