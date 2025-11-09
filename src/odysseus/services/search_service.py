@@ -287,15 +287,33 @@ class SearchService:
         self.youtube_client = YouTubeClient(query, max_results)
         return self.youtube_client.videos
     
-    def search_full_album(self, artist: str, album: str, max_results: int = 5) -> List[YouTubeVideo]:
-        """Search YouTube for full album videos (complete album in one video)."""
-        queries = [
-            f"{artist} {album} full album",
-            f"{artist} {album} complete album",
-            f"{artist} {album} album full",
-            f"{artist} {album} full",
-            f"{artist} {album} full album -live -concert",
-        ]
+    def search_full_album(self, artist: str, album: str, max_results: int = 5, release_year: Optional[str] = None) -> List[YouTubeVideo]:
+        """
+        Search YouTube for full album videos (complete album in one video).
+        
+        Args:
+            artist: Artist name
+            album: Album title
+            max_results: Maximum number of results to return
+            release_year: Optional release year to improve search accuracy
+        """
+        # Build queries with year if available (helps distinguish between albums with similar names)
+        if release_year:
+            queries = [
+                f'"{artist}" "{album}" {release_year} full album',
+                f"{artist} {album} {release_year} full album",
+                f"{artist} {album} full album {release_year}",
+                f"{artist} {album} full album",
+                f"{artist} {album} complete album",
+            ]
+        else:
+            queries = [
+                f'"{artist}" "{album}" full album',  # Use quotes for exact phrase matching
+                f"{artist} {album} full album",
+                f"{artist} {album} complete album",
+                f"{artist} {album} album full",
+                f"{artist} {album} full",
+            ]
         
         all_results = []
         seen_ids = set()

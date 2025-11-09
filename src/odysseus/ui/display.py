@@ -426,11 +426,9 @@ class DisplayManager:
                 selected = self._select_single_release(releases)
                 return (selected, False)  # Manual track selection for single release
             elif choice == '2':
-                selected = self._select_multiple_releases(releases)
-                return (selected, False)  # Manual track selection for multiple releases
+                return self._select_multiple_releases(releases)  # Returns (selected, auto_download_all_tracks)
             elif choice == '3':
-                selected = self._select_range_releases(releases)
-                return (selected, False)  # Manual track selection for range
+                return self._select_range_releases(releases)  # Returns (selected, auto_download_all_tracks)
             elif choice == '4':
                 return self._confirm_all_releases(releases, quality, search_service)
             elif choice == '5':
@@ -456,14 +454,17 @@ class DisplayManager:
             except (ValueError, KeyboardInterrupt):
                 return []
     
-    def _select_multiple_releases(self, releases: List[MusicBrainzSong]) -> List[MusicBrainzSong]:
-        """Select multiple releases by comma-separated numbers."""
+    def _select_multiple_releases(self, releases: List[MusicBrainzSong]) -> Tuple[List[MusicBrainzSong], bool]:
+        """
+        Select multiple releases by comma-separated numbers.
+        Returns: (list of selected releases, auto_download_all_tracks flag)
+        """
         while True:
             try:
                 choice = Prompt.ask("[bold]Enter release numbers[/bold] (e.g., 1,3,5 or 1-3,5)", default="")
                 
                 if choice.lower() in ['q', 'quit', 'cancel']:
-                    return []
+                    return ([], False)
                 
                 # Parse both individual numbers and ranges
                 numbers = set()
@@ -489,10 +490,23 @@ class DisplayManager:
                         self.console.print(f"  {i}. [yellow]{release.album}[/yellow] by [green]{release.artist}[/green]")
                     
                     if Confirm.ask("\n[bold]Proceed with download?[/bold]", default=True):
-                        return selected_releases
+                        # Ask if user wants to automatically download all tracks from all releases
+                        self.console.print()
+                        auto_download_all = Confirm.ask(
+                            "[bold cyan]Automatically download ALL tracks from ALL selected releases?[/bold cyan]\n"
+                            "[dim]If yes, will skip manual track selection for each release.[/dim]",
+                            default=True
+                        )
+                        
+                        if auto_download_all:
+                            self.console.print("[bold green]✓[/bold green] Will automatically download all tracks from all selected releases.")
+                            return (selected_releases, True)
+                        else:
+                            self.console.print("[blue]ℹ[/blue] Will prompt for track selection for each release.")
+                            return (selected_releases, False)
                     else:
                         self.console.print("[yellow]⚠[/yellow] Selection cancelled.")
-                        return []
+                        return ([], False)
                 else:
                     invalid = numbers - set(valid_numbers)
                     self.console.print(f"[bold red]✗[/bold red] Invalid numbers: {', '.join(map(str, invalid))}. Available: 1-{len(releases)}")
@@ -500,14 +514,17 @@ class DisplayManager:
             except (ValueError, KeyboardInterrupt):
                 self.console.print("[bold red]✗[/bold red] Invalid format. Use numbers separated by commas (e.g., 1,3,5) or ranges (e.g., 1-3,5)")
     
-    def _select_range_releases(self, releases: List[MusicBrainzSong]) -> List[MusicBrainzSong]:
-        """Select a range of releases."""
+    def _select_range_releases(self, releases: List[MusicBrainzSong]) -> Tuple[List[MusicBrainzSong], bool]:
+        """
+        Select a range of releases.
+        Returns: (list of selected releases, auto_download_all_tracks flag)
+        """
         while True:
             try:
                 choice = Prompt.ask("[bold]Enter range[/bold] (e.g., 1-5)", default="")
                 
                 if choice.lower() in ['q', 'quit', 'cancel']:
-                    return []
+                    return ([], False)
                 
                 if '-' not in choice:
                     self.console.print("[bold red]✗[/bold red] Please enter a range in format 'start-end' (e.g., 1-5)")
@@ -527,10 +544,23 @@ class DisplayManager:
                     self.console.print(f"  {i}. [yellow]{release.album}[/yellow] by [green]{release.artist}[/green]")
                 
                 if Confirm.ask("\n[bold]Proceed with download?[/bold]", default=True):
-                    return selected_releases
+                    # Ask if user wants to automatically download all tracks from all releases
+                    self.console.print()
+                    auto_download_all = Confirm.ask(
+                        "[bold cyan]Automatically download ALL tracks from ALL selected releases?[/bold cyan]\n"
+                        "[dim]If yes, will skip manual track selection for each release.[/dim]",
+                        default=True
+                    )
+                    
+                    if auto_download_all:
+                        self.console.print("[bold green]✓[/bold green] Will automatically download all tracks from all selected releases.")
+                        return (selected_releases, True)
+                    else:
+                        self.console.print("[blue]ℹ[/blue] Will prompt for track selection for each release.")
+                        return (selected_releases, False)
                 else:
                     self.console.print("[yellow]⚠[/yellow] Selection cancelled.")
-                    return []
+                    return ([], False)
                     
             except (ValueError, KeyboardInterrupt):
                 self.console.print("[bold red]✗[/bold red] Invalid format. Please enter range as 'start-end' (e.g., 1-5)")

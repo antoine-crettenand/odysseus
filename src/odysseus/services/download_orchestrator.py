@@ -400,6 +400,76 @@ class DownloadOrchestrator:
         normalized = ' '.join(normalized.split())
         return normalized
     
+    def _extract_version_suffix(self, album_title: str) -> Optional[str]:
+        """
+        Extract version suffix from album title (e.g., "ii", "2", "part 2", "vol. 2").
+        
+        Returns:
+            Version suffix if found, None otherwise
+        """
+        if not album_title:
+            return None
+        
+        album_lower = album_title.lower().strip()
+        
+        # Remove year in parentheses at the end (e.g., "album ii (2025)" -> "album ii")
+        # This helps match version suffixes even when year is present
+        album_lower = re.sub(r'\s*\(\d{4}\)\s*$', '', album_lower).strip()
+        
+        # Common version patterns at the end of album titles
+        # Order matters - check longer patterns first
+        version_patterns = [
+            r'\bpart\s+ii\b$',    # "part ii" at the end
+            r'\bpart\s+2\b$',     # "part 2" at the end
+            r'\bvol\.?\s*2\b$',   # "vol. 2" or "vol 2" at the end
+            r'\bvolume\s+2\b$',   # "volume 2" at the end
+            r'\bversion\s+2\b$',  # "version 2" at the end
+            r'\biii\b$',          # "iii" as a word at the end
+            r'\biv\b$',           # "iv" as a word at the end
+            r'\bii\b$',           # "ii" as a word at the end
+            r'\b3\b$',            # "3" as a word at the end
+            r'\b2\b$',            # "2" as a word at the end
+        ]
+        
+        for pattern in version_patterns:
+            match = re.search(pattern, album_lower)
+            if match:
+                # Return the matched suffix (normalized)
+                suffix = match.group(0).strip()
+                return suffix
+        
+        return None
+    
+    def _has_version_suffix_in_title(self, title: str, version_suffix: str) -> bool:
+        """
+        Check if a title contains the version suffix.
+        
+        Args:
+            title: Title to check
+            version_suffix: Version suffix to look for (e.g., "ii", "2", "part 2")
+        """
+        if not title or not version_suffix:
+            return False
+        
+        title_lower = title.lower()
+        suffix_lower = version_suffix.lower()
+        
+        # Direct match
+        if suffix_lower in title_lower:
+            return True
+        
+        # For numeric suffixes, also check for roman numerals
+        if suffix_lower == "2":
+            # Check for "ii" as well
+            if " ii " in title_lower or title_lower.endswith(" ii"):
+                return True
+        elif suffix_lower == "ii":
+            # Check for "2" as well
+            if re.search(r'\b2\b', title_lower):
+                return True
+        
+        return False
+    
     def _artist_matches(self, video_title: str, artist: str) -> bool:
         """Check if video title contains artist name (with flexible matching)."""
         if not video_title or not artist:
@@ -431,8 +501,19 @@ class DownloadOrchestrator:
         
         return False
     
-    def _title_matches_album(self, video_title: str, album_title: str, artist: str) -> bool:
-        """Check if video title contains album title and artist (with fuzzy matching)."""
+    def _title_matches_album(self, video_title: str, album_title: str, artist: str, release_year: Optional[str] = None) -> bool:
+        """
+        Check if video title contains album title and artist (with strict matching).
+        
+        Args:
+            video_title: YouTube video title
+            album_title: Album title to match
+            artist: Artist name
+            release_year: Optional release year for additional validation
+            
+        Returns:
+            True if video title matches the album
+        """
         if not video_title or not album_title or not artist:
             return False
         
@@ -444,18 +525,62 @@ class DownloadOrchestrator:
         if not artist_matches:
             return False
         
-        # Check if album title is in video title (or significant parts of it)
-        # Split album title into words and check if most words are present
-        album_words = [w for w in album_normalized.split() if len(w) > 2]  # Ignore short words
-        if not album_words:
-            # If album title is very short, check exact match
-            album_in_title = album_normalized in video_normalized
-        else:
-            # Check if at least 70% of significant words from album title are in video title
-            matching_words = sum(1 for word in album_words if word in video_normalized)
-            album_in_title = matching_words >= (len(album_words) * 0.7)
+        # Extract version suffix from album title (e.g., "ii", "2", "part 2")
+        version_suffix = self._extract_version_suffix(album_title)
         
-        return album_in_title
+        # If album has a version suffix, require it to be present in video title
+        # This prevents matching "The Universe Smiles Upon You" when looking for "The Universe Smiles Upon You ii"
+        if version_suffix:
+            if not self._has_version_suffix_in_title(video_title, version_suffix):
+                return False  # Version suffix is required - reject if not found
+        
+        # First, try exact phrase match (most reliable)
+        # Check if the full normalized album title appears as a phrase in the video title
+        if album_normalized in video_normalized:
+            # If year is provided, require it to match (strict check for versioned albums)
+            if release_year:
+                year_in_title = release_year in video_title
+                if version_suffix:
+                    # For versioned albums, year match is required to distinguish versions
+                    if not year_in_title:
+                        return False
+                # For non-versioned albums, year is preferred but not strictly required
+                # (some videos don't include year in title)
+            return True
+        
+        # If exact phrase not found, check word-by-word with stricter requirements
+        album_words = [w for w in album_normalized.split() if len(w) > 1]  # Include 2+ char words
+        if not album_words:
+            # If album title is very short, require exact match
+            return album_normalized in video_normalized
+        
+        # For word-by-word matching, require at least 90% of words (stricter than before)
+        # This helps avoid matching similar album names
+        matching_words = sum(1 for word in album_words if word in video_normalized)
+        word_match_ratio = matching_words / len(album_words) if album_words else 0
+        
+        # Require at least 90% word match (was 70%)
+        if word_match_ratio < 0.9:
+            return False
+        
+        # Additional check: ensure all "important" words (3+ chars) are present
+        important_words = [w for w in album_words if len(w) >= 3]
+        if important_words:
+            important_matches = sum(1 for word in important_words if word in video_normalized)
+            if important_matches < len(important_words):
+                return False  # Missing important words
+        
+        # If year is provided, make it required for versioned albums
+        if release_year:
+            year_in_title = release_year in video_title
+            if version_suffix:
+                # For versioned albums, year match is required
+                if not year_in_title:
+                    return False
+            # For non-versioned albums, year is preferred but not strictly required
+            # (some videos don't include year in title)
+        
+        return True
     
     def _validate_video_for_album(
         self,
@@ -472,8 +597,12 @@ class DownloadOrchestrator:
         """
         console = self.display_manager.console
         
-        # Check 1: Title must match album and artist
-        if not self._title_matches_album(video.title, release_info.title, release_info.artist):
+        # Check 1: Title must match album and artist (with year if available)
+        release_year = None
+        if release_info.release_date and len(release_info.release_date) >= 4:
+            release_year = release_info.release_date[:4]
+        
+        if not self._title_matches_album(video.title, release_info.title, release_info.artist, release_year):
             reason = f"Video title doesn't match album '{release_info.title}' by '{release_info.artist}' (title: {video.title})"
             if not silent:
                 console.print(f"[yellow]⚠[/yellow] Skipping mismatched video: {video.title}")
@@ -638,19 +767,37 @@ class DownloadOrchestrator:
         quality: str,
         silent: bool = False
     ) -> Tuple[int, int]:
-        """Strategy 1: Download full album video and split into tracks."""
+        """
+        Strategy 1: Download full album video and split into tracks.
+        
+        Optimized to fetch cover art once per release and reuse it for all tracks.
+        """
         console = self.display_manager.console
         
         if not silent:
             console.print("[cyan]🎵 Strategy 1: Searching for full album video...[/cyan]")
         
-        # Search for full album video
+        # Fetch cover art once for the entire release (optimization)
+        cover_art_data = None
+        if not silent:
+            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console)
+        else:
+            # Still fetch cover art in silent mode, just don't print messages
+            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None)
+        
+        # Extract release year if available
+        release_year = None
+        if release_info.release_date and len(release_info.release_date) >= 4:
+            release_year = release_info.release_date[:4]
+        
+        # Search for full album video (with year for better accuracy)
         full_album_videos = self.display_manager.show_loading_spinner(
             f"Searching for full album: {release_info.title}",
             self.search_service.search_full_album,
             release_info.artist,
             release_info.title,
-            3
+            3,
+            release_year
         )
         
         if not full_album_videos:
@@ -828,13 +975,13 @@ class DownloadOrchestrator:
                     pass  # Ignore cleanup errors
                 
                 if split_files:
-                    # Apply metadata to all split files
+                    # Apply metadata to all split files (reuse pre-fetched cover art)
                     downloaded_count = 0
                     for split_file, timestamp_info in zip(split_files, track_timestamps):
                         track = timestamp_info['track']
                         try:
                             self.metadata_service.apply_metadata_with_cover_art(
-                                split_file, track, release_info, console
+                                split_file, track, release_info, console, cover_art_data=cover_art_data
                             )
                             downloaded_count += 1
                         except Exception as e:
@@ -954,11 +1101,23 @@ class DownloadOrchestrator:
         quality: str,
         silent: bool = False
     ) -> Tuple[int, int]:
-        """Strategy 2: Download from YouTube playlist."""
+        """
+        Strategy 2: Download from YouTube playlist.
+        
+        Optimized to fetch cover art once per release and reuse it for all tracks.
+        """
         console = self.display_manager.console
         
         if not silent:
             console.print("[cyan]🎵 Strategy 2: Searching for playlist...[/cyan]")
+        
+        # Fetch cover art once for the entire release (optimization)
+        cover_art_data = None
+        if not silent:
+            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console)
+        else:
+            # Still fetch cover art in silent mode, just don't print messages
+            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None)
         
         # Search for playlists
         playlists = self.display_manager.show_loading_spinner(
@@ -1188,10 +1347,10 @@ class DownloadOrchestrator:
                                 file_progress.update(file_task_id, completed=100)
                             
                             if downloaded_path:
-                                # Apply metadata with cover art
+                                # Apply metadata with cover art (reuse pre-fetched cover art)
                                 try:
                                     self.metadata_service.apply_metadata_with_cover_art(
-                                        downloaded_path, track, release_info, console
+                                        downloaded_path, track, release_info, console, cover_art_data=cover_art_data
                                     )
                                 except Exception as e:
                                     # If metadata application fails, still count as downloaded but log the error
@@ -1241,11 +1400,24 @@ class DownloadOrchestrator:
         quality: str,
         silent: bool = False
     ) -> Tuple[int, int]:
-        """Strategy 3: Download individual tracks (fallback)."""
+        """
+        Download individual tracks from a release.
+        
+        Optimized to fetch cover art once per release and reuse it for all tracks.
+        Strategy 3: Download individual tracks (fallback).
+        """
         console = self.display_manager.console
         
         if not silent:
             console.print("[cyan]🎵 Strategy 3: Downloading individual tracks...[/cyan]")
+        
+        # Fetch cover art once for the entire release (optimization)
+        cover_art_data = None
+        if not silent:
+            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console)
+        else:
+            # Still fetch cover art in silent mode, just don't print messages
+            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None)
         
         downloaded_count = 0
         failed_count = 0
@@ -1379,10 +1551,10 @@ class DownloadOrchestrator:
                     file_progress.update(file_task_id, completed=100)
                     
                     if downloaded_path:
-                        # Apply metadata with cover art
+                        # Apply metadata with cover art (reuse pre-fetched cover art)
                         try:
                             self.metadata_service.apply_metadata_with_cover_art(
-                                downloaded_path, track, release_info, console
+                                downloaded_path, track, release_info, console, cover_art_data=cover_art_data
                             )
                         except Exception as e:
                             # If metadata application fails, still count as downloaded but log the error

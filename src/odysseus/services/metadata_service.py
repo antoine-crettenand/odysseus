@@ -15,6 +15,9 @@ class MetadataService:
     
     def __init__(self):
         self.merger = MetadataMerger()
+        # Cache for cover art to avoid fetching the same cover art multiple times
+        # Key: (release_mbid or cover_art_url), Value: cover_art_data (bytes)
+        self._cover_art_cache: Dict[str, Optional[bytes]] = {}
     
     def add_metadata_source(self, source_name: str, metadata: AudioMetadata, confidence: float = 1.0):
         """Add metadata from a source."""
@@ -48,10 +51,27 @@ class MetadataService:
         """Set the final metadata manually."""
         self.merger.set_final_metadata(metadata)
     
-    def fetch_cover_art_from_url(self, url: str, console=None) -> Optional[bytes]:
-        """Fetch cover art from a URL (e.g., Spotify)."""
+    def fetch_cover_art_from_url(self, url: str, console=None, use_cache: bool = True) -> Optional[bytes]:
+        """
+        Fetch cover art from a URL (e.g., Spotify).
+        
+        Args:
+            url: URL to fetch cover art from
+            console: Optional console for output
+            use_cache: Whether to use cached cover art if available
+            
+        Returns:
+            Cover art data as bytes, or None if failed
+        """
         if not url:
             return None
+        
+        # Check cache first
+        if use_cache and url in self._cover_art_cache:
+            cached_data = self._cover_art_cache[url]
+            if cached_data is not None and console:
+                console.print(f"[blue]ℹ[/blue] Using cached cover art from URL ({len(cached_data)} bytes)")
+            return cached_data
         
         try:
             headers = {
@@ -62,22 +82,49 @@ class MetadataService:
             if response.status_code == 200:
                 if console:
                     console.print(f"[blue]ℹ[/blue] Fetched cover art from URL ({len(response.content)} bytes)")
+                # Cache the result
+                if use_cache:
+                    self._cover_art_cache[url] = response.content
                 return response.content
             else:
                 if console:
                     console.print(f"[yellow]⚠[/yellow] Failed to fetch cover art from URL: HTTP {response.status_code}")
+                # Cache the failure (None) to avoid retrying
+                if use_cache:
+                    self._cover_art_cache[url] = None
         except Exception as e:
             if console:
                 console.print(f"[yellow]⚠[/yellow] Error fetching cover art from URL: {e}")
+            # Cache the failure
+            if use_cache:
+                self._cover_art_cache[url] = None
         
         return None
     
-    def fetch_cover_art(self, mbid: str, console=None) -> Optional[bytes]:
-        """Fetch cover art from MusicBrainz Cover Art Archive."""
+    def fetch_cover_art(self, mbid: str, console=None, use_cache: bool = True) -> Optional[bytes]:
+        """
+        Fetch cover art from MusicBrainz Cover Art Archive.
+        
+        Args:
+            mbid: MusicBrainz release ID
+            console: Optional console for output
+            use_cache: Whether to use cached cover art if available
+            
+        Returns:
+            Cover art data as bytes, or None if failed
+        """
         if not mbid or not mbid.strip():
             if console:
                 console.print(f"[yellow]⚠[/yellow] No MBID provided for cover art fetch")
             return None
+        
+        # Check cache first
+        cache_key = f"mbid:{mbid}"
+        if use_cache and cache_key in self._cover_art_cache:
+            cached_data = self._cover_art_cache[cache_key]
+            if cached_data is not None and console:
+                console.print(f"[blue]ℹ[/blue] Using cached cover art from MusicBrainz ({len(cached_data)} bytes)")
+            return cached_data
             
         try:
             # Use HTTPS and add User-Agent header
@@ -94,6 +141,9 @@ class MetadataService:
                 if not images:
                     if console:
                         console.print(f"[yellow]⚠[/yellow] No images found in Cover Art Archive for MBID: {mbid}")
+                    # Cache the failure
+                    if use_cache:
+                        self._cover_art_cache[cache_key] = None
                     return None
                 
                 # Look for front cover
@@ -105,6 +155,9 @@ class MetadataService:
                             if img_response.status_code == 200:
                                 if console:
                                     console.print(f"[blue]ℹ[/blue] Fetched front cover art ({len(img_response.content)} bytes)")
+                                # Cache the result
+                                if use_cache:
+                                    self._cover_art_cache[cache_key] = img_response.content
                                 return img_response.content
                 
                 # If no front cover, use first image
@@ -115,19 +168,77 @@ class MetadataService:
                         if img_response.status_code == 200:
                             if console:
                                 console.print(f"[blue]ℹ[/blue] Fetched cover art (first available, {len(img_response.content)} bytes)")
+                            # Cache the result
+                            if use_cache:
+                                self._cover_art_cache[cache_key] = img_response.content
                             return img_response.content
             elif response.status_code == 404:
                 if console:
                     console.print(f"[yellow]⚠[/yellow] Cover art not found in archive for MBID: {mbid}")
+                # Cache the failure
+                if use_cache:
+                    self._cover_art_cache[cache_key] = None
             else:
                 if console:
                     console.print(f"[yellow]⚠[/yellow] Cover Art Archive returned status {response.status_code} for MBID: {mbid}")
+                # Cache the failure
+                if use_cache:
+                    self._cover_art_cache[cache_key] = None
         except requests.exceptions.RequestException as e:
             if console:
                 console.print(f"[yellow]⚠[/yellow] Network error fetching cover art: {e}")
+            # Cache the failure
+            if use_cache:
+                self._cover_art_cache[cache_key] = None
         except Exception as e:
             if console:
                 console.print(f"[yellow]⚠[/yellow] Error fetching cover art: {e}")
+            # Cache the failure
+            if use_cache:
+                self._cover_art_cache[cache_key] = None
+        return None
+    
+    def fetch_cover_art_for_release(self, release_info: ReleaseInfo, console=None) -> Optional[bytes]:
+        """
+        Fetch cover art for a release (optimized to fetch once per release).
+        
+        This method should be called once per release, and the result can be reused
+        for all tracks in that release.
+        
+        Args:
+            release_info: ReleaseInfo object containing release metadata
+            console: Optional console for output
+            
+        Returns:
+            Cover art data as bytes, or None if failed
+        """
+        # First, try Spotify cover art URL if available
+        if release_info.cover_art_url:
+            if console:
+                console.print(f"[blue]ℹ[/blue] Fetching cover art from Spotify for release...")
+            cover_art_data = self.fetch_cover_art_from_url(release_info.cover_art_url, console)
+            if cover_art_data:
+                return cover_art_data
+        
+        # If no Spotify cover art, try MusicBrainz if we have MBID
+        mbid = release_info.mbid.strip() if release_info.mbid else ""
+        
+        # Check if MBID looks like a MusicBrainz UUID (has dashes)
+        is_musicbrainz_mbid = mbid and '-' in mbid and len(mbid) == 36
+        
+        if mbid and is_musicbrainz_mbid:
+            if console:
+                console.print(f"[blue]ℹ[/blue] Fetching cover art from MusicBrainz for release...")
+            cover_art_data = self.fetch_cover_art(mbid, console)
+            if cover_art_data:
+                return cover_art_data
+            elif console:
+                console.print(f"[yellow]⚠[/yellow] Cover art not available from MusicBrainz")
+        elif mbid and not is_musicbrainz_mbid:
+            # This is likely a Discogs ID, not a MusicBrainz MBID
+            if console:
+                console.print(f"[yellow]⚠[/yellow] MBID appears to be from Discogs (not MusicBrainz). Cover art requires MusicBrainz MBID.")
+        
         return None
     
     def _is_compilation(self, release_info: ReleaseInfo) -> bool:
@@ -164,9 +275,21 @@ class MetadataService:
         file_path: Path,
         track: Track,
         release_info: ReleaseInfo,
-        console=None
+        console=None,
+        cover_art_data: Optional[bytes] = None
     ):
-        """Apply metadata including cover art to downloaded file."""
+        """
+        Apply metadata including cover art to downloaded file.
+        
+        Args:
+            file_path: Path to the audio file
+            track: Track information
+            release_info: Release information
+            console: Optional console for output
+            cover_art_data: Optional pre-fetched cover art data. If None, will fetch it.
+                           It's recommended to fetch cover art once per release and pass it
+                           to all tracks in that release for better performance.
+        """
         try:
             # Check if this is a compilation
             is_compilation = self._is_compilation(release_info)
@@ -187,38 +310,17 @@ class MetadataService:
                 compilation=is_compilation  # Set compilation flag for iTunes
             )
             
-            # Fetch cover art - try multiple sources
+            # Use provided cover art, or fetch it if not provided
             cover_art_fetched = False
-            
-            # First, try Spotify cover art URL if available
-            if release_info.cover_art_url:
-                if console:
-                    console.print(f"[blue]ℹ[/blue] Fetching cover art from Spotify for {track.title}...")
-                cover_art_data = self.fetch_cover_art_from_url(release_info.cover_art_url, console)
+            if cover_art_data:
+                metadata.cover_art_data = cover_art_data
+                cover_art_fetched = True
+            else:
+                # Fallback: fetch cover art (this will use cache if available)
+                cover_art_data = self.fetch_cover_art_for_release(release_info, console)
                 if cover_art_data:
                     metadata.cover_art_data = cover_art_data
                     cover_art_fetched = True
-            
-            # If no Spotify cover art, try MusicBrainz if we have MBID
-            if not cover_art_fetched:
-                mbid = release_info.mbid.strip() if release_info.mbid else ""
-                
-                # Check if MBID looks like a MusicBrainz UUID (has dashes)
-                is_musicbrainz_mbid = mbid and '-' in mbid and len(mbid) == 36
-                
-                if mbid and is_musicbrainz_mbid:
-                    if console:
-                        console.print(f"[blue]ℹ[/blue] Fetching cover art from MusicBrainz for {track.title}...")
-                    cover_art_data = self.fetch_cover_art(mbid, console)
-                    if cover_art_data:
-                        metadata.cover_art_data = cover_art_data
-                        cover_art_fetched = True
-                    elif console:
-                        console.print(f"[yellow]⚠[/yellow] Cover art not available from MusicBrainz")
-                elif mbid and not is_musicbrainz_mbid:
-                    # This is likely a Discogs ID, not a MusicBrainz MBID
-                    if console:
-                        console.print(f"[yellow]⚠[/yellow] MBID appears to be from Discogs (not MusicBrainz). Cover art requires MusicBrainz MBID.")
             
             if not cover_art_fetched and console:
                 console.print(f"[yellow]⚠[/yellow] No cover art available for this release")

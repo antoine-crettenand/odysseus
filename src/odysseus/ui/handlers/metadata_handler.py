@@ -244,6 +244,9 @@ class MetadataHandler(BaseHandler):
         
         console.print()
         
+        # Fetch cover art once for the entire release (optimization)
+        cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console)
+        
         # Create progress bar
         progress = self.display_manager.create_progress_bar(
             len(audio_files),
@@ -263,7 +266,7 @@ class MetadataHandler(BaseHandler):
                 if track:
                     try:
                         self.metadata_service.apply_metadata_with_cover_art(
-                            file_path, track, release_info, console
+                            file_path, track, release_info, console, cover_art_data=cover_art_data
                         )
                         success_count += 1
                     except Exception as e:
@@ -281,7 +284,7 @@ class MetadataHandler(BaseHandler):
                             artist=release_info.artist
                         )
                         self.metadata_service.apply_metadata_with_cover_art(
-                            file_path, dummy_track, release_info, console
+                            file_path, dummy_track, release_info, console, cover_art_data=cover_art_data
                         )
                         success_count += 1
                     except Exception as e:
