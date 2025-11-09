@@ -460,21 +460,22 @@ class MetadataMerger:
                                         del audio_file.tags[key]
                                     except:
                                         pass
-                            
-                            # Add the cover art
-                            apic = APIC(
-                                encoding=3,  # UTF-8
-                                mime=mime_type,
-                                type=3,  # Cover (front)
-                                desc='Cover',
-                                data=self.final_metadata.cover_art_data
-                            )
-                            audio_file.tags.add(apic)
-                            
-                            message = f"✓ Added cover art to {file_path.name} ({len(self.final_metadata.cover_art_data)} bytes, {mime_type})"
-                            if not quiet:
-                                print(message)
-                            logger.debug(f"Added cover art to {file_path} ({len(self.final_metadata.cover_art_data)} bytes, {mime_type})")
+                                
+                                # Add the cover art with encoding 0 (ISO-8859-1) for better iTunes compatibility
+                                # iTunes prefers ID3v2.3, and encoding 0 is more compatible
+                                apic = APIC(
+                                    encoding=0,  # ISO-8859-1 (better iTunes compatibility than UTF-8)
+                                    mime=mime_type,
+                                    type=3,  # Cover (front)
+                                    desc='Cover',
+                                    data=self.final_metadata.cover_art_data
+                                )
+                                audio_file.tags.add(apic)
+                                
+                                message = f"✓ Added cover art to {file_path.name} ({len(self.final_metadata.cover_art_data)} bytes, {mime_type})"
+                                if not quiet:
+                                    print(message)
+                                logger.debug(f"Added cover art to {file_path} ({len(self.final_metadata.cover_art_data)} bytes, {mime_type})")
                             
                         except Exception as e:
                             message = f"⚠ Could not add cover art to MP3 file {file_path.name}: {e}"
@@ -565,7 +566,17 @@ class MetadataMerger:
                     logger.warning(f"Could not add cover art to {file_path}: {e}")
             
             # Save the file (this will save metadata changes)
-            audio_file.save()
+            # For MP3 files, ensure we save with ID3v2.3 for iTunes compatibility
+            if file_ext == '.mp3' and hasattr(audio_file, 'tags') and audio_file.tags is not None:
+                try:
+                    from mutagen.id3 import ID3
+                    # Save with ID3v2.3 for better iTunes compatibility
+                    audio_file.tags.save(str(file_path), v2_version=3)
+                except:
+                    # Fallback to default save if explicit version fails
+                    audio_file.save()
+            else:
+                audio_file.save()
             message = f"✓ Applied metadata to {file_path.name}"
             if not quiet:
                 print(message)

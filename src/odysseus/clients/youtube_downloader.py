@@ -10,7 +10,7 @@ import re
 import json
 import threading
 from queue import Queue
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, Optional, List, Callable, Tuple
 from pathlib import Path
 from ..core.config import (
     DOWNLOAD_CONFIG, ERROR_MESSAGES, SUCCESS_MESSAGES, 
@@ -587,7 +587,7 @@ class YouTubeDownloader:
     
     def download(self, url: str, quality: str = "bestaudio", 
                       audio_only: bool = True, metadata: Optional[Dict[str, Any]] = None, 
-                      quiet: bool = False, progress_callback: Optional[Callable] = None) -> Optional[Path]:
+                      quiet: bool = False, progress_callback: Optional[Callable] = None) -> Tuple[Optional[Path], bool]:
         try:
             # Determine download directory based on metadata
             download_dir = self._create_organized_path(metadata)
@@ -641,7 +641,7 @@ class YouTubeDownloader:
                             from ..utils.colors import Colors
                             print(f"{Colors.yellow('⏭')} Skipping download - file already exists: {Colors.blue(str(potential_file))}")
                         # Return existing file - metadata will still be applied by the caller
-                        return potential_file
+                        return potential_file, True
                 
                 # Also check for files with similar names (in case of slight variations)
                 # Look for files starting with the expected base name
@@ -667,7 +667,7 @@ class YouTubeDownloader:
                         from ..utils.colors import Colors
                         print(f"{Colors.yellow('⏭')} Skipping download - file already exists: {Colors.blue(str(existing_file))}")
                     # Return existing file - metadata will still be applied by the caller
-                    return existing_file
+                    return existing_file, True
             
             # Only print download info if not in quiet mode (Rich UI handles this)
             if not quiet:
@@ -795,7 +795,7 @@ class YouTubeDownloader:
                                 console.print(f"[bold green]✓[/bold green] Success with strategy {i}")
                             except ImportError:
                                 print(f"{Colors.green('✅')} Success with strategy {i}")
-                        return downloaded_file
+                        return downloaded_file, False
                         
                 except subprocess.CalledProcessError as e:
                     error_msg = e.stderr if e.stderr else str(e)
@@ -968,7 +968,7 @@ class YouTubeDownloader:
         return cmd
     
     def download_high_quality_audio(self, url: str, metadata: Optional[Dict[str, Any]] = None, 
-                                     quiet: bool = False, progress_callback: Optional[Callable] = None) -> Optional[Path]:
+                                     quiet: bool = False, progress_callback: Optional[Callable] = None) -> Tuple[Optional[Path], bool]:
         """
         Download high-quality audio from YouTube video.
         
@@ -979,7 +979,7 @@ class YouTubeDownloader:
             progress_callback: Optional callback function for progress updates
             
         Returns:
-            Path to downloaded audio file or None if failed
+            Tuple of (Path to downloaded audio file or None if failed, bool indicating if file already existed)
         """
         return self.download(url, quality="bestaudio", audio_only=True, metadata=metadata, 
                            quiet=quiet, progress_callback=progress_callback)

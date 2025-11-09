@@ -823,10 +823,13 @@ class DisplayManager:
         """Display individual track download progress."""
         self.console.print(f"[cyan]Downloading track [bold white]{track_num}[/bold white]: [white]{track_title}[/white][/cyan]")
     
-    def display_track_download_result(self, track_title: str, success: bool, path: str = None):
+    def display_track_download_result(self, track_title: str, success: bool, path: str = None, file_existed: bool = False):
         """Display track download result."""
         if success:
-            self.console.print(f"[bold green]✓[/bold green] Downloaded: [green]{track_title}[/green]")
+            if file_existed:
+                self.console.print(f"[bold yellow]✓[/bold yellow] Use existing file: [green]{track_title}[/green]")
+            else:
+                self.console.print(f"[bold green]✓[/bold green] Downloaded: [green]{track_title}[/green]")
             if path:
                 self.console.print(f"  [dim]Path: {path}[/dim]")
         else:

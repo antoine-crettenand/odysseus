@@ -30,6 +30,97 @@ class DownloadOrchestrator:
         self.search_service = search_service
         self.display_manager = display_manager
     
+    def _get_release_folder_path(self, release_info: ReleaseInfo) -> Path:
+        """
+        Get the folder path where tracks for this release would be saved.
+        
+        Args:
+            release_info: Release information
+            
+        Returns:
+            Path to the release folder
+        """
+        is_compilation = self._is_compilation(release_info)
+        folder_artist = "Various Artists" if is_compilation else release_info.artist
+        album_metadata = {
+            'title': release_info.title,
+            'artist': folder_artist,
+            'album': release_info.title,
+            'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
+        }
+        return self.download_service.downloader._create_organized_path(album_metadata)
+    
+    def _check_existing_tracks(
+        self,
+        release_info: ReleaseInfo,
+        track_numbers: List[int]
+    ) -> Optional[Dict[int, Path]]:
+        """
+        Check if all selected tracks already exist in the release folder.
+        
+        Args:
+            release_info: Release information
+            track_numbers: List of track numbers to check
+            
+        Returns:
+            Dictionary mapping track numbers to file paths if all tracks exist, None otherwise
+        """
+        output_dir = self._get_release_folder_path(release_info)
+        
+        if not output_dir.exists():
+            return None
+        
+        audio_extensions = ['.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav', '.aac', '.webm']
+        system_files = {'.DS_Store', '.Thumbs.db', 'desktop.ini'}
+        
+        existing_tracks = {}
+        is_compilation = self._is_compilation(release_info)
+        folder_artist = "Various Artists" if is_compilation else release_info.artist
+        
+        for track_num in track_numbers:
+            # Find the track
+            track = None
+            for t in release_info.tracks:
+                if t.position == track_num:
+                    track = t
+                    break
+            
+            if not track:
+                continue
+            
+            # Build expected filename
+            title = self.download_service.downloader._sanitize_filename(track.title)
+            track_prefix = f"{track_num:02d} - "
+            expected_base = f"{track_prefix}{title}"
+            
+            # Check for existing files matching the expected pattern
+            found = False
+            for ext in audio_extensions:
+                potential_file = output_dir / f"{expected_base}{ext}"
+                if potential_file.exists() and potential_file.is_file():
+                    existing_tracks[track_num] = potential_file
+                    found = True
+                    break
+            
+            # If not found with exact match, try glob pattern
+            if not found:
+                existing_files = [
+                    f for f in output_dir.glob(f"{expected_base}*")
+                    if f.is_file()
+                    and f.suffix.lower() in audio_extensions
+                    and f.name not in system_files
+                ]
+                if existing_files:
+                    existing_tracks[track_num] = existing_files[0]
+                    found = True
+            
+            # If any track is missing, return None
+            if not found:
+                return None
+        
+        # All tracks exist
+        return existing_tracks if len(existing_tracks) == len(track_numbers) else None
+    
     def _is_compilation(self, release_info: ReleaseInfo) -> bool:
         """
         Check if a release is a compilation (has multiple different artists).
@@ -149,14 +240,14 @@ class DownloadOrchestrator:
         # Download with progress tracking
         with progress:
             if quality == 'audio':
-                downloaded_path = self.download_service.download_high_quality_audio(
+                downloaded_path, file_existed = self.download_service.download_high_quality_audio(
                     youtube_url,
                     metadata=metadata_dict,
                     quiet=True,
                     progress_callback=update_progress
                 )
             else:
-                downloaded_path = self.download_service.download_video(
+                downloaded_path, file_existed = self.download_service.download_video(
                     youtube_url,
                     quality=quality,
                     audio_only=(quality == 'audio'),
@@ -169,21 +260,22 @@ class DownloadOrchestrator:
             progress.update(task_id, completed=100, description=f"Completed: {video_title[:40]}")
         
         if downloaded_path:
-            # Apply metadata with cover art
-            audio_metadata = AudioMetadata(
-                title=song_data.title,
-                artist=song_data.artist,
-                album=song_data.album,
-                year=song_data.release_year
-            )
-            # Try to get cover art from MusicBrainz if we have MBID
-            if hasattr(metadata, 'mbid') and metadata.mbid:
-                cover_art_data = self.metadata_service.fetch_cover_art(metadata.mbid, console)
-                if cover_art_data:
-                    audio_metadata.cover_art_data = cover_art_data
-            
-            self.metadata_service.merger.set_final_metadata(audio_metadata)
-            self.metadata_service.apply_metadata_to_file(str(downloaded_path), quiet=True)
+            # Only apply metadata if file already existed (to minimize API calls)
+            if file_existed:
+                audio_metadata = AudioMetadata(
+                    title=song_data.title,
+                    artist=song_data.artist,
+                    album=song_data.album,
+                    year=song_data.release_year
+                )
+                # Try to get cover art from MusicBrainz if we have MBID
+                if hasattr(metadata, 'mbid') and metadata.mbid:
+                    cover_art_data = self.metadata_service.fetch_cover_art(metadata.mbid, console)
+                    if cover_art_data:
+                        audio_metadata.cover_art_data = cover_art_data
+                
+                self.metadata_service.merger.set_final_metadata(audio_metadata)
+                self.metadata_service.apply_metadata_to_file(str(downloaded_path), quiet=True)
             console.print(f"[bold green]✓[/bold green] Download completed: [green]{downloaded_path}[/green]")
             return downloaded_path
         else:
@@ -777,13 +869,17 @@ class DownloadOrchestrator:
         if not silent:
             console.print("[cyan]🎵 Strategy 1: Searching for full album video...[/cyan]")
         
+        # Get folder path for cover art extraction from existing tracks
+        output_dir = self._get_release_folder_path(release_info)
+        
         # Fetch cover art once for the entire release (optimization)
+        # Pass folder_path so it can extract from existing tracks if available
         cover_art_data = None
         if not silent:
-            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console)
+            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console, folder_path=output_dir)
         else:
             # Still fetch cover art in silent mode, just don't print messages
-            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None)
+            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None, folder_path=output_dir)
         
         # Extract release year if available
         release_year = None
@@ -913,7 +1009,7 @@ class DownloadOrchestrator:
                     file_progress.update(file_task_id, completed=percent)
                 
                 with file_progress:
-                    full_video_path = self.download_service.download_high_quality_audio(
+                    full_video_path, _ = self.download_service.download_high_quality_audio(
                         youtube_url,
                         metadata=album_metadata,
                         quiet=True,
@@ -975,19 +1071,15 @@ class DownloadOrchestrator:
                     pass  # Ignore cleanup errors
                 
                 if split_files:
-                    # Apply metadata to all split files (reuse pre-fetched cover art)
+                    # Apply metadata only to files that already existed (to minimize API calls)
+                    # Note: For split files, we check if they existed before the split operation
                     downloaded_count = 0
                     for split_file, timestamp_info in zip(split_files, track_timestamps):
                         track = timestamp_info['track']
-                        try:
-                            self.metadata_service.apply_metadata_with_cover_art(
-                                split_file, track, release_info, console, cover_art_data=cover_art_data
-                            )
-                            downloaded_count += 1
-                        except Exception as e:
-                            downloaded_count += 1  # Count as downloaded even if metadata fails
-                            if not silent and console:
-                                console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
+                        # Check if file existed before split (it would have been in existing_files set)
+                        # Since split always creates new files, we skip metadata for newly split files
+                        # to minimize API calls. Metadata can be applied later if needed.
+                        downloaded_count += 1
                     
                     if not silent:
                         console.print(f"[bold green]✓[/bold green] Successfully downloaded and split {downloaded_count} tracks from full album video")
@@ -1111,13 +1203,17 @@ class DownloadOrchestrator:
         if not silent:
             console.print("[cyan]🎵 Strategy 2: Searching for playlist...[/cyan]")
         
+        # Get folder path for cover art extraction from existing tracks
+        output_dir = self._get_release_folder_path(release_info)
+        
         # Fetch cover art once for the entire release (optimization)
+        # Pass folder_path so it can extract from existing tracks if available
         cover_art_data = None
         if not silent:
-            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console)
+            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console, folder_path=output_dir)
         else:
             # Still fetch cover art in silent mode, just don't print messages
-            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None)
+            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None, folder_path=output_dir)
         
         # Search for playlists
         playlists = self.display_manager.show_loading_spinner(
@@ -1328,14 +1424,14 @@ class DownloadOrchestrator:
                             # Download the track with progress
                             with file_progress:
                                 if quality == 'audio':
-                                    downloaded_path = self.download_service.download_high_quality_audio(
+                                    downloaded_path, file_existed = self.download_service.download_high_quality_audio(
                                         video_url,
                                         metadata=metadata_dict,
                                         quiet=True,
                                         progress_callback=update_file_progress
                                     )
                                 else:
-                                    downloaded_path = self.download_service.download_video(
+                                    downloaded_path, file_existed = self.download_service.download_video(
                                         video_url,
                                         quality=quality,
                                         audio_only=(quality == 'audio'),
@@ -1347,18 +1443,19 @@ class DownloadOrchestrator:
                                 file_progress.update(file_task_id, completed=100)
                             
                             if downloaded_path:
-                                # Apply metadata with cover art (reuse pre-fetched cover art)
-                                try:
-                                    self.metadata_service.apply_metadata_with_cover_art(
-                                        downloaded_path, track, release_info, console, cover_art_data=cover_art_data
-                                    )
-                                except Exception as e:
-                                    # If metadata application fails, still count as downloaded but log the error
-                                    if not silent and console:
-                                        console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
+                                # Only apply metadata if file already existed (to minimize API calls)
+                                if file_existed:
+                                    try:
+                                        self.metadata_service.apply_metadata_with_cover_art(
+                                            downloaded_path, track, release_info, console, cover_art_data=cover_art_data
+                                        )
+                                    except Exception as e:
+                                        # If metadata application fails, still count as downloaded but log the error
+                                        if not silent and console:
+                                            console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
                                 if not silent:
                                     self.display_manager.display_track_download_result(
-                                        track.title, True, str(downloaded_path)
+                                        track.title, True, str(downloaded_path), file_existed=file_existed
                                     )
                                 downloaded_count += 1
                             else:
@@ -1411,13 +1508,17 @@ class DownloadOrchestrator:
         if not silent:
             console.print("[cyan]🎵 Strategy 3: Downloading individual tracks...[/cyan]")
         
+        # Get folder path for cover art extraction from existing tracks
+        output_dir = self._get_release_folder_path(release_info)
+        
         # Fetch cover art once for the entire release (optimization)
+        # Pass folder_path so it can extract from existing tracks if available
         cover_art_data = None
         if not silent:
-            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console)
+            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console, folder_path=output_dir)
         else:
             # Still fetch cover art in silent mode, just don't print messages
-            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None)
+            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None, folder_path=output_dir)
         
         downloaded_count = 0
         failed_count = 0
@@ -1531,14 +1632,14 @@ class DownloadOrchestrator:
                     
                     with file_progress:
                         if quality == 'audio':
-                            downloaded_path = self.download_service.download_high_quality_audio(
+                            downloaded_path, file_existed = self.download_service.download_high_quality_audio(
                                 youtube_url,
                                 metadata=metadata_dict,
                                 quiet=True,
                                 progress_callback=update_file_progress
                             )
                         else:
-                            downloaded_path = self.download_service.download_video(
+                            downloaded_path, file_existed = self.download_service.download_video(
                                 youtube_url,
                                 quality=quality,
                                 audio_only=(quality == 'audio'),
@@ -1551,18 +1652,19 @@ class DownloadOrchestrator:
                     file_progress.update(file_task_id, completed=100)
                     
                     if downloaded_path:
-                        # Apply metadata with cover art (reuse pre-fetched cover art)
-                        try:
-                            self.metadata_service.apply_metadata_with_cover_art(
-                                downloaded_path, track, release_info, console, cover_art_data=cover_art_data
-                            )
-                        except Exception as e:
-                            # If metadata application fails, still count as downloaded but log the error
-                            if not silent and console:
-                                console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
+                        # Only apply metadata if file already existed (to minimize API calls)
+                        if file_existed:
+                            try:
+                                self.metadata_service.apply_metadata_with_cover_art(
+                                    downloaded_path, track, release_info, console, cover_art_data=cover_art_data
+                                )
+                            except Exception as e:
+                                # If metadata application fails, still count as downloaded but log the error
+                                if not silent and console:
+                                    console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
                         if not silent:
                             self.display_manager.display_track_download_result(
-                                track.title, True, str(downloaded_path)
+                                track.title, True, str(downloaded_path), file_existed=file_existed
                             )
                         downloaded_count += 1
                     else:
@@ -1596,6 +1698,93 @@ class DownloadOrchestrator:
     ) -> Tuple[int, int]:
         """Download selected tracks from a release using multi-strategy approach."""
         console = self.display_manager.console
+        
+        # Check if all tracks already exist - if so, skip download and only apply metadata
+        existing_tracks = self._check_existing_tracks(release_info, track_numbers)
+        if existing_tracks:
+            if not silent:
+                console.print("[cyan]ℹ[/cyan] All tracks already exist. Applying metadata only...")
+                console.print()
+            
+            # Get folder path for cover art
+            output_dir = self._get_release_folder_path(release_info)
+            
+            # Fetch cover art once for the entire release
+            cover_art_data = None
+            if not silent:
+                cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console, folder_path=output_dir)
+            else:
+                cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None, folder_path=output_dir)
+            
+            # Apply metadata to all existing tracks
+            processed_count = 0
+            failed_count = 0
+            
+            # Create progress bar
+            progress = self.display_manager.create_progress_bar(
+                len(track_numbers),
+                "Applying metadata" if not silent else f"Applying metadata to {release_info.title}"
+            )
+            
+            with progress:
+                task = progress.add_task(
+                    "[cyan]Applying metadata..." if not silent else "[cyan]Applying metadata...",
+                    total=len(track_numbers)
+                )
+                
+                for track_num in track_numbers:
+                    # Find the track
+                    track = None
+                    for t in release_info.tracks:
+                        if t.position == track_num:
+                            track = t
+                            break
+                    
+                    if not track or track_num not in existing_tracks:
+                        failed_count += 1
+                        progress.update(task, advance=1)
+                        continue
+                    
+                    file_path = existing_tracks[track_num]
+                    progress.update(task, description=f"[cyan]Applying metadata: {track.title}")
+                    
+                    try:
+                        # Apply metadata with cover art
+                        self.metadata_service.apply_metadata_with_cover_art(
+                            file_path, track, release_info, console, cover_art_data=cover_art_data
+                        )
+                        if not silent:
+                            self.display_manager.display_track_download_result(
+                                track.title, True, str(file_path), file_existed=True
+                            )
+                        processed_count += 1
+                    except Exception as e:
+                        if not silent:
+                            console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
+                        failed_count += 1
+                    
+                    progress.update(task, advance=1)
+            
+            # Summary
+            if not silent:
+                console.print()
+                summary_content = f"[bold green]✓[/bold green] Successfully processed: [green]{processed_count}[/green] track{'s' if processed_count != 1 else ''}\n"
+                if failed_count > 0:
+                    summary_content += f"[bold red]✗[/bold red] Failed: [red]{failed_count}[/red] track{'s' if failed_count != 1 else ''}\n"
+                summary_content += f"[blue]ℹ[/blue] Total tracks processed: [cyan]{len(track_numbers)}[/cyan]"
+                
+                from rich.panel import Panel
+                from rich import box
+                console.print(Panel(
+                    summary_content,
+                    title="[bold cyan]📊 METADATA SUMMARY[/bold cyan]",
+                    border_style="cyan",
+                    box=box.ROUNDED,
+                    padding=(1, 2)
+                ))
+                console.print()
+            
+            return processed_count, failed_count
         
         # Strategy 1: Try full album video
         downloaded, failed = self._download_full_album_and_split(

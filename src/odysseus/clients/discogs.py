@@ -469,6 +469,19 @@ class DiscogsClient:
             
             url = data.get('uri', '') or f"https://www.discogs.com/release/{release_id}"
             
+            # Get cover art URL
+            cover_art_url = None
+            images = data.get('images', [])
+            if images:
+                # Use the primary image or first image
+                for img in images:
+                    if img.get('type') == 'primary' or img.get('type') == 'secondary':
+                        cover_art_url = img.get('uri') or img.get('uri150') or img.get('resource_url')
+                        break
+                # If no primary/secondary, use first image
+                if not cover_art_url and images:
+                    cover_art_url = images[0].get('uri') or images[0].get('uri150') or images[0].get('resource_url')
+            
             # Parse tracks
             tracks = []
             tracklist = data.get('tracklist', [])
@@ -514,6 +527,7 @@ class DiscogsClient:
                 release_type=release_type,
                 mbid=release_id,  # Use Discogs ID in mbid field for consistency
                 url=url,
+                cover_art_url=cover_art_url,
                 tracks=tracks
             )
             
