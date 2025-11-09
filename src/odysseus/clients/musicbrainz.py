@@ -6,8 +6,6 @@ A client for searching the MusicBrainz database for music information.
 import requests
 import json
 import time
-import ssl
-import urllib3
 from typing import Dict, List, Optional, Any
 from ..models.song import SongData
 from ..models.search_results import MusicBrainzSong
@@ -15,8 +13,8 @@ from ..models.releases import Track, ReleaseInfo
 from ..core.config import MUSICBRAINZ_CONFIG, ERROR_MESSAGES
 from ..utils.string_utils import normalize_string
 
-# Disable SSL warnings for problematic connections
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# Note: SSL verification is enabled by default for security
+# If you encounter SSL issues, check your system's certificate store
 
 
 class MusicBrainzClient:
@@ -35,29 +33,12 @@ class MusicBrainzClient:
             'Accept': 'application/json'
         })
         
-        # Configure SSL settings to handle connection issues
-        self._configure_ssl()
+        # SSL verification is enabled by default for security
+        # MusicBrainz uses valid SSL certificates, so verification should work
+        self.session.verify = True
         
-        # Track if we should try HTTP fallback
+        # Track if we should try HTTP fallback (only as last resort)
         self.use_http_fallback = False
-    
-    def _configure_ssl(self):
-        """Configure SSL settings to handle connection issues."""
-        try:
-            # Create a custom SSL context with more permissive settings
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-            
-            # Configure the session to use the custom SSL context
-            adapter = requests.adapters.HTTPAdapter()
-            self.session.mount('https://', adapter)
-            
-            # Set verify=False for problematic SSL connections
-            self.session.verify = False
-            
-        except Exception as e:
-            print(f"Warning: Could not configure SSL settings: {e}")
     
     def _make_request(self, url: str, params: Dict[str, Any], batch_progress: Optional[tuple[int, int]] = None) -> Optional[Dict[str, Any]]:
         """
@@ -95,8 +76,10 @@ class MusicBrainzClient:
             except requests.exceptions.SSLError as e:
                 if batch_progress:
                     print(f"{progress_prefix}SSL Error (attempt {attempt + 1}): {e}")
+                    print(f"{progress_prefix}Note: SSL verification is required for security. Please check your system's certificate store.")
                 else:
                     print(f"SSL Error (attempt {attempt + 1}): {e}")
+                    print("Note: SSL verification is required for security. Please check your system's certificate store.")
                 if attempt < max_retries - 1:
                     if batch_progress:
                         print(f"{progress_prefix}Retrying in {retry_delay} seconds...")
@@ -105,11 +88,12 @@ class MusicBrainzClient:
                     time.sleep(retry_delay)
                     retry_delay *= 2  # Exponential backoff
                 else:
+                    # SSL errors should not fall back to HTTP for security reasons
                     if batch_progress:
-                        print(f"{progress_prefix}All SSL retry attempts failed, trying HTTP fallback...")
+                        print(f"{progress_prefix}SSL verification failed. Please check your system's SSL certificates.")
                     else:
-                        print("All SSL retry attempts failed, trying HTTP fallback...")
-                    return self._try_http_fallback(url, params, batch_progress)
+                        print("SSL verification failed. Please check your system's SSL certificates.")
+                    return None
                     
             except requests.exceptions.ConnectionError as e:
                 if batch_progress:
@@ -140,7 +124,12 @@ class MusicBrainzClient:
         return None
     
     def _try_http_fallback(self, url: str, params: Dict[str, Any], batch_progress: Optional[tuple[int, int]] = None) -> Optional[Dict[str, Any]]:
-        """Try HTTP fallback if HTTPS fails."""
+        """
+        Try HTTP fallback if HTTPS fails (only for connection errors, not SSL errors).
+        
+        WARNING: HTTP is insecure and should only be used as a last resort.
+        This method is kept for backward compatibility but should rarely be needed.
+        """
         if self.use_http_fallback:
             return None  # Already tried HTTP
             
@@ -154,11 +143,13 @@ class MusicBrainzClient:
             # Convert HTTPS URL to HTTP
             http_url = url.replace('https://', 'http://')
             if batch_progress:
-                print(f"{progress_prefix}Trying HTTP fallback: {http_url}")
+                print(f"{progress_prefix}Warning: Trying insecure HTTP fallback: {http_url}")
+                print(f"{progress_prefix}Note: HTTP is not secure. This should only be used if HTTPS is unavailable.")
             else:
-                print(f"Trying HTTP fallback: {http_url}")
+                print(f"Warning: Trying insecure HTTP fallback: {http_url}")
+                print("Note: HTTP is not secure. This should only be used if HTTPS is unavailable.")
             
-            response = self.session.get(http_url, params=params, timeout=self.timeout)
+            response = self.session.get(http_url, params=params, timeout=self.timeout, verify=False)
             response.raise_for_status()
             
             # Rate limiting

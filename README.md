@@ -2,6 +2,28 @@
 
 A comprehensive Python tool for discovering and downloading music from various sources with proper metadata handling.
 
+## ⚠️ Legal Disclaimer
+
+**IMPORTANT:** This software is provided for educational and personal use only. Users are responsible for ensuring that their use of this tool complies with all applicable laws and regulations in their jurisdiction, including but not limited to:
+
+- Copyright laws
+- Terms of service of third-party platforms (YouTube, Spotify, etc.)
+- Intellectual property rights
+
+**The authors and contributors of this software:**
+- Do not condone or encourage copyright infringement
+- Are not responsible for any misuse of this software
+- Do not guarantee that downloaded content is legal in your jurisdiction
+- Recommend using this tool only for content you have the legal right to download
+
+**By using this software, you agree to:**
+- Use it only for legally obtained content
+- Respect the intellectual property rights of content creators
+- Comply with all applicable laws and regulations
+- Accept full responsibility for your use of this software
+
+The developers of this project are not liable for any legal consequences resulting from the use or misuse of this software.
+
 ## 🚀 Usage
 
 ### First Time Setup
@@ -103,3 +125,21 @@ downloads/
         ├── Track 2.mp3
         └── ...
 ```
+
+## 📝 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## ⚠️ Security
+
+This software implements security best practices including:
+- SSL/TLS certificate verification for secure connections
+- Input validation and sanitization
+- Path traversal protection
+- Secure handling of API credentials via environment variables
+
+If you discover a security vulnerability, please report it responsibly.

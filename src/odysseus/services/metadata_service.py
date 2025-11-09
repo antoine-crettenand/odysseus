@@ -55,7 +55,7 @@ class MetadataService:
         
         try:
             headers = {
-                'User-Agent': 'Odysseus/1.0 (https://github.com/yourusername/odysseus)'
+                'User-Agent': 'Odysseus/1.0 (https://github.com/antoinecrettenand/odysseus)'
             }
             response = requests.get(url, headers=headers, timeout=10)
             
@@ -83,7 +83,7 @@ class MetadataService:
             # Use HTTPS and add User-Agent header
             cover_art_url = f"https://coverartarchive.org/release/{mbid}"
             headers = {
-                'User-Agent': 'Odysseus/1.0 (https://github.com/yourusername/odysseus)'
+                'User-Agent': 'Odysseus/1.0 (https://github.com/antoinecrettenand/odysseus)'
             }
             response = requests.get(cover_art_url, headers=headers, timeout=10)
             

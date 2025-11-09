@@ -20,14 +20,39 @@ class SongData:
     
     def __post_init__(self):
         """Validate song data after initialization."""
+        # Import here to avoid circular imports
+        from ..core.validation import validate_user_input, validate_year, VALIDATION_RULES
+        
+        # Validate and sanitize string inputs
+        if self.title:
+            try:
+                self.title = validate_user_input("title", self.title, VALIDATION_RULES.get("MAX_TITLE_LENGTH", 200))
+            except ValueError as e:
+                logger.warning(f"Invalid title: {e}")
+                self.title = self.title[:200] if len(self.title) > 200 else self.title
+        
+        if self.artist:
+            try:
+                self.artist = validate_user_input("artist", self.artist, VALIDATION_RULES.get("MAX_ARTIST_LENGTH", 100))
+            except ValueError as e:
+                logger.warning(f"Invalid artist: {e}")
+                self.artist = self.artist[:100] if len(self.artist) > 100 else self.artist
+        
+        if self.album:
+            try:
+                self.album = validate_user_input("album", self.album, 200)
+            except ValueError as e:
+                logger.warning(f"Invalid album: {e}")
+                self.album = self.album[:200] if len(self.album) > 200 else self.album
+        
+        # Validate that we have required fields
         if not self.title and not self.album:
             raise ValueError("Either title or album must be provided")
         if not self.artist:
             raise ValueError("Artist must be provided")
         
-        if self.release_year and not (1900 <= self.release_year <= 2030):
-            logger.debug(f"Invalid year: {self.release_year}")
-            self.release_year = None
+        # Validate year
+        self.release_year = validate_year(self.release_year)
 
 
 @dataclass
@@ -60,9 +85,30 @@ class AudioMetadata:
     
     def __post_init__(self):
         """Validate metadata after initialization."""
-        if self.year and not (1900 <= self.year <= 2030):
-            logger.debug(f"Invalid year: {self.year}")
-            self.year = None
+        # Import here to avoid circular imports
+        from ..core.validation import validate_year, validate_user_input, VALIDATION_RULES
+        
+        # Validate and sanitize string fields
+        if self.title:
+            try:
+                self.title = validate_user_input("title", self.title, VALIDATION_RULES.get("MAX_TITLE_LENGTH", 200))
+            except ValueError:
+                self.title = self.title[:200] if len(self.title) > 200 else self.title
+        
+        if self.artist:
+            try:
+                self.artist = validate_user_input("artist", self.artist, VALIDATION_RULES.get("MAX_ARTIST_LENGTH", 100))
+            except ValueError:
+                self.artist = self.artist[:100] if len(self.artist) > 100 else self.artist
+        
+        if self.album:
+            try:
+                self.album = validate_user_input("album", self.album, 200)
+            except ValueError:
+                self.album = self.album[:200] if len(self.album) > 200 else self.album
+        
+        # Validate year
+        self.year = validate_year(self.year)
         
         if self.track_number is not None and self.track_number < 1:
             logger.debug(f"Invalid track number: {self.track_number}")

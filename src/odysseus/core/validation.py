@@ -5,7 +5,7 @@ Configuration validation utilities.
 import importlib
 import subprocess
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from .config import (
     DOWNLOADS_DIR,
     CONFIG_DIR,
@@ -127,4 +127,67 @@ def validate_and_raise():
     if not is_valid:
         error_msg = "Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
         raise ConfigurationError(error_msg)
+
+
+def validate_user_input(field_name: str, value: str, max_length: Optional[int] = None) -> str:
+    """
+    Validate and sanitize user input to prevent security issues.
+    
+    Args:
+        field_name: Name of the field being validated (for error messages)
+        value: Input value to validate
+        max_length: Optional maximum length (uses VALIDATION_RULES if not provided)
+        
+    Returns:
+        Validated and sanitized value
+        
+    Raises:
+        ValueError: If input is invalid
+    """
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
+    
+    # Trim whitespace
+    value = value.strip()
+    
+    # Check minimum length
+    min_length = VALIDATION_RULES.get(f"MIN_{field_name.upper()}_LENGTH", 1)
+    if len(value) < min_length:
+        raise ValueError(f"{field_name} must be at least {min_length} character(s) long")
+    
+    # Check maximum length
+    if max_length is None:
+        max_length = VALIDATION_RULES.get(f"MAX_{field_name.upper()}_LENGTH", 500)
+    
+    if len(value) > max_length:
+        # Truncate instead of raising error for better UX
+        value = value[:max_length]
+    
+    # Prevent path traversal attempts
+    if '..' in value:
+        value = value.replace('..', '_')
+    
+    return value
+
+
+def validate_year(year: Optional[int]) -> Optional[int]:
+    """
+    Validate year value.
+    
+    Args:
+        year: Year to validate
+        
+    Returns:
+        Validated year or None if invalid
+    """
+    if year is None:
+        return None
+    
+    min_year = VALIDATION_RULES.get("MIN_YEAR", 1900)
+    max_year = VALIDATION_RULES.get("MAX_YEAR", 2030)
+    
+    if not (min_year <= year <= max_year):
+        return None
+    
+    return year
 
