@@ -195,6 +195,11 @@ Examples:
             help='Filter by release type (e.g., Album, Single, EP, Compilation, Live, etc.)'
         )
         parser.add_argument(
+            '--include-compilations',
+            action='store_true',
+            help='Also include compilations where the artist appears as a track artist (not just as main artist)'
+        )
+        parser.add_argument(
             '--quality', '-q',
             choices=['best', 'audio', 'worst'],
             default='audio',
@@ -269,7 +274,8 @@ Examples:
                         release_type=parsed_args.type,
                         quality=parsed_args.quality,
                         no_download=parsed_args.no_download,
-                        cached_releases=cached_releases
+                        cached_releases=cached_releases,
+                        include_compilations=getattr(parsed_args, 'include_compilations', False)
                     )
                     
                     # If user cancelled, exit immediately without prompting

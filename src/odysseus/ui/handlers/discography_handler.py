@@ -31,7 +31,8 @@ class DiscographyHandler(BaseHandler):
         release_type: Optional[str] = None,
         quality: str = "audio",
         no_download: bool = False,
-        cached_releases: Optional[List[MusicBrainzSong]] = None
+        cached_releases: Optional[List[MusicBrainzSong]] = None,
+        include_compilations: bool = False
     ) -> Optional[List[MusicBrainzSong]]:
         """Handle discography browse and download."""
         console = self.display_manager.console
@@ -41,6 +42,8 @@ class DiscographyHandler(BaseHandler):
             subtitle += f" (Year: {year})"
         if release_type:
             subtitle += f" (Type: {release_type})"
+        if include_compilations:
+            subtitle += " (including compilations)"
         console.print(self.display_manager._create_header_panel(
             f"📚 {PROJECT_NAME} - Discography Browse",
             subtitle
@@ -58,7 +61,8 @@ class DiscographyHandler(BaseHandler):
                 self.search_service.search_artist_releases,
                 artist,
                 year=year,
-                release_type=release_type
+                release_type=release_type,
+                include_compilations=include_compilations
             )
         
         if not releases:

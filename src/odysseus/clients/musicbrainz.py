@@ -13,6 +13,7 @@ from ..models.song import SongData
 from ..models.search_results import MusicBrainzSong
 from ..models.releases import Track, ReleaseInfo
 from ..core.config import MUSICBRAINZ_CONFIG, ERROR_MESSAGES
+from ..utils.string_utils import normalize_string
 
 # Disable SSL warnings for problematic connections
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -388,6 +389,159 @@ class MusicBrainzClient:
             #     print(f"Found {len(all_results)} release{'s' if len(all_results) != 1 else ''}")
             # else:
             #     print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: Failed to get data from MusicBrainz")
+            
+            return all_results
+            
+        except Exception as e:
+            print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
+            return all_results if all_results else []
+    
+    def search_artist_compilations(self, artist: str, year: Optional[int] = None, max_results: Optional[int] = None) -> List[MusicBrainzSong]:
+        """
+        Search for compilations where the artist appears as a track artist but not as the main release artist.
+        This finds compilations, soundtracks, and other multi-artist releases where the artist contributed tracks.
+        
+        Args:
+            artist: Artist name to search for
+            year: Optional year filter
+            max_results: Optional maximum number of results to fetch (None = fetch all)
+            
+        Returns:
+            List of compilation releases where the artist appears
+        """
+        # Search for recordings by the artist
+        query_parts = [f'artist:"{artist}"']
+        
+        if year:
+            query_parts.append(f'date:{year}')
+        
+        query = ' AND '.join(query_parts)
+        
+        url = f"{self.base_url}/recording"
+        all_results = []
+        seen_release_mbids = set()
+        offset = 0
+        limit = 100  # MusicBrainz allows up to 100 results per request
+        
+        try:
+            while True:
+                params = {
+                    'query': query,
+                    'fmt': 'json',
+                    'limit': limit,
+                    'offset': offset,
+                    'inc': 'releases+release-groups'  # Include releases to get compilation info
+                }
+                
+                data = self._make_request(url, params)
+                
+                if not data:
+                    break
+                
+                recordings = data.get('recordings', [])
+                if not recordings:
+                    break
+                
+                # Process each recording to find compilations
+                for recording in recordings:
+                    # Get the recording artist
+                    artist_credits = recording.get('artist-credit', [])
+                    recording_artist = ''
+                    if artist_credits:
+                        recording_artist = artist_credits[0].get('name', '')
+                    
+                    # Get releases this recording appears on
+                    releases = recording.get('releases', [])
+                    for release in releases:
+                        release_mbid = release.get('id', '')
+                        if not release_mbid or release_mbid in seen_release_mbids:
+                            continue
+                        
+                        # Get release artist
+                        release_artist_credits = release.get('artist-credit', [])
+                        release_artist = ''
+                        if release_artist_credits:
+                            release_artist = release_artist_credits[0].get('name', '')
+                        
+                        # Get release type from release-group
+                        release_group = release.get('release-group', {})
+                        release_type = release_group.get('primary-type')
+                        secondary_types = release_group.get('secondary-types', [])
+                        
+                        # Check if this is a compilation or has compilation as secondary type
+                        is_compilation = (
+                            release_type == 'Compilation' or 
+                            'Compilation' in secondary_types or
+                            # Also include soundtracks and other multi-artist releases
+                            release_type == 'Soundtrack' or
+                            'Soundtrack' in secondary_types
+                        )
+                        
+                        # Only include if:
+                        # 1. It's a compilation/soundtrack type
+                        # 2. The release artist is different from the recording artist (or normalized differently)
+                        # 3. The recording artist matches our search artist (normalized)
+                        normalized_recording_artist = normalize_string(recording_artist)
+                        normalized_release_artist = normalize_string(release_artist)
+                        normalized_search_artist = normalize_string(artist)
+                        
+                        if (is_compilation and 
+                            normalized_recording_artist == normalized_search_artist and
+                            normalized_release_artist != normalized_recording_artist):
+                            
+                            # Create a MusicBrainzSong result for this compilation
+                            album = release.get('title', '')
+                            release_date = release.get('date', '')
+                            
+                            # If release date is missing, try to get it from release-group
+                            if not release_date and release_group.get('first-release-date'):
+                                release_date = release_group.get('first-release-date')
+                            
+                            # Apply year filter if specified
+                            if year:
+                                release_year = None
+                                if release_date and len(release_date) >= 4:
+                                    try:
+                                        release_year = int(release_date[:4])
+                                    except ValueError:
+                                        pass
+                                if release_year != year:
+                                    continue
+                            
+                            # Use release artist as the main artist (since it's a compilation)
+                            # but we know our artist appears on it
+                            result = MusicBrainzSong(
+                                title='',  # Releases don't have individual track titles
+                                artist=release_artist,  # Compilation artist
+                                album=album,
+                                release_date=release_date,
+                                genre=None,
+                                release_type='Compilation' if release_type == 'Compilation' or 'Compilation' in secondary_types else release_type,
+                                mbid=release_mbid,
+                                score=recording.get('score', 0),
+                                url=f"https://musicbrainz.org/release/{release_mbid}"
+                            )
+                            
+                            all_results.append(result)
+                            seen_release_mbids.add(release_mbid)
+                            
+                            # Check if we've reached max_results limit
+                            if max_results and len(all_results) >= max_results:
+                                return all_results[:max_results]
+                
+                # Check if we've fetched all results
+                count = data.get('count', 0)
+                if offset + len(recordings) >= count:
+                    break
+                
+                # If we've reached max_results, stop
+                if max_results and len(all_results) >= max_results:
+                    break
+                
+                offset += limit
+                
+                # Rate limiting between requests
+                time.sleep(self.request_delay)
             
             return all_results
             

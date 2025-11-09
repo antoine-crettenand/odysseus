@@ -198,7 +198,7 @@ class SearchService:
         
         return all_results
     
-    def search_artist_releases(self, artist: str, year: Optional[int] = None, release_type: Optional[str] = None) -> List[MusicBrainzSong]:
+    def search_artist_releases(self, artist: str, year: Optional[int] = None, release_type: Optional[str] = None, include_compilations: bool = False) -> List[MusicBrainzSong]:
         """Search for releases by a specific artist in MusicBrainz and Discogs in parallel.
         MusicBrainz results are prioritized; Discogs only fills gaps.
         
@@ -206,6 +206,7 @@ class SearchService:
             artist: Artist name to search for
             year: Optional year filter
             release_type: Optional release type filter (e.g., "Album", "Single", "EP", "Compilation", "Live", etc.)
+            include_compilations: If True, also search for compilations where the artist appears as a track artist
         """
         # Search both sources in parallel
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
@@ -226,6 +227,17 @@ class SearchService:
         
         # Use priority-based deduplication: MusicBrainz first, Discogs only fills gaps
         all_results = self._deduplicate_with_priority(mb_results, discogs_formatted)
+        
+        # If include_compilations is True, also search for compilations where artist appears on tracks
+        if include_compilations:
+            compilation_results = self.musicbrainz_client.search_artist_compilations(artist, year)
+            # Deduplicate compilation results against existing results
+            existing_keys = {self._create_deduplication_key(r) for r in all_results}
+            for comp_result in compilation_results:
+                comp_key = self._create_deduplication_key(comp_result)
+                if comp_key[0] and comp_key not in existing_keys:
+                    all_results.append(comp_result)
+                    existing_keys.add(comp_key)
         
         if release_type:
             filtered_results = []
