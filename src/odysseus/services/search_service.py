@@ -20,6 +20,8 @@ class SearchService:
         self.musicbrainz_client = MusicBrainzClient()
         self.discogs_client = DiscogsClient()
         self.youtube_client = None
+        self._spotify_client = None  # Lazy initialization
+        self._year_validation_cache: Dict[Tuple[str, str], Optional[int]] = {}  # Cache for year validation
     
     
     def _get_release_year(self, release_date: Optional[str]) -> Optional[str]:
@@ -67,11 +69,215 @@ class SearchService:
         
         return None
     
-    def _deduplicate_results(self, results: List[MusicBrainzSong]) -> List[MusicBrainzSong]:
+    def _is_remaster_or_reissue(self, result: MusicBrainzSong) -> bool:
+        """
+        Check if a release is likely a remaster, reissue, or re-release.
+        Returns True if it appears to be a remaster/reissue.
+        """
+        # Check album/title for remaster keywords
+        album_lower = (result.album or "").lower()
+        title_lower = (result.title or "").lower()
+        
+        remaster_keywords = [
+            'remaster', 'reissue', 're-release', 'remastered', 'deluxe',
+            'anniversary', 'edition', 'expanded', 'bonus', 'special edition',
+            'remastered version', 'digitally remastered', 'remastered edition'
+        ]
+        
+        # Check if any remaster keyword appears in album or title
+        for keyword in remaster_keywords:
+            if keyword in album_lower or keyword in title_lower:
+                return True
+        
+        return False
+    
+    def _get_spotify_client(self):
+        """Get Spotify client with lazy initialization."""
+        if self._spotify_client is None:
+            try:
+                from ..clients.spotify import SpotifyClient
+                self._spotify_client = SpotifyClient()
+            except Exception:
+                self._spotify_client = False  # Mark as unavailable
+        return self._spotify_client if self._spotify_client else None
+    
+    def _get_release_year_from_spotify(self, artist: str, album: str) -> Optional[int]:
+        """
+        Search Spotify for release year validation.
+        
+        Args:
+            artist: Artist name
+            album: Album name
+            
+        Returns:
+            Release year if found, None otherwise
+        """
+        cache_key = (normalize_string(artist), normalize_string(album))
+        if cache_key in self._year_validation_cache:
+            return self._year_validation_cache[cache_key]
+        
+        spotify_client = self._get_spotify_client()
+        if not spotify_client or not spotify_client.access_token:
+            self._year_validation_cache[cache_key] = None
+            return None
+        
+        try:
+            import requests
+            query = f"album:{album} artist:{artist}"
+            search_url = f"{spotify_client.base_url}/search"
+            headers = spotify_client._get_headers()
+            params = {
+                'q': query,
+                'type': 'album',
+                'limit': 5
+            }
+            
+            response = requests.get(search_url, headers=headers, params=params, timeout=10)
+            if response.status_code != 200:
+                self._year_validation_cache[cache_key] = None
+                return None
+            
+            data = response.json()
+            albums = data.get('albums', {}).get('items', [])
+            
+            if not albums:
+                self._year_validation_cache[cache_key] = None
+                return None
+            
+            # Find the best matching album (exact match preferred)
+            for album_data in albums:
+                album_name = album_data.get('name', '')
+                artists = album_data.get('artists', [])
+                artist_name = artists[0].get('name', '') if artists else ''
+                
+                # Check if this matches (normalized comparison)
+                if (normalize_string(album_name) == normalize_string(album) and
+                    normalize_string(artist_name) == normalize_string(artist)):
+                    release_date = album_data.get('release_date', '')
+                    if release_date and len(release_date) >= 4:
+                        try:
+                            year = int(release_date[:4])
+                            self._year_validation_cache[cache_key] = year
+                            return year
+                        except ValueError:
+                            continue
+            
+            # If no exact match, try first result
+            if albums:
+                release_date = albums[0].get('release_date', '')
+                if release_date and len(release_date) >= 4:
+                    try:
+                        year = int(release_date[:4])
+                        self._year_validation_cache[cache_key] = year
+                        return year
+                    except ValueError:
+                        pass
+            
+            self._year_validation_cache[cache_key] = None
+            return None
+            
+        except Exception:
+            self._year_validation_cache[cache_key] = None
+            return None
+    
+    def _get_release_year_from_discogs(self, artist: str, album: str, release_type: Optional[str] = None) -> Optional[int]:
+        """
+        Search Discogs for release year validation.
+        Only searches when necessary (not cached, and only for validation).
+        
+        Args:
+            artist: Artist name
+            album: Album name
+            release_type: Optional release type filter (e.g., "Album", "Single", "EP", etc.)
+            
+        Returns:
+            Release year if found, None otherwise
+        """
+        cache_key = (normalize_string(artist), normalize_string(album), release_type or "")
+        # Use a different cache key prefix to avoid conflicts
+        discogs_cache_key = ('discogs', cache_key[0], cache_key[1], cache_key[2])
+        if discogs_cache_key in self._year_validation_cache:
+            return self._year_validation_cache[discogs_cache_key]
+        
+        try:
+            song_data = SongData(
+                title="",
+                artist=artist,
+                album=album
+            )
+            
+            # Search for releases (limit to 5 for performance)
+            # Pass release_type to filter results
+            discogs_results = self.discogs_client.search_release(song_data, limit=5, release_type=release_type)
+            
+            if not discogs_results:
+                self._year_validation_cache[discogs_cache_key] = None
+                return None
+            
+            # Find the best matching release (exact match preferred)
+            for result in discogs_results:
+                # Check if this matches (normalized comparison)
+                if (normalize_string(result.album or "") == normalize_string(album) and
+                    normalize_string(result.artist or "") == normalize_string(artist)):
+                    if result.year:
+                        self._year_validation_cache[discogs_cache_key] = result.year
+                        return result.year
+            
+            # If no exact match, use first result's year
+            if discogs_results and discogs_results[0].year:
+                year = discogs_results[0].year
+                self._year_validation_cache[discogs_cache_key] = year
+                return year
+            
+            self._year_validation_cache[discogs_cache_key] = None
+            return None
+            
+        except Exception:
+            self._year_validation_cache[discogs_cache_key] = None
+            return None
+    
+    def _validate_release_year(self, artist: str, album: str, candidate_years: List[Optional[int]], release_type: Optional[str] = None) -> Optional[int]:
+        """
+        Cross-reference release year from Spotify and Discogs when there's doubt.
+        
+        Args:
+            artist: Artist name
+            album: Album name
+            candidate_years: List of candidate years to validate
+            release_type: Optional release type filter (e.g., "Album", "Single", "EP", etc.)
+            
+        Returns:
+            Validated year if found, None otherwise
+        """
+        # Try Spotify first
+        spotify_year = self._get_release_year_from_spotify(artist, album)
+        if spotify_year and spotify_year in candidate_years:
+            return spotify_year
+        
+        # Try Discogs (with release_type filter)
+        discogs_year = self._get_release_year_from_discogs(artist, album, release_type)
+        if discogs_year and discogs_year in candidate_years:
+            return discogs_year
+        
+        # If both agree (even if not in candidates), prefer that
+        if spotify_year and discogs_year and spotify_year == discogs_year:
+            return spotify_year
+        
+        # Return the most authoritative source (Spotify preferred)
+        return spotify_year or discogs_year
+    
+    def _deduplicate_results(self, results: List[MusicBrainzSong], release_type: Optional[str] = None) -> List[MusicBrainzSong]:
         """
         Remove duplicate results based on normalized (album, artist) key.
-        When duplicates are found, keeps the earliest release date.
+        When duplicates are found, prioritizes:
+        1. Original releases (where release_date matches original_release_date)
+        2. Original releases (earliest date, not remasters/reissues)
+        3. Earliest original release date (strongly prefer earliest year - likely original)
+        4. Cross-reference with Spotify/Discogs for year validation when in doubt
+        5. Highest score
         This deduplicates by release name (album) + artist, regardless of year or MBID.
+        When multiple candidates have the same original release date, Spotify and Discogs
+        are consulted to confirm the correct release year.
         """
         if not results:
             return results
@@ -93,35 +299,154 @@ class SearchService:
             if len(group) == 1:
                 deduplicated.append(group[0])
             else:
-                earliest = None
-                earliest_date = None
-                earliest_score = -1
+                # Separate remasters/reissues from originals
+                originals = [r for r in group if not self._is_remaster_or_reissue(r)]
+                remasters = [r for r in group if self._is_remaster_or_reissue(r)]
                 
-                for result in group:
-                    date_tuple = self._parse_release_date(result.release_date)
-                    score = result.score if result.score else 0
+                # Prefer originals over remasters
+                candidates = originals if originals else remasters
+                
+                # Separate candidates into:
+                # 1. Original releases (release_date matches original_release_date)
+                # 2. Re-releases (release_date differs from original_release_date)
+                true_originals = []
+                re_releases = []
+                candidates_without_original_date = []
+                
+                for result in candidates:
+                    # Check if this is the original release (release_date matches original_release_date)
+                    is_original_release = (
+                        result.original_release_date and 
+                        result.release_date and 
+                        result.release_date == result.original_release_date
+                    )
                     
-                    if date_tuple is None:
-                        continue
+                    # Use original_release_date for comparison if available, otherwise use release_date
+                    comparison_date = result.original_release_date or result.release_date
+                    date_tuple = self._parse_release_date(comparison_date)
                     
-                    if earliest_date is None or date_tuple < earliest_date:
-                        earliest_date = date_tuple
-                        earliest = result
-                        earliest_score = score
-                    elif date_tuple == earliest_date:
-                        if score > earliest_score:
-                            earliest = result
-                            earliest_score = score
-                        elif score == earliest_score:
-                            if result.mbid and (not earliest.mbid or result.mbid < earliest.mbid):
-                                earliest = result
+                    if is_original_release and date_tuple is not None:
+                        true_originals.append((result, date_tuple, result.score if result.score else 0))
+                    elif date_tuple is not None:
+                        re_releases.append((result, date_tuple, result.score if result.score else 0))
+                    else:
+                        candidates_without_original_date.append((result, result.score if result.score else 0))
                 
-                if earliest is None:
-                    best_score = max((r.score if r.score else 0) for r in group)
-                    candidates = [r for r in group if (r.score if r.score else 0) == best_score]
-                    earliest = next((r for r in candidates if r.mbid), candidates[0])
+                # Sort true originals by date (earliest first), then by score (highest first)
+                true_originals.sort(key=lambda x: (x[1], -x[2]))
                 
-                deduplicated.append(earliest)
+                # Sort re-releases by original release date (earliest first), then by score
+                re_releases.sort(key=lambda x: (x[1], -x[2]))
+                
+                # Select best: prefer true originals, then earliest original release date
+                best = None
+                if true_originals:
+                    # If we have multiple true originals, check if we need validation
+                    if len(true_originals) > 1:
+                        # Extract unique years from candidates
+                        unique_years = set()
+                        for result, date_tuple, _ in true_originals:
+                            if date_tuple:
+                                unique_years.add(date_tuple[0])
+                        
+                        # Only validate if we have multiple different years (actual ambiguity)
+                        # If all candidates have the same year, just pick the earliest/highest score
+                        # Skip Discogs validation - rely on original_release_date logic which is usually sufficient
+                        # Only use Spotify if available (no Discogs searches)
+                        if len(unique_years) > 1:
+                            # Get artist and album from first candidate
+                            first_candidate = true_originals[0][0]
+                            artist = first_candidate.artist or ""
+                            album = first_candidate.album or first_candidate.title or ""
+                            
+                            if artist and album:
+                                candidate_years = list(unique_years)
+                                # Try Spotify only (no Discogs to avoid unnecessary searches)
+                                spotify_year = self._get_release_year_from_spotify(artist, album)
+                                
+                                if spotify_year and spotify_year in candidate_years:
+                                    # Prefer candidates that match the Spotify year
+                                    matching_candidates = [
+                                        (r, dt, score) for r, dt, score in true_originals
+                                        if dt and dt[0] == spotify_year
+                                    ]
+                                    if matching_candidates:
+                                        # Sort by score among matching candidates
+                                        matching_candidates.sort(key=lambda x: -x[2])
+                                        best = matching_candidates[0][0]
+                    
+                    # If no validation was needed or validation didn't find a match, use earliest/highest score
+                    if not best:
+                        best = true_originals[0][0]
+                elif re_releases:
+                    # If we have multiple re-releases with different original years, cross-reference
+                    if len(re_releases) > 1:
+                        # Extract unique years from candidates
+                        unique_years = set()
+                        for result, date_tuple, _ in re_releases:
+                            if date_tuple:
+                                unique_years.add(date_tuple[0])
+                        
+                        # Only validate if we have multiple different years (ambiguity)
+                        # Skip Discogs validation - rely on original_release_date logic
+                        # Only use Spotify if available (no Discogs searches)
+                        if len(unique_years) > 1:
+                            # Get artist and album from first candidate
+                            first_candidate = re_releases[0][0]
+                            artist = first_candidate.artist or ""
+                            album = first_candidate.album or first_candidate.title or ""
+                            
+                            if artist and album:
+                                candidate_years = list(unique_years)
+                                # Try Spotify only (no Discogs to avoid unnecessary searches)
+                                spotify_year = self._get_release_year_from_spotify(artist, album)
+                                
+                                if spotify_year and spotify_year in candidate_years:
+                                    # Prefer candidates that match the Spotify year
+                                    matching_candidates = [
+                                        (r, dt, score) for r, dt, score in re_releases
+                                        if dt and dt[0] == spotify_year
+                                    ]
+                                    if matching_candidates:
+                                        # Sort by score among matching candidates
+                                        matching_candidates.sort(key=lambda x: -x[2])
+                                        best = matching_candidates[0][0]
+                    
+                    if not best:
+                        best = re_releases[0][0]
+                elif candidates_without_original_date:
+                    # If no dates, try to get year from Spotify/Discogs for validation
+                    if len(candidates_without_original_date) > 1:
+                        first_candidate = candidates_without_original_date[0][0]
+                        artist = first_candidate.artist or ""
+                        album = first_candidate.album or first_candidate.title or ""
+                        
+                        if artist and album:
+                            # Try Spotify only (no Discogs to avoid unnecessary searches)
+                            spotify_year = self._get_release_year_from_spotify(artist, album)
+                            
+                            if spotify_year:
+                                # Check if any candidate's release_date matches Spotify year
+                                for result, score in candidates_without_original_date:
+                                    if result.release_date:
+                                        try:
+                                            year = int(result.release_date[:4])
+                                            if year == spotify_year:
+                                                best = result
+                                                break
+                                        except (ValueError, IndexError):
+                                            continue
+                    
+                    if not best:
+                        # If no dates, use highest score
+                        candidates_without_original_date.sort(key=lambda x: -x[1])  # Sort by score descending
+                        best = candidates_without_original_date[0][0]
+                else:
+                    # Fallback: just take first candidate
+                    best = candidates[0] if candidates else None
+                
+                if best:
+                    deduplicated.append(best)
         
         return deduplicated
     
@@ -132,7 +457,7 @@ class SearchService:
         This ensures Discogs complements MusicBrainz without polluting good results.
         """
         # First, deduplicate MusicBrainz results internally
-        mb_deduped = self._deduplicate_results(mb_results)
+        mb_deduped = self._deduplicate_results(mb_results, release_type=None)
         
         # Create a set of keys for MusicBrainz results
         mb_keys = set()
@@ -154,7 +479,7 @@ class SearchService:
     def search_recordings(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None) -> List[MusicBrainzSong]:
         """Search for recordings in MusicBrainz."""
         results = self.musicbrainz_client.search_recording(song_data, offset=offset, limit=limit)
-        return self._deduplicate_results(results)
+        return self._deduplicate_results(results, release_type=None)
     
     def search_releases(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None, release_type: Optional[str] = None) -> List[MusicBrainzSong]:
         """Search for releases in MusicBrainz and Discogs in parallel.
@@ -166,15 +491,20 @@ class SearchService:
             limit: Maximum number of results
             release_type: Optional release type filter (e.g., "Album", "Single", "EP", "Compilation", "Live", etc.)
         """
-        # Search both sources in parallel
+        # Fetch more results than needed to ensure we get all duplicates for proper deduplication
+        # This ensures we can find the earliest release even if it's not in the first page
+        # We need to fetch enough to get all duplicates, then deduplicate, then paginate
+        fetch_limit = (limit or self.max_results) * 5 if limit else 50  # Fetch 5x the limit to ensure we get all duplicates
+        
+        # Search both sources in parallel - always start from 0 to get all results for proper deduplication
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             mb_future = executor.submit(
                 self.musicbrainz_client.search_release,
-                song_data, offset, limit, None  # Get all results, filter later
+                song_data, 0, fetch_limit, None  # Always start from 0, fetch more results
             )
             discogs_future = executor.submit(
                 self.discogs_client.search_release,
-                song_data, offset, limit, release_type
+                song_data, 0, fetch_limit, release_type  # Always start from 0
             )
             
             mb_results = mb_future.result()
@@ -184,6 +514,7 @@ class SearchService:
         discogs_formatted = self._convert_discogs_to_mb_format(discogs_results)
         
         # Use priority-based deduplication: MusicBrainz first, Discogs only fills gaps
+        # This deduplicates ALL results to find the best (earliest) release
         all_results = self._deduplicate_with_priority(mb_results, discogs_formatted)
         
         if release_type:
@@ -193,14 +524,26 @@ class SearchService:
                     filtered_results.append(result)
             all_results = filtered_results
         
+        # Sort results by original release date (earliest first) to prioritize original releases
+        # Use original_release_date if available, otherwise use release_date
+        # This ensures that even if deduplication kept the earliest, the display order is correct
+        all_results.sort(key=lambda r: (
+            self._parse_release_date(r.original_release_date or r.release_date) or (9999, 12, 31),  # Put items without dates at end
+            -(r.score if r.score else 0)  # Then by score descending
+        ))
+        
+        # Apply pagination AFTER deduplication and sorting
+        if offset > 0:
+            all_results = all_results[offset:]
+        
         if limit and len(all_results) > limit:
             all_results = all_results[:limit]
         
         return all_results
     
     def search_artist_releases(self, artist: str, year: Optional[int] = None, release_type: Optional[str] = None, include_compilations: bool = False) -> List[MusicBrainzSong]:
-        """Search for releases by a specific artist in MusicBrainz and Discogs in parallel.
-        MusicBrainz results are prioritized; Discogs only fills gaps.
+        """Search for releases by a specific artist in MusicBrainz.
+        Discogs is only consulted during deduplication for year validation when there's ambiguity.
         
         Args:
             artist: Artist name to search for
@@ -208,25 +551,13 @@ class SearchService:
             release_type: Optional release type filter (e.g., "Album", "Single", "EP", "Compilation", "Live", etc.)
             include_compilations: If True, also search for compilations where the artist appears as a track artist
         """
-        # Search both sources in parallel
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            mb_future = executor.submit(
-                self.musicbrainz_client.search_artist_releases,
-                artist, year, None
-            )
-            discogs_future = executor.submit(
-                self.discogs_client.search_artist_releases,
-                artist, year, None, None
-            )
-            
-            mb_results = mb_future.result()
-            discogs_results = discogs_future.result()
+        # Search MusicBrainz only - it usually has comprehensive coverage
+        # Discogs is only used for year validation during deduplication when there's ambiguity
+        mb_results = self.musicbrainz_client.search_artist_releases(artist, year, None, release_type)
         
-        # Convert Discogs to MusicBrainz format
-        discogs_formatted = self._convert_discogs_to_mb_format(discogs_results)
-        
-        # Use priority-based deduplication: MusicBrainz first, Discogs only fills gaps
-        all_results = self._deduplicate_with_priority(mb_results, discogs_formatted)
+        # Deduplicate MusicBrainz results only (no initial Discogs search)
+        # Pass release_type so validation can filter Discogs searches
+        all_results = self._deduplicate_results(mb_results, release_type=release_type)
         
         # If include_compilations is True, also search for compilations where artist appears on tracks
         if include_compilations:
@@ -318,7 +649,34 @@ class SearchService:
         all_results = []
         seen_ids = set()
         
-        live_keywords = ['live', 'concert', 'performance', 'on stage', 'recorded live']
+        # Use word boundaries to avoid matching "live" in words like "lives", "alive", "deliver", etc.
+        live_keyword_patterns = [
+            r'\blive\s+concert\b',
+            r'\blive\s+performance\b',
+            r'\blive\s+on\s+stage\b',
+            r'\brecorded\s+live\b',
+            r'\blive\s+session\b',
+            r'\blive\s+recording\b',
+            r'\blive\s+from\b',
+            r'\blive\s+@\b',
+            r'\blive\s+in\b',
+            r'\blive\s+at\b',
+            r'\blive\s+version\b',
+            r'\blive\s+take\b',
+            r'\blive\s+acoustic\b',
+            r'\blive\s+bootleg\b',
+            r'\blive\s+broadcast\b',
+        ]
+        # Keywords that don't need word boundaries
+        live_keywords_simple = [
+            'unplugged',
+            'mtv unplugged',
+            'kexp',
+            'npr tiny desk',
+            'audience',
+            'applause',
+            'encore'
+        ]
         non_album_keywords = [
             'reaction', 'react', 'reacting', 'reacts', 'first reaction', 'first time listening',
             'review', 'album review', 'unboxing', 'reaction to', 'reacting to', 'my reaction',
@@ -342,7 +700,15 @@ class SearchService:
                     if not has_full_album_keyword:
                         continue
                     
-                    is_live = any(keyword in title_lower for keyword in live_keywords)
+                    # Check for live keywords using word boundaries to avoid false positives
+                    is_live = False
+                    for pattern in live_keyword_patterns:
+                        if re.search(pattern, title_lower):
+                            is_live = True
+                            break
+                    if not is_live:
+                        is_live = any(keyword in title_lower for keyword in live_keywords_simple)
+                    
                     is_non_album = any(keyword in title_lower for keyword in non_album_keywords)
                     if is_live or is_non_album:
                         continue

@@ -69,22 +69,38 @@ class VideoValidator:
             return False
         
         title_lower = video_title.lower()
-        live_keywords = [
-            'live',
-            'concert',
-            'performance',
-            'on stage',
-            'recorded live',
-            'live session',
-            'live recording',
-            'live from',
-            'live @',
-            'live in',
-            'live at',
-            'live version',
-            'live take',
-            'live studio',
-            'live acoustic',
+        
+        # Exclude remastered/reissue versions - these are studio albums, not live
+        # Check for remaster keywords first - if present, it's likely a studio remaster, not live
+        remaster_keywords = ['remaster', 'remastered', 'reissue', 're-release', 'deluxe edition', 'anniversary edition']
+        has_remaster_keyword = any(keyword in title_lower for keyword in remaster_keywords)
+        
+        # If it has remaster keywords and "full album" or similar, it's definitely not live
+        if has_remaster_keyword and ('full album' in title_lower or 'complete album' in title_lower):
+            return False
+        
+        # Keywords that need word boundary matching (to avoid false positives)
+        # Use word boundaries to avoid matching "live" in words like "lives", "alive", "deliver", etc.
+        word_boundary_keywords = [
+            r'\blive\s+concert\b',  # "live concert"
+            r'\blive\s+performance\b',  # "live performance"
+            r'\blive\s+on\s+stage\b',  # "live on stage"
+            r'\brecorded\s+live\b',  # "recorded live"
+            r'\blive\s+session\b',  # "live session"
+            r'\blive\s+recording\b',  # "live recording"
+            r'\blive\s+from\b',  # "live from"
+            r'\blive\s+@\b',  # "live @"
+            r'\blive\s+in\b',  # "live in" (but not "live in" as part of song title)
+            r'\blive\s+at\b',  # "live at" (e.g., "Live at Red Rocks")
+            r'\blive\s+version\b',  # "live version"
+            r'\blive\s+take\b',  # "live take"
+            r'\blive\s+acoustic\b',  # "live acoustic"
+            r'\blive\s+bootleg\b',  # "live bootleg"
+            r'\blive\s+broadcast\b',  # "live broadcast"
+        ]
+        
+        # Keywords that don't need word boundaries (they're specific enough)
+        simple_keywords = [
             'unplugged',
             'mtv unplugged',
             'kexp',
@@ -94,19 +110,20 @@ class VideoValidator:
             'encore'
         ]
         
-        # Keywords that need word boundary matching (to avoid false positives)
-        word_boundary_keywords = [
-            r'\bat\b',  # "at" as a standalone word (e.g., "Live at Red Rocks")
-        ]
-        
-        # Check for live keywords (simple substring match)
-        for keyword in live_keywords:
-            if keyword in title_lower:
-                return True
-        
-        # Check for word-boundary keywords (to avoid matching "at" in "heat", "cat", etc.)
+        # Check for word-boundary keywords first (more specific, avoids false positives)
         for pattern in word_boundary_keywords:
             if re.search(pattern, title_lower):
+                # Additional check: if it's a remaster with "live" in context, be more careful
+                if has_remaster_keyword:
+                    # "live" in remaster context might be false positive - check if it's actually about live performance
+                    # If it says "remaster" and "full album", it's not live
+                    if 'full album' in title_lower or 'complete album' in title_lower:
+                        continue  # Skip this match, it's a remastered studio album
+                return True
+        
+        # Check for simple keywords (substring match is fine for these)
+        for keyword in simple_keywords:
+            if keyword in title_lower:
                 return True
         
         return False

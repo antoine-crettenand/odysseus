@@ -15,6 +15,9 @@ class CoverArtFetcher:
         # Cache for cover art to avoid fetching the same cover art multiple times
         # Key: (release_mbid or cover_art_url), Value: cover_art_data (bytes)
         self._cover_art_cache: Dict[str, Optional[bytes]] = {}
+        # Cache for Discogs search results to avoid repeated searches
+        # Key: (artist, album), Value: cover_art_url (str) or None
+        self._discogs_search_cache: Dict[tuple, Optional[str]] = {}
     
     def fetch_cover_art_from_url(self, url: str, console=None, use_cache: bool = True) -> Optional[bytes]:
         """
@@ -167,6 +170,8 @@ class CoverArtFetcher:
         """
         Search Discogs for the release and fetch cover art.
         
+        Uses caching to avoid repeated searches for the same release.
+        
         Args:
             release_info: Release information
             console: Optional console for output
@@ -177,6 +182,32 @@ class CoverArtFetcher:
         try:
             from ..clients.discogs import DiscogsClient
             from ..models.song import SongData
+            
+            # Create cache key from artist and album
+            artist = (release_info.artist or "").lower().strip()
+            album = (release_info.title or "").lower().strip()
+            cache_key = (artist, album)
+            
+            # Check cache first
+            if cache_key in self._discogs_search_cache:
+                cached_url = self._discogs_search_cache[cache_key]
+                if cached_url is None:
+                    # Cached as "not found" - return None
+                    return None
+                # Use cached URL
+                if console:
+                    console.print(f"[blue]ℹ[/blue] Using cached Discogs cover art URL")
+                cover_art_data = self.fetch_cover_art_from_url(cached_url, console)
+                if cover_art_data:
+                    if console:
+                        console.print(f"[green]✓ Got cover art from Discogs ({len(cover_art_data)} bytes)[/green]")
+                    return cover_art_data
+                # If cached URL fails, remove from cache and continue to search
+                del self._discogs_search_cache[cache_key]
+            
+            # Not in cache, need to search
+            if console:
+                console.print(f"[blue]ℹ[/blue] Trying to find cover art from Discogs...")
             
             discogs_client = DiscogsClient()
             
@@ -192,6 +223,8 @@ class CoverArtFetcher:
             discogs_results = discogs_client.search_release(song_data, limit=5)
             
             if not discogs_results:
+                # Cache "not found" result
+                self._discogs_search_cache[cache_key] = None
                 return None
             
             # Find the best matching release
@@ -204,25 +237,33 @@ class CoverArtFetcher:
                         if result.artist and release_info.artist:
                             if result.artist.lower() in release_info.artist.lower() or release_info.artist.lower() in result.artist.lower():
                                 # Found a match, try to get cover art
+                                cover_art_url = None
+                                
                                 if result.cover_art_url:
+                                    cover_art_url = result.cover_art_url
                                     if console:
                                         console.print(f"[blue]ℹ[/blue] Found Discogs release: {result.album}")
-                                    cover_art_data = self.fetch_cover_art_from_url(result.cover_art_url, console)
+                                
+                                # If no cover art URL in search result, try to get detailed release info
+                                if not cover_art_url and result.discogs_id:
+                                    detailed_info = discogs_client.get_release_info(result.discogs_id)
+                                    if detailed_info and detailed_info.cover_art_url:
+                                        cover_art_url = detailed_info.cover_art_url
+                                        if console:
+                                            console.print(f"[blue]ℹ[/blue] Found Discogs release: {result.album}")
+                                
+                                if cover_art_url:
+                                    # Cache the URL for future use
+                                    self._discogs_search_cache[cache_key] = cover_art_url
+                                    
+                                    cover_art_data = self.fetch_cover_art_from_url(cover_art_url, console)
                                     if cover_art_data:
                                         if console:
                                             console.print(f"[green]✓ Got cover art from Discogs ({len(cover_art_data)} bytes)[/green]")
                                         return cover_art_data
-                                
-                                # If no cover art URL in search result, try to get detailed release info
-                                if result.discogs_id:
-                                    detailed_info = discogs_client.get_release_info(result.discogs_id)
-                                    if detailed_info and detailed_info.cover_art_url:
-                                        cover_art_data = self.fetch_cover_art_from_url(detailed_info.cover_art_url, console)
-                                        if cover_art_data:
-                                            if console:
-                                                console.print(f"[green]✓ Got cover art from Discogs ({len(cover_art_data)} bytes)[/green]")
-                                            return cover_art_data
             
+            # Cache "not found" result
+            self._discogs_search_cache[cache_key] = None
             return None
             
         except Exception as e:
@@ -426,6 +467,7 @@ class CoverArtFetcher:
         Returns:
             Cover art data as bytes, or None if failed
         """
+        # Priority 1: Try Spotify (URL first, then search)
         # First, try Spotify cover art URL if available
         if release_info.cover_art_url:
             if console:
@@ -434,15 +476,19 @@ class CoverArtFetcher:
             if cover_art_data:
                 return cover_art_data
         
-        # Try Discogs first (more reliable)
+        # If no Spotify URL, try searching Spotify
         if console:
-            console.print(f"[blue]ℹ[/blue] Trying to find cover art from Discogs...")
-        cover_art_data = self._fetch_cover_art_from_discogs(release_info, console)
+            console.print(f"[blue]ℹ[/blue] Trying to find cover art from Spotify...")
+        cover_art_data = self._fetch_cover_art_from_spotify(release_info, console)
         if cover_art_data:
-            # If Discogs succeeds, skip MusicBrainz and return immediately
             return cover_art_data
         
-        # If Discogs failed, try MusicBrainz if we have MBID
+        # Priority 2: Try Discogs
+        cover_art_data = self._fetch_cover_art_from_discogs(release_info, console)
+        if cover_art_data:
+            return cover_art_data
+        
+        # Priority 3: Try MusicBrainz if we have MBID
         mbid = release_info.mbid.strip() if release_info.mbid else ""
         
         # Check if MBID looks like a MusicBrainz UUID (has dashes)
@@ -460,13 +506,6 @@ class CoverArtFetcher:
             # This is likely a Discogs ID, not a MusicBrainz MBID
             if console:
                 console.print(f"[yellow]⚠[/yellow] MBID appears to be from Discogs (not MusicBrainz). Cover art requires MusicBrainz MBID.")
-        
-        # Fallback 2: Try to search Spotify for cover art
-        if console:
-            console.print(f"[blue]ℹ[/blue] Trying to find cover art from Spotify...")
-        cover_art_data = self._fetch_cover_art_from_spotify(release_info, console)
-        if cover_art_data:
-            return cover_art_data
         
         # Fallback 3: Try to extract cover art from existing tracks in the folder
         if folder_path and folder_path.exists():

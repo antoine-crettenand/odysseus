@@ -58,12 +58,20 @@ class FullAlbumStrategy(BaseDownloadStrategy):
         release_info: ReleaseInfo,
         track_numbers: List[int],
         quality: str,
-        silent: bool = False
+        silent: bool = False,
+        cover_art_data: Optional[bytes] = None
     ) -> Tuple[Optional[int], Optional[int]]:
         """
         Strategy 1: Download full album video and split into tracks.
         
         Optimized to fetch cover art once per release and reuse it for all tracks.
+        
+        Args:
+            release_info: Release information
+            track_numbers: List of track numbers to download
+            quality: Download quality
+            silent: Whether to suppress output
+            cover_art_data: Optional pre-fetched cover art data (to avoid redundant searches)
         """
         # Skip this strategy for Spotify playlists - playlists are not albums
         # Verify it's a Spotify playlist (extra safeguard)
@@ -85,14 +93,13 @@ class FullAlbumStrategy(BaseDownloadStrategy):
         # Get folder path for cover art extraction from existing tracks
         output_dir = self.path_manager.get_release_folder_path(release_info)
         
-        # Fetch cover art once for the entire release (optimization)
-        # Pass folder_path so it can extract from existing tracks if available
-        cover_art_data = None
-        if not silent:
-            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console, folder_path=output_dir)
-        else:
-            # Still fetch cover art in silent mode, just don't print messages
-            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None, folder_path=output_dir)
+        # Fetch cover art only if not provided (optimization to avoid redundant searches)
+        if cover_art_data is None:
+            if not silent:
+                cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console, folder_path=output_dir)
+            else:
+                # Still fetch cover art in silent mode, just don't print messages
+                cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None, folder_path=output_dir)
         
         # Extract release year if available
         release_year = None
@@ -338,6 +345,31 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                 # Create output directory for split tracks
                 output_dir = self.download_service.downloader._create_organized_path(album_metadata)
                 
+                # Track which files existed before splitting
+                existing_files_before_split = set()
+                audio_extensions = ['.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav', '.aac', '.webm']
+                for timestamp_info in track_timestamps:
+                    track = timestamp_info['track']
+                    title = self.download_service.downloader._sanitize_filename(track.title)
+                    track_prefix = f"{track.position:02d} - "
+                    expected_base = f"{track_prefix}{title}"
+                    # Check if file already exists
+                    found_existing = False
+                    for ext in audio_extensions:
+                        potential_file = output_dir / f"{expected_base}{ext}"
+                        if potential_file.exists() and potential_file.is_file():
+                            existing_files_before_split.add(potential_file)
+                            found_existing = True
+                            break
+                    # Also check with glob pattern if not found with exact match
+                    if not found_existing:
+                        existing_files = [
+                            f for f in output_dir.glob(f"{expected_base}*")
+                            if f.is_file() and f.suffix.lower() in audio_extensions
+                        ]
+                        if existing_files:
+                            existing_files_before_split.add(existing_files[0])
+                
                 # Prepare metadata list for splitting
                 metadata_list = []
                 for timestamp_info in track_timestamps:
@@ -383,20 +415,67 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                     pass  # Ignore cleanup errors
                 
                 if split_files:
-                    # Apply metadata only to files that already existed (to minimize API calls)
-                    # Note: For split files, we check if they existed before the split operation
+                    # Apply metadata (including cover art) to all split files
+                    # Cover art was already fetched earlier, so we can apply it to all tracks
                     downloaded_count = 0
-                    for split_file, timestamp_info in zip(split_files, track_timestamps):
-                        track = timestamp_info['track']
-                        # Check if file existed before split (it would have been in existing_files set)
-                        # Since split always creates new files, we skip metadata for newly split files
-                        # to minimize API calls. Metadata can be applied later if needed.
-                        downloaded_count += 1
+                    skipped_count = 0
+                    failed_count = 0
                     
                     if not silent:
-                        console.print(f"[bold green]✓[/bold green] Successfully downloaded and split {downloaded_count} tracks from full album video")
+                        console.print("[cyan]📝 Applying metadata and cover art to tracks...[/cyan]")
                     
-                    return downloaded_count, len(track_numbers) - downloaded_count
+                    # Create progress bar for metadata application
+                    metadata_progress, metadata_task_id = self.display_manager.create_download_progress_bar(
+                        "Applying metadata"
+                    )
+                    
+                    with metadata_progress:
+                        for split_file, timestamp_info in zip(split_files, track_timestamps):
+                            track = timestamp_info['track']
+                            metadata_progress.update(
+                                metadata_task_id,
+                                description=f"Applying metadata: {track.title[:40]}"
+                            )
+                            
+                            # Check if file already existed before splitting
+                            # Compare by resolving paths to handle Path object differences
+                            file_existed = any(
+                                split_file.resolve() == existing_file.resolve()
+                                for existing_file in existing_files_before_split
+                            )
+                            
+                            try:
+                                # Apply metadata with cover art to each split file
+                                self.metadata_service.apply_metadata_with_cover_art(
+                                    split_file,
+                                    track,
+                                    release_info,
+                                    console if not silent else None,
+                                    cover_art_data=cover_art_data,
+                                    path_manager=self.path_manager
+                                )
+                                if file_existed:
+                                    skipped_count += 1
+                                    if not silent:
+                                        console.print(f"[yellow]⏭[/yellow] Skipped existing track: {track.title}")
+                                else:
+                                    downloaded_count += 1
+                            except Exception as e:
+                                failed_count += 1
+                                if not silent:
+                                    console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
+                            
+                            metadata_progress.update(metadata_task_id, advance=1)
+                    
+                    if not silent:
+                        if downloaded_count > 0:
+                            console.print(f"[bold green]✓[/bold green] Successfully downloaded and split {downloaded_count} track{'s' if downloaded_count != 1 else ''} from full album video")
+                        if skipped_count > 0:
+                            console.print(f"[yellow]⏭[/yellow] Skipped {skipped_count} existing track{'s' if skipped_count != 1 else ''}")
+                        if failed_count > 0:
+                            console.print(f"[yellow]⚠[/yellow] Failed to apply metadata to {failed_count} track(s)")
+                    
+                    return downloaded_count, failed_count
                 
             except Exception as e:
                 if not silent:

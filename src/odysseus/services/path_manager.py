@@ -85,32 +85,41 @@ class PathManager:
         }
         return self.download_service.downloader._create_organized_path(album_metadata)
     
-    def check_existing_tracks(
+    def get_existing_tracks(
         self,
         release_info: ReleaseInfo,
         track_numbers: List[int]
-    ) -> Optional[Dict[int, Path]]:
+    ) -> Dict[int, Path]:
         """
-        Check if all selected tracks already exist in the release folder.
+        Check which tracks already exist in the release folder (partial matches allowed).
+        Matches tracks by title even if track numbers don't match (handles reordering).
         
         Args:
             release_info: Release information
             track_numbers: List of track numbers to check
             
         Returns:
-            Dictionary mapping track numbers to file paths if all tracks exist, None otherwise
+            Dictionary mapping track numbers to file paths for tracks that exist
         """
         output_dir = self.get_release_folder_path(release_info)
         
         if not output_dir.exists():
-            return None
+            return {}
         
         audio_extensions = ['.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav', '.aac', '.webm']
         system_files = {'.DS_Store', '.Thumbs.db', 'desktop.ini'}
         
+        # First, get all audio files in the directory
+        all_audio_files = []
+        for ext in audio_extensions:
+            all_audio_files.extend(output_dir.glob(f"*{ext}"))
+        all_audio_files = [
+            f for f in all_audio_files
+            if f.is_file() and f.name not in system_files
+        ]
+        
         existing_tracks = {}
-        is_compilation = self.is_compilation(release_info)
-        folder_artist = "Various Artists" if is_compilation else release_info.artist
+        used_files = set()  # Track which files we've already matched
         
         for track_num in track_numbers:
             # Find the track
@@ -128,31 +137,99 @@ class PathManager:
             track_prefix = f"{track_num:02d} - "
             expected_base = f"{track_prefix}{title}"
             
-            # Check for existing files matching the expected pattern
+            # Strategy 1: Try exact match with correct track number
             found = False
             for ext in audio_extensions:
                 potential_file = output_dir / f"{expected_base}{ext}"
-                if potential_file.exists() and potential_file.is_file():
+                if potential_file.exists() and potential_file.is_file() and potential_file not in used_files:
                     existing_tracks[track_num] = potential_file
+                    used_files.add(potential_file)
                     found = True
                     break
             
-            # If not found with exact match, try glob pattern
+            # Strategy 2: Try glob pattern with correct track number
             if not found:
                 existing_files = [
                     f for f in output_dir.glob(f"{expected_base}*")
                     if f.is_file()
                     and f.suffix.lower() in audio_extensions
                     and f.name not in system_files
+                    and f not in used_files
                 ]
                 if existing_files:
                     existing_tracks[track_num] = existing_files[0]
+                    used_files.add(existing_files[0])
                     found = True
             
-            # If any track is missing, return None
+            # Strategy 3: Match by title only (ignore track number) - handles reordering
             if not found:
-                return None
+                # Normalize title for matching
+                title_normalized = normalize_string(title).lower()
+                
+                for audio_file in all_audio_files:
+                    if audio_file in used_files:
+                        continue
+                    
+                    # Extract title from filename (remove track number prefix if present)
+                    filename_stem = audio_file.stem
+                    # Try to remove track number prefix (e.g., "09 - Title" or "9 - Title")
+                    if ' - ' in filename_stem:
+                        parts = filename_stem.split(' - ', 1)
+                        # Check if first part is a number
+                        try:
+                            int(parts[0].strip())
+                            # It's a track number, use the second part as title
+                            file_title = parts[1]
+                        except ValueError:
+                            # Not a track number, use whole filename
+                            file_title = filename_stem
+                    else:
+                        file_title = filename_stem
+                    
+                    # Normalize and compare
+                    file_title_normalized = normalize_string(file_title).lower()
+                    
+                    # Check if titles match (exact or very similar)
+                    if title_normalized == file_title_normalized:
+                        # Found a match by title - this track exists but maybe with wrong number
+                        existing_tracks[track_num] = audio_file
+                        used_files.add(audio_file)
+                        found = True
+                        break
+                    # Also try partial match (in case of slight variations)
+                    elif title_normalized in file_title_normalized or file_title_normalized in title_normalized:
+                        # Check if the match is significant (at least 80% of shorter string)
+                        min_len = min(len(title_normalized), len(file_title_normalized))
+                        if min_len > 0:
+                            overlap = len(set(title_normalized) & set(file_title_normalized))
+                            similarity = overlap / min_len
+                            if similarity > 0.8:
+                                existing_tracks[track_num] = audio_file
+                                used_files.add(audio_file)
+                                found = True
+                                break
         
-        # All tracks exist
-        return existing_tracks if len(existing_tracks) == len(track_numbers) else None
+        return existing_tracks
+    
+    def check_existing_tracks(
+        self,
+        release_info: ReleaseInfo,
+        track_numbers: List[int]
+    ) -> Optional[Dict[int, Path]]:
+        """
+        Check if all selected tracks already exist in the release folder.
+        
+        Args:
+            release_info: Release information
+            track_numbers: List of track numbers to check
+            
+        Returns:
+            Dictionary mapping track numbers to file paths if all tracks exist, None otherwise
+        """
+        existing_tracks = self.get_existing_tracks(release_info, track_numbers)
+        
+        # Return None if not all tracks exist
+        if len(existing_tracks) == len(track_numbers):
+            return existing_tracks
+        return None
 

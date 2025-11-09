@@ -27,6 +27,7 @@ class MusicBrainzSong(SearchResult):
     """MusicBrainz search result."""
     album: Optional[str] = None
     release_date: Optional[str] = None
+    original_release_date: Optional[str] = None  # Original release date from release-group (first-release-date)
     genre: Optional[str] = None
     release_type: Optional[str] = None  # e.g., "Album", "Single", "EP", "Compilation", "Live", etc.
     mbid: str = ""

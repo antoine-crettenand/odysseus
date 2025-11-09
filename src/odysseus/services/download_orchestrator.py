@@ -198,22 +198,22 @@ class DownloadOrchestrator:
                 pass
         
         if downloaded_path:
-            # Only apply metadata if file already existed (to minimize API calls)
-            if file_existed:
-                audio_metadata = AudioMetadata(
-                    title=song_data.title,
-                    artist=song_data.artist,
-                    album=song_data.album,
-                    year=song_data.release_year
-                )
-                # Try to get cover art from MusicBrainz if we have MBID
-                if hasattr(metadata, 'mbid') and metadata.mbid:
-                    cover_art_data = self.metadata_service.fetch_cover_art(metadata.mbid, console)
-                    if cover_art_data:
-                        audio_metadata.cover_art_data = cover_art_data
-                
-                self.metadata_service.merger.set_final_metadata(audio_metadata)
-                self.metadata_service.apply_metadata_to_file(str(downloaded_path), quiet=True)
+            # Apply metadata (including cover art) to all downloaded files
+            # For newly downloaded files, we should apply metadata so they have proper tags
+            audio_metadata = AudioMetadata(
+                title=song_data.title,
+                artist=song_data.artist,
+                album=song_data.album,
+                year=song_data.release_year
+            )
+            # Try to get cover art from MusicBrainz if we have MBID
+            if hasattr(metadata, 'mbid') and metadata.mbid:
+                cover_art_data = self.metadata_service.fetch_cover_art(metadata.mbid, console)
+                if cover_art_data:
+                    audio_metadata.cover_art_data = cover_art_data
+            
+            self.metadata_service.merger.set_final_metadata(audio_metadata)
+            self.metadata_service.apply_metadata_to_file(str(downloaded_path), quiet=True)
             console.print(f"[bold green]✓[/bold green] Download completed: [green]{downloaded_path}[/green]")
             return downloaded_path
         else:
@@ -245,11 +245,13 @@ class DownloadOrchestrator:
             ))
             return None
     
-    def _display_summary(self, downloaded: int, failed: int, total: int, title: str = "DOWNLOAD SUMMARY"):
+    def _display_summary(self, downloaded: int, failed: int, total: int, title: str = "DOWNLOAD SUMMARY", skipped: int = 0):
         """Display download summary."""
         console = self.display_manager.console
         console.print()
         summary_content = f"[bold green]✓[/bold green] Successfully downloaded: [green]{downloaded}[/green] track{'s' if downloaded != 1 else ''}\n"
+        if skipped > 0:
+            summary_content += f"[yellow]⏭[/yellow] Skipped existing: [yellow]{skipped}[/yellow] track{'s' if skipped != 1 else ''}\n"
         if failed > 0:
             summary_content += f"[bold red]✗[/bold red] Failed downloads: [red]{failed}[/red] track{'s' if failed != 1 else ''}\n"
         summary_content += f"[blue]ℹ[/blue] Total tracks processed: [cyan]{total}[/cyan]"
@@ -275,22 +277,23 @@ class DownloadOrchestrator:
         """Download selected tracks from a release using multi-strategy approach."""
         console = self.display_manager.console
         
-        # Check if all tracks already exist - if so, skip download and only apply metadata
-        existing_tracks = self.path_manager.check_existing_tracks(release_info, track_numbers)
-        if existing_tracks:
+        # Check which tracks already exist (partial matches allowed)
+        existing_tracks = self.path_manager.get_existing_tracks(release_info, track_numbers)
+        missing_track_numbers = [tn for tn in track_numbers if tn not in existing_tracks]
+        
+        # Fetch cover art once for the entire release (before trying any strategies)
+        output_dir = self.path_manager.get_release_folder_path(release_info)
+        cover_art_data = None
+        if not silent:
+            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console, folder_path=output_dir)
+        else:
+            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None, folder_path=output_dir)
+        
+        # If all tracks exist, only apply metadata
+        if not missing_track_numbers:
             if not silent:
                 console.print("[cyan]ℹ[/cyan] All tracks already exist. Applying metadata only...")
                 console.print()
-            
-            # Get folder path for cover art
-            output_dir = self.path_manager.get_release_folder_path(release_info)
-            
-            # Fetch cover art once for the entire release
-            cover_art_data = None
-            if not silent:
-                cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console, folder_path=output_dir)
-            else:
-                cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None, folder_path=output_dir)
             
             # Apply metadata to all existing tracks
             processed_count = 0
@@ -362,33 +365,147 @@ class DownloadOrchestrator:
             
             return processed_count, failed_count
         
-        # Strategy 1: Try full album video
+        # Some tracks are missing - download only missing tracks
+        if existing_tracks and not silent:
+            # Build list of missing track titles for display
+            missing_track_titles = []
+            for track_num in missing_track_numbers:
+                for t in release_info.tracks:
+                    if t.position == track_num:
+                        missing_track_titles.append(f"#{track_num}: {t.title}")
+                        break
+            
+            missing_info = f"{len(missing_track_numbers)} missing track{'s' if len(missing_track_numbers) != 1 else ''}"
+            if missing_track_titles:
+                missing_info += f" ({', '.join(missing_track_titles)})"
+            
+            console.print(f"[cyan]ℹ[/cyan] Found {len(existing_tracks)} existing track{'s' if len(existing_tracks) != 1 else ''}. Downloading {missing_info}...")
+            
+            # Display which tracks were found (helpful for debugging ordering issues)
+            tracks_with_wrong_numbers = []
+            if len(existing_tracks) > 0:
+                from rich.table import Table
+                table = Table(title="[cyan]Existing Tracks Found[/cyan]", show_header=True, header_style="bold cyan")
+                table.add_column("Expected #", style="cyan", justify="right")
+                table.add_column("Track Title", style="green")
+                table.add_column("File", style="yellow")
+                
+                for track_num in sorted(existing_tracks.keys()):
+                    file_path = existing_tracks[track_num]
+                    # Find track title
+                    track_title = ""
+                    for t in release_info.tracks:
+                        if t.position == track_num:
+                            track_title = t.title
+                            break
+                    
+                    # Check if track number in filename matches expected
+                    filename = file_path.name
+                    expected_prefix = f"{track_num:02d} - "
+                    has_correct_number = filename.startswith(expected_prefix)
+                    
+                    # Show file with indicator if number is wrong
+                    file_display = filename
+                    if not has_correct_number:
+                        file_display = f"[yellow]{filename}[/yellow] [dim](wrong track #)[/dim]"
+                        tracks_with_wrong_numbers.append((track_num, file_path, track_title))
+                    
+                    table.add_row(str(track_num), track_title, file_display)
+                
+                console.print()
+                console.print(table)
+                console.print()
+                
+                # Offer to reorder tracks with wrong numbers
+                if tracks_with_wrong_numbers and not silent:
+                    console.print(f"[yellow]⚠[/yellow] Found {len(tracks_with_wrong_numbers)} track{'s' if len(tracks_with_wrong_numbers) != 1 else ''} with incorrect track numbers.")
+                    console.print("[dim]These tracks will still be used, but you may want to rename them to match the correct order.[/dim]")
+                    console.print()
+            
+            console.print()
+        
+        # Strategy 1: Try full album video (only for missing tracks)
         downloaded, failed = self.full_album_strategy.download(
-            release_info, track_numbers, quality, silent
+            release_info, missing_track_numbers, quality, silent, cover_art_data=cover_art_data
         )
         if downloaded is not None:
-            # Success with full album
+            # Success with full album - apply metadata to existing tracks too
+            if existing_tracks:
+                self._apply_metadata_to_existing_tracks(
+                    release_info, existing_tracks, cover_art_data, silent, console
+                )
             if not silent:
-                self._display_summary(downloaded, failed, len(track_numbers))
-            return downloaded, failed
+                self._display_summary(downloaded, failed, len(track_numbers), skipped=len(existing_tracks))
+            return downloaded + len(existing_tracks), failed
         
-        # Strategy 2: Try playlist
+        # Strategy 2: Try playlist (only for missing tracks)
         downloaded, failed = self.playlist_strategy.download(
-            release_info, track_numbers, quality, silent
+            release_info, missing_track_numbers, quality, silent, cover_art_data=cover_art_data
         )
         if downloaded is not None:
-            # Success with playlist
+            # Success with playlist - apply metadata to existing tracks too
+            if existing_tracks:
+                self._apply_metadata_to_existing_tracks(
+                    release_info, existing_tracks, cover_art_data, silent, console
+                )
             if not silent:
-                self._display_summary(downloaded, failed, len(track_numbers))
-            return downloaded, failed
+                self._display_summary(downloaded, failed, len(track_numbers), skipped=len(existing_tracks))
+            return downloaded + len(existing_tracks), failed
         
-        # Strategy 3: Fall back to individual tracks
+        # Strategy 3: Fall back to individual tracks (only for missing tracks)
         downloaded, failed = self.individual_tracks_strategy.download(
-            release_info, track_numbers, quality, silent
+            release_info, missing_track_numbers, quality, silent, cover_art_data=cover_art_data
         )
+        
+        # Apply metadata to existing tracks
+        if existing_tracks:
+            self._apply_metadata_to_existing_tracks(
+                release_info, existing_tracks, cover_art_data, silent, console
+            )
         
         # Summary (only if not silent)
         if not silent:
-            self._display_summary(downloaded, failed, len(track_numbers))
+            total_downloaded = downloaded + len(existing_tracks) if downloaded is not None else len(existing_tracks)
+            self._display_summary(total_downloaded, failed, len(track_numbers), skipped=len(existing_tracks))
         
-        return downloaded, failed
+        return (downloaded + len(existing_tracks) if downloaded is not None else len(existing_tracks)), failed
+    
+    def _apply_metadata_to_existing_tracks(
+        self,
+        release_info: ReleaseInfo,
+        existing_tracks: Dict[int, Path],
+        cover_art_data: Optional[bytes],
+        silent: bool,
+        console
+    ) -> None:
+        """Apply metadata to existing tracks."""
+        if not existing_tracks:
+            return
+        
+        if not silent:
+            console.print(f"[cyan]📝 Applying metadata to {len(existing_tracks)} existing track{'s' if len(existing_tracks) != 1 else ''}...[/cyan]")
+        
+        for track_num, file_path in existing_tracks.items():
+            # Find the track
+            track = None
+            for t in release_info.tracks:
+                if t.position == track_num:
+                    track = t
+                    break
+            
+            if not track:
+                continue
+            
+            try:
+                # Apply metadata with cover art
+                self.metadata_service.apply_metadata_with_cover_art(
+                    file_path, track, release_info, console if not silent else None,
+                    cover_art_data=cover_art_data, path_manager=self.path_manager
+                )
+                if not silent:
+                    self.display_manager.display_track_download_result(
+                        track.title, True, str(file_path), file_existed=True
+                    )
+            except Exception as e:
+                if not silent:
+                    console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")

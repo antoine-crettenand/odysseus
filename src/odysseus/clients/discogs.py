@@ -70,8 +70,12 @@ class DiscogsClient:
                 return response.json()
                 
             except requests.exceptions.HTTPError as e:
+                status_code = None
+                if hasattr(e, 'response') and e.response is not None:
+                    status_code = e.response.status_code
+                
                 # Check for rate limiting (429)
-                if hasattr(e, 'response') and e.response is not None and e.response.status_code == 429:
+                if status_code == 429:
                     if batch_progress:
                         print(f"{progress_prefix}Rate limit exceeded. Waiting 60 seconds...")
                     else:
@@ -82,6 +86,34 @@ class DiscogsClient:
                         continue
                     else:
                         print(f"{progress_prefix}Max retries reached after rate limit. Aborting.")
+                        return None
+                # Check for 403 Forbidden (often User-Agent or authentication issue)
+                elif status_code == 403:
+                    if batch_progress:
+                        print(f"{progress_prefix}403 Forbidden (attempt {attempt + 1}): Discogs API blocked the request")
+                        print(f"{progress_prefix}This usually means:")
+                        print(f"{progress_prefix}  1. User-Agent format issue (Discogs requires contact info)")
+                        print(f"{progress_prefix}  2. Rate limit exceeded (60 req/min without token, 300 with token)")
+                        print(f"{progress_prefix}  3. Missing or invalid authentication token")
+                        print(f"{progress_prefix}Note: Discogs search may be unavailable. MusicBrainz results will still work.")
+                    else:
+                        print(f"403 Forbidden (attempt {attempt + 1}): Discogs API blocked the request")
+                        print("This usually means:")
+                        print("  1. User-Agent format issue (Discogs requires contact info)")
+                        print("  2. Rate limit exceeded (60 req/min without token, 300 with token)")
+                        print("  3. Missing or invalid authentication token")
+                        print("Note: Discogs search may be unavailable. MusicBrainz results will still work.")
+                    # For 403 errors, don't retry immediately - likely a persistent issue
+                    if attempt < max_retries - 1:
+                        # Wait longer for 403 errors (might be rate limiting)
+                        wait_time = retry_delay * 3  # Longer wait for 403
+                        if batch_progress:
+                            print(f"{progress_prefix}Waiting {wait_time} seconds before retry...")
+                        else:
+                            print(f"Waiting {wait_time} seconds before retry...")
+                        time.sleep(wait_time)
+                        retry_delay *= 2
+                    else:
                         return None
                 elif batch_progress:
                     print(f"{progress_prefix}HTTP Error (attempt {attempt + 1}): {e}")
@@ -272,8 +304,10 @@ class DiscogsClient:
                     if formats:
                         format_type = formats[0].get('name', '')
                     
-                    thumb = release_info.get('thumb', '')
-                    cover_art_url = thumb if thumb else None
+                    # Prefer full-size image over thumbnail
+                    # Discogs provides: 'thumb' (low quality), 'cover_image' (full size)
+                    cover_art_url = release_info.get('cover_image', '') or release_info.get('thumb', '')
+                    cover_art_url = cover_art_url if cover_art_url else None
                     
                     url_str = release_info.get('resource_url', '') or f"https://www.discogs.com/release/{release_id}"
                     
@@ -412,9 +446,10 @@ class DiscogsClient:
             if formats:
                 format_type = formats[0]
             
-            thumb = release.get('thumb', '')
-            if thumb:
-                cover_art_url = thumb
+            # Prefer full-size image over thumbnail
+            # Discogs search results may have 'cover_image' (full size) or 'thumb' (thumbnail)
+            cover_art_url = release.get('cover_image', '') or release.get('thumb', '')
+            cover_art_url = cover_art_url if cover_art_url else None
             
             url = release.get('uri', '') or f"https://www.discogs.com/release/{release_id}"
             
@@ -469,17 +504,20 @@ class DiscogsClient:
             
             url = data.get('uri', '') or f"https://www.discogs.com/release/{release_id}"
             
-            # Get cover art URL
+            # Get cover art URL - prefer full-size images
             cover_art_url = None
             images = data.get('images', [])
             if images:
                 # Use the primary image or first image
+                # Prefer 'uri' (full-size) over 'uri150' (150px thumbnail)
                 for img in images:
                     if img.get('type') == 'primary' or img.get('type') == 'secondary':
+                        # Prefer full-size uri, fall back to uri150, then resource_url
                         cover_art_url = img.get('uri') or img.get('uri150') or img.get('resource_url')
                         break
                 # If no primary/secondary, use first image
                 if not cover_art_url and images:
+                    # Prefer full-size uri, fall back to uri150, then resource_url
                     cover_art_url = images[0].get('uri') or images[0].get('uri150') or images[0].get('resource_url')
             
             # Parse tracks

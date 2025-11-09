@@ -450,13 +450,16 @@ class YouTubeDownloader:
                 'yt-dlp',
                 '--dump-json',
                 '--no-download',
+                '--no-warnings',
                 url
             ]
             
-            # Add cookies if available to avoid bot detection
-            cookie_browser = self._get_cookie_browser()
-            if cookie_browser:
-                cmd.extend(['--cookies-from-browser', cookie_browser])
+            # Use android_music client first (fastest, most reliable)
+            # Don't use cookies with mobile clients (causes failures)
+            cmd.extend([
+                '--user-agent', 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+                '--extractor-args', 'youtube:player_client=android_music'
+            ])
             
             # Use robust retry wrapper
             result = self._run_yt_dlp_with_retry(
@@ -468,33 +471,49 @@ class YouTubeDownloader:
             
         except subprocess.CalledProcessError as e:
             error_output = e.stderr if e.stderr else (e.stdout if e.stdout else str(e))
-            # Check for bot detection error
-            if "Sign in to confirm you're not a bot" in error_output or "bot" in error_output.lower():
-                cookie_browser = self._get_cookie_browser()
-                if not cookie_browser:
-                    print("Error: YouTube is blocking requests. Please:")
-                    print("  1. Sign in to YouTube in Chrome or Firefox")
-                    print("  2. Or export cookies manually: yt-dlp --cookies-from-browser chrome --cookies cookies.txt")
-                    print("  3. Then use: yt-dlp --cookies cookies.txt ...")
-                else:
-                    print(f"Error: YouTube bot detection triggered. Trying with {cookie_browser} cookies...")
-                    # Retry with cookies explicitly using retry wrapper
-                    try:
-                        cmd = [
-                            'yt-dlp',
-                            '--dump-json',
-                            '--no-download',
-                            '--cookies-from-browser', cookie_browser,
-                            url
-                        ]
-                        result = self._run_yt_dlp_with_retry(
-                            cmd,
-                            operation_name=f"getting video info with cookies for {url[:50]}",
-                            quiet=True
-                        )
-                        return json.loads(result.stdout)
-                    except Exception:
-                        pass
+            # If android_music fails, try android client as fallback
+            if "Requested format is not available" in error_output or "not available" in error_output.lower():
+                try:
+                    cmd = [
+                        'yt-dlp',
+                        '--dump-json',
+                        '--no-download',
+                        '--no-warnings',
+                        '--user-agent', 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+                        '--extractor-args', 'youtube:player_client=android',
+                        url
+                    ]
+                    result = self._run_yt_dlp_with_retry(
+                        cmd,
+                        operation_name=f"getting video info (android fallback) for {url[:50]}",
+                        quiet=True
+                    )
+                    return json.loads(result.stdout)
+                except Exception:
+                    pass
+            
+            # Last resort: try web client with cookies
+            cookie_browser = self._get_cookie_browser()
+            if cookie_browser:
+                try:
+                    cmd = [
+                        'yt-dlp',
+                        '--dump-json',
+                        '--no-download',
+                        '--no-warnings',
+                        '--extractor-args', 'youtube:player_client=web',
+                        '--cookies-from-browser', cookie_browser,
+                        url
+                    ]
+                    result = self._run_yt_dlp_with_retry(
+                        cmd,
+                        operation_name=f"getting video info (web with cookies) for {url[:50]}",
+                        quiet=True
+                    )
+                    return json.loads(result.stdout)
+                except Exception:
+                    pass
+            
             print(f"Error getting video info: {error_output[:200]}")
             return None
         except FileNotFoundError:
@@ -566,6 +585,8 @@ class YouTubeDownloader:
             raise ValueError("track_timestamps and metadata_list must have the same length")
         
         output_files = []
+        audio_extensions = ['.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav', '.aac', '.webm']
+        system_files = {'.DS_Store', '.Thumbs.db', 'desktop.ini'}
         
         for i, (timestamp_info, metadata) in enumerate(zip(track_timestamps, metadata_list)):
             start_time = timestamp_info.get('start_time', 0)
@@ -575,8 +596,49 @@ class YouTubeDownloader:
             title = self._sanitize_filename(metadata.get('title', f'track_{i+1}'))
             track_number = metadata.get('track_number', i + 1)
             track_prefix = f"{track_number:02d} - " if track_number else ""
-            output_filename = f"{track_prefix}{title}.mp3"
-            output_path = output_dir / output_filename
+            expected_base = f"{track_prefix}{title}"
+            
+            # Check if file already exists (try different extensions)
+            output_path = None
+            file_already_exists = False
+            
+            for ext in audio_extensions:
+                potential_file = output_dir / f"{expected_base}{ext}"
+                if potential_file.exists() and potential_file.is_file():
+                    output_path = potential_file
+                    file_already_exists = True
+                    break
+            
+            # If not found with exact match, try glob pattern
+            if not output_path:
+                existing_files = [
+                    f for f in output_dir.glob(f"{expected_base}*")
+                    if f.is_file()
+                    and f.suffix.lower() in audio_extensions
+                    and f.name not in system_files
+                ]
+                if existing_files:
+                    output_path = existing_files[0]
+                    file_already_exists = True
+            
+            # If file doesn't exist, create the path for splitting
+            if not output_path:
+                output_filename = f"{expected_base}.mp3"
+                output_path = output_dir / output_filename
+            
+            # If file already exists, skip splitting and add to output list
+            if file_already_exists:
+                output_files.append(output_path)
+                if progress_callback:
+                    # Update progress
+                    progress = ((i + 1) / len(track_timestamps)) * 100
+                    progress_callback({
+                        'percent': progress,
+                        'status': 'skipped',
+                        'speed': None,
+                        'eta': None
+                    })
+                continue
             
             # Build ffmpeg command
             cmd = [
@@ -638,6 +700,7 @@ class YouTubeDownloader:
     def _sanitize_filename(self, filename: str) -> str:
         """
         Sanitize filename to prevent path traversal and filesystem issues.
+        Also removes sub-parts (a), b), c), etc.) from track titles to keep filenames shorter.
         
         Args:
             filename: Original filename
@@ -648,8 +711,31 @@ class YouTubeDownloader:
         if not filename:
             return "unknown"
         
+        sanitized = filename
+        
+        # Remove sub-parts like "a) ... / b) ... / c) ..." to shorten filenames
+        # Pattern matches: "a) Title / b) Title / c) Title" or "a) Title, b) Title, c) Title"
+        # This handles cases like "Alan's Psychedelic Breakfast: a) Rise and Shine / b) Sunny Side Up / c) Morning Glory"
+        # Match pattern: colon (optional) followed by letter) followed by text, optionally repeated with / or ,
+        # The pattern captures: ": a) ... / b) ... / c) ..." or just "a) ... / b) ... / c) ..."
+        sub_part_pattern = r'(?::\s*)?[a-z]\)\s+[^/]+(?:\s*[/,]\s*[a-z]\)\s+[^/]+)*'
+        
+        # Try to match and remove sub-parts
+        # First try with colon (most common case)
+        if re.search(r':\s*[a-z]\)', sanitized, re.IGNORECASE):
+            # Remove everything from colon onwards if it matches the sub-part pattern
+            sanitized = re.sub(r':\s*[a-z]\)\s+[^/]+(?:\s*[/,]\s*[a-z]\)\s+[^/]+)*', '', sanitized, flags=re.IGNORECASE)
+        # If no colon, try to match sub-parts at the end
+        elif re.search(r'\s+[a-z]\)\s+', sanitized, re.IGNORECASE):
+            # Remove sub-parts pattern from the end
+            sanitized = re.sub(r'\s+[a-z]\)\s+[^/]+(?:\s*[/,]\s*[a-z]\)\s+[^/]+)*$', '', sanitized, flags=re.IGNORECASE)
+        
+        # Clean up any trailing separators
+        sanitized = re.sub(r'[:;]\s*$', '', sanitized)
+        sanitized = sanitized.strip()
+        
         # Prevent path traversal attacks by removing .. sequences
-        sanitized = filename.replace('..', '_')
+        sanitized = sanitized.replace('..', '_')
         
         # Remove or replace invalid characters for filesystem
         invalid_chars = r'[<>:"/\\|?*]'
@@ -1189,12 +1275,13 @@ class YouTubeDownloader:
                 print()
             
             # Try multiple strategies to bypass 403 errors
+            # Prioritized based on analysis: android_music > android > fallbacks
             strategies = [
-                self._build_command_strategy_1,
-                self._build_command_strategy_2,
-                self._build_command_strategy_3,
-                self._build_command_strategy_4,
-                self._build_command_strategy_5
+                self._build_command_strategy_1,  # android_music (fastest, ~9.74s)
+                self._build_command_strategy_2,  # android (reliable, ~10.69s)
+                self._build_command_strategy_3,  # android_music with retries
+                self._build_command_strategy_4,  # android with retries
+                self._build_command_strategy_5   # web with cookies (last resort)
             ]
             
             for i, strategy in enumerate(strategies, 1):
@@ -1446,20 +1533,17 @@ class YouTubeDownloader:
         return None
     
     def _build_command_strategy_1(self, url: str, quality: str, audio_only: bool, output_template: str) -> List[str]:
-        """Strategy 1: Basic yt-dlp with user agent, optionally with cookies if available"""
+        """Strategy 1: android_music client (fastest, ~9.74s, 0.69 MB/s) - NO COOKIES"""
+        # Analysis shows android_music is fastest and most reliable
+        # Cookies with mobile clients actually cause failures, so we skip them
         cmd = [
             'yt-dlp',
-            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            '--user-agent', 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
             '--no-check-certificate',
             '--ignore-errors',
             '--no-warnings',
-            '--extractor-args', 'youtube:player_client=web'
+            '--extractor-args', 'youtube:player_client=android_music'  # Fastest player client
         ]
-        
-        # Add cookies if available to avoid bot detection
-        cookie_browser = self._get_cookie_browser()
-        if cookie_browser:
-            cmd.extend(['--cookies-from-browser', cookie_browser])
         
         if audio_only:
             cmd.extend([
@@ -1475,25 +1559,17 @@ class YouTubeDownloader:
         return cmd
     
     def _build_command_strategy_2(self, url: str, quality: str, audio_only: bool, output_template: str) -> List[str]:
-        """Strategy 2: Use different extractor and bypass age restriction"""
+        """Strategy 2: android client (reliable, ~10.69s, 0.57 MB/s) - NO COOKIES"""
+        # Analysis shows android client is reliable fallback
+        # Cookies with mobile clients cause failures, so we skip them
         cmd = [
             'yt-dlp',
-            '--user-agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            '--age-limit', '0',  # Bypass age restriction
+            '--user-agent', 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
             '--no-check-certificate',
             '--ignore-errors',
-            '--no-warnings'
+            '--no-warnings',
+            '--extractor-args', 'youtube:player_client=android'  # Reliable mobile client
         ]
-        
-        # Add cookies if available to avoid bot detection
-        cookie_browser = self._get_cookie_browser()
-        if cookie_browser:
-            cmd.extend(['--cookies-from-browser', cookie_browser])
-            # Use only cookie-compatible clients when cookies are present
-            cmd.extend(['--extractor-args', 'youtube:player_client=web'])
-        else:
-            # Use android,web when no cookies (android doesn't support cookies)
-            cmd.extend(['--extractor-args', 'youtube:player_client=android,web'])
         
         if audio_only:
             cmd.extend([
@@ -1509,25 +1585,19 @@ class YouTubeDownloader:
         return cmd
     
     def _build_command_strategy_3(self, url: str, quality: str, audio_only: bool, output_template: str) -> List[str]:
-        """Strategy 3: Use different player client and referer"""
+        """Strategy 3: android_music with increased retries (fallback for unstable connections)"""
+        # Use android_music with retries for better reliability
         cmd = [
             'yt-dlp',
-            '--user-agent', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            '--referer', 'https://www.youtube.com/',
+            '--user-agent', 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
             '--no-check-certificate',
             '--ignore-errors',
-            '--no-warnings'
+            '--no-warnings',
+            '--extractor-args', 'youtube:player_client=android_music',
+            '--retries', '10',
+            '--fragment-retries', '10',
+            '--extractor-retries', '3'
         ]
-        
-        # Add cookies if available to avoid bot detection
-        cookie_browser = self._get_cookie_browser()
-        if cookie_browser:
-            cmd.extend(['--cookies-from-browser', cookie_browser])
-            # Use only cookie-compatible clients when cookies are present
-            cmd.extend(['--extractor-args', 'youtube:player_client=web'])
-        else:
-            # Use ios when no cookies (ios doesn't support cookies)
-            cmd.extend(['--extractor-args', 'youtube:player_client=ios'])
         
         if audio_only:
             cmd.extend([
@@ -1543,28 +1613,20 @@ class YouTubeDownloader:
         return cmd
     
     def _build_command_strategy_4(self, url: str, quality: str, audio_only: bool, output_template: str) -> List[str]:
-        """Strategy 4: Use yt-dlp with all bypass options"""
+        """Strategy 4: android client with retries and request delays (fallback)"""
+        # Use android with retries and delays for rate-limited scenarios
         cmd = [
             'yt-dlp',
-            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:91.0) Gecko/20100101 Firefox/91.0',
+            '--user-agent', 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
             '--no-check-certificate',
             '--ignore-errors',
-            '--sleep-requests', '1',  # Add delay between requests
-            '--sleep-interval', '1',
-            '--max-sleep-interval', '5',
             '--no-warnings',
-            '--retries', '3'
+            '--extractor-args', 'youtube:player_client=android',
+            '--retries', '10',
+            '--fragment-retries', '10',
+            '--sleep-requests', '1',  # Add delay between requests to avoid rate limiting
+            '--sleep-interval', '1'
         ]
-        
-        # Check if Firefox cookies are available
-        cookie_browser = self._get_cookie_browser()
-        if cookie_browser == 'firefox' or self._has_firefox_cookies():
-            cmd.extend(['--cookies-from-browser', 'firefox'])
-            # Use only cookie-compatible clients when cookies are present
-            cmd.extend(['--extractor-args', 'youtube:player_client=web'])
-        else:
-            # Use android_music,web when no cookies (android_music doesn't support cookies)
-            cmd.extend(['--extractor-args', 'youtube:player_client=android_music,web'])
         
         if audio_only:
             cmd.extend([
@@ -1580,24 +1642,22 @@ class YouTubeDownloader:
         return cmd
     
     def _build_command_strategy_5(self, url: str, quality: str, audio_only: bool, output_template: str) -> List[str]:
-        """Strategy 5: Use yt-dlp with minimal options as last resort"""
+        """Strategy 5: Web client with cookies (last resort - web client has low success rate)"""
+        # Web client is last resort as it has lower success rate
+        # Only use cookies with web client (cookies break mobile clients)
         cmd = [
-            'yt-dlp',  # Use yt-dlp (not youtube-dl) for consistency
-            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'yt-dlp',
+            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             '--no-check-certificate',
             '--ignore-errors',
-            '--no-warnings'
+            '--no-warnings',
+            '--extractor-args', 'youtube:player_client=web'
         ]
         
-        # Add cookies if available to avoid bot detection
+        # Only add cookies if available (cookies work with web client, not mobile)
         cookie_browser = self._get_cookie_browser()
         if cookie_browser:
             cmd.extend(['--cookies-from-browser', cookie_browser])
-            # Use only cookie-compatible clients when cookies are present
-            cmd.extend(['--extractor-args', 'youtube:player_client=web'])
-        else:
-            # Use android,web when no cookies (android doesn't support cookies)
-            cmd.extend(['--extractor-args', 'youtube:player_client=android,web'])
         
         if audio_only:
             cmd.extend([
@@ -1649,6 +1709,13 @@ class YouTubeDownloader:
                 '--no-warnings',
                 url
             ]
+            
+            # Use android_music client first (fastest, most reliable)
+            # Don't use cookies with mobile clients (causes failures)
+            cmd.extend([
+                '--user-agent', 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+                '--extractor-args', 'youtube:player_client=android_music'
+            ])
             
             # Use robust retry wrapper
             result = self._run_yt_dlp_with_retry(
@@ -1709,6 +1776,12 @@ class YouTubeDownloader:
                 '--playlist-end', '50',  # Limit to first 50 videos
                 url
             ]
+            
+            # Try android client as fallback (android_music already tried above)
+            cmd.extend([
+                '--user-agent', 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+                '--extractor-args', 'youtube:player_client=android'
+            ])
             
             # Use robust retry wrapper
             result = self._run_yt_dlp_with_retry(

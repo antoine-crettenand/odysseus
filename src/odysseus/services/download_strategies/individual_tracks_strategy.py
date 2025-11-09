@@ -56,13 +56,21 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
         release_info: ReleaseInfo,
         track_numbers: List[int],
         quality: str,
-        silent: bool = False
+        silent: bool = False,
+        cover_art_data: Optional[bytes] = None
     ) -> Tuple[Optional[int], Optional[int]]:
         """
         Download individual tracks from a release.
         
         Optimized to fetch cover art once per release and reuse it for all tracks.
         Strategy 3: Download individual tracks (fallback).
+        
+        Args:
+            release_info: Release information
+            track_numbers: List of track numbers to download
+            quality: Download quality
+            silent: Whether to suppress output
+            cover_art_data: Optional pre-fetched cover art data (to avoid redundant searches)
         """
         console = self.display_manager.console
         
@@ -72,14 +80,13 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
         # Get folder path for cover art extraction from existing tracks
         output_dir = self.path_manager.get_release_folder_path(release_info)
         
-        # Fetch cover art once for the entire release (optimization)
-        # Pass folder_path so it can extract from existing tracks if available
-        cover_art_data = None
-        if not silent:
-            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console, folder_path=output_dir)
-        else:
-            # Still fetch cover art in silent mode, just don't print messages
-            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None, folder_path=output_dir)
+        # Fetch cover art only if not provided (optimization to avoid redundant searches)
+        if cover_art_data is None:
+            if not silent:
+                cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console, folder_path=output_dir)
+            else:
+                # Still fetch cover art in silent mode, just don't print messages
+                cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None, folder_path=output_dir)
         
         downloaded_count = 0
         failed_count = 0
@@ -262,16 +269,16 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
                             pass
                     
                     if downloaded_path:
-                        # Only apply metadata if file already existed (to minimize API calls)
-                        if file_existed:
-                            try:
-                                self.metadata_service.apply_metadata_with_cover_art(
-                                    downloaded_path, track, release_info, console, cover_art_data=cover_art_data, path_manager=self.path_manager
-                                )
-                            except Exception as e:
-                                # If metadata application fails, still count as downloaded but log the error
-                                if not silent and console:
-                                    console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
+                        # Apply metadata (including cover art) to all downloaded files
+                        # Cover art was already fetched earlier, so we can apply it to all tracks
+                        try:
+                            self.metadata_service.apply_metadata_with_cover_art(
+                                downloaded_path, track, release_info, console if not silent else None, cover_art_data=cover_art_data, path_manager=self.path_manager
+                            )
+                        except Exception as e:
+                            # If metadata application fails, still count as downloaded but log the error
+                            if not silent and console:
+                                console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
                         if not silent:
                             self.display_manager.display_track_download_result(
                                 track.title, True, str(downloaded_path), file_existed=file_existed

@@ -49,8 +49,11 @@ class MusicBrainzClient:
             params: Request parameters
             batch_progress: Optional tuple (current, total) for batch operations (e.g., (1, 5))
         """
-        max_retries = 3
+        base_max_retries = 3
         retry_delay = 2
+        # Track if we've seen transient SSL errors (will use more retries)
+        seen_transient_ssl_error = False
+        max_retries = base_max_retries
         
         # Build progress prefix if batch progress is provided
         progress_prefix = ""
@@ -58,13 +61,23 @@ class MusicBrainzClient:
             current, total = batch_progress
             progress_prefix = f"[{current}/{total}] "
         
+        # Calculate page number from offset and limit if available
+        page_info = ""
+        if 'offset' in params and 'limit' in params:
+            offset = params.get('offset', 0)
+            limit = params.get('limit', 100)
+            if limit > 0:
+                page = (offset // limit) + 1
+                page_info = f" (page {page})"
+        
         # Try HTTPS first
-        for attempt in range(max_retries):
+        attempt = 0
+        while attempt < max_retries:
             try:
                 if batch_progress:
-                    print(f"{progress_prefix}Making request to MusicBrainz (attempt {attempt + 1}/{max_retries})")
+                    print(f"{progress_prefix}Making request to MusicBrainz{page_info} (attempt {attempt + 1}/{max_retries})")
                 else:
-                    print(f"Making request to MusicBrainz (attempt {attempt + 1}/{max_retries})")
+                    print(f"Making request to MusicBrainz{page_info} (attempt {attempt + 1}/{max_retries})")
                 response = self.session.get(url, params=params, timeout=self.timeout)
                 response.raise_for_status()
                 
@@ -74,25 +87,55 @@ class MusicBrainzClient:
                 return response.json()
                 
             except requests.exceptions.SSLError as e:
+                # Check if this is a transient SSL error (SSLEOFError) vs certificate error
+                error_str = str(e).lower()
+                is_transient = 'eof' in error_str or 'unexpected_eof' in error_str or 'connection' in error_str
+                
+                # For transient errors, allow more retries (increase max_retries for future attempts)
+                if is_transient and not seen_transient_ssl_error:
+                    seen_transient_ssl_error = True
+                    max_retries = 5  # Increase retries for transient SSL errors
+                    # Continue the loop with the new max_retries
+                
                 if batch_progress:
-                    print(f"{progress_prefix}SSL Error (attempt {attempt + 1}): {e}")
-                    print(f"{progress_prefix}Note: SSL verification is required for security. Please check your system's certificate store.")
-                else:
-                    print(f"SSL Error (attempt {attempt + 1}): {e}")
-                    print("Note: SSL verification is required for security. Please check your system's certificate store.")
-                if attempt < max_retries - 1:
-                    if batch_progress:
-                        print(f"{progress_prefix}Retrying in {retry_delay} seconds...")
+                    if is_transient:
+                        print(f"{progress_prefix}SSL Connection Error (attempt {attempt + 1}/{max_retries}): {e}")
+                        print(f"{progress_prefix}This appears to be a transient network issue. Retrying...")
                     else:
-                        print(f"Retrying in {retry_delay} seconds...")
-                    time.sleep(retry_delay)
+                        print(f"{progress_prefix}SSL Error (attempt {attempt + 1}/{max_retries}): {e}")
+                        print(f"{progress_prefix}Note: SSL verification is required for security. Please check your system's certificate store.")
+                else:
+                    if is_transient:
+                        print(f"SSL Connection Error (attempt {attempt + 1}/{max_retries}): {e}")
+                        print("This appears to be a transient network issue. Retrying...")
+                    else:
+                        print(f"SSL Error (attempt {attempt + 1}/{max_retries}): {e}")
+                        print("Note: SSL verification is required for security. Please check your system's certificate store.")
+                
+                if attempt < max_retries - 1:
+                    # For transient errors, use longer delays (network issues need more time)
+                    # For certificate errors, use shorter delays (won't help but faster failure)
+                    delay = retry_delay * 2 if is_transient else retry_delay
+                    if batch_progress:
+                        print(f"{progress_prefix}Retrying in {delay} seconds...")
+                    else:
+                        print(f"Retrying in {delay} seconds...")
+                    time.sleep(delay)
                     retry_delay *= 2  # Exponential backoff
+                    attempt += 1
+                    continue  # Continue to next iteration
                 else:
                     # SSL errors should not fall back to HTTP for security reasons
                     if batch_progress:
-                        print(f"{progress_prefix}SSL verification failed. Please check your system's SSL certificates.")
+                        if is_transient:
+                            print(f"{progress_prefix}SSL connection failed after {max_retries} attempts. This may be a network issue.")
+                        else:
+                            print(f"{progress_prefix}SSL verification failed. Please check your system's SSL certificates.")
                     else:
-                        print("SSL verification failed. Please check your system's SSL certificates.")
+                        if is_transient:
+                            print(f"SSL connection failed after {max_retries} attempts. This may be a network issue.")
+                        else:
+                            print("SSL verification failed. Please check your system's SSL certificates.")
                     return None
                     
             except requests.exceptions.ConnectionError as e:
@@ -107,6 +150,8 @@ class MusicBrainzClient:
                         print(f"Retrying in {retry_delay} seconds...")
                     time.sleep(retry_delay)
                     retry_delay *= 2
+                    attempt += 1
+                    continue  # Continue to next iteration
                 else:
                     if batch_progress:
                         print(f"{progress_prefix}All connection retry attempts failed, trying HTTP fallback...")
@@ -484,9 +529,13 @@ class MusicBrainzClient:
                             album = release.get('title', '')
                             release_date = release.get('date', '')
                             
-                            # If release date is missing, try to get it from release-group
-                            if not release_date and release_group.get('first-release-date'):
-                                release_date = release_group.get('first-release-date')
+                            # Get original release date from release-group
+                            original_release_date = None
+                            if release_group:
+                                original_release_date = release_group.get('first-release-date')
+                                # If release date is missing, use original release date as fallback
+                                if not release_date and original_release_date:
+                                    release_date = original_release_date
                             
                             # Apply year filter if specified
                             if year:
@@ -506,6 +555,7 @@ class MusicBrainzClient:
                                 artist=release_artist,  # Compilation artist
                                 album=album,
                                 release_date=release_date,
+                                original_release_date=original_release_date,
                                 genre=None,
                                 release_type='Compilation' if release_type == 'Compilation' or 'Compilation' in secondary_types else release_type,
                                 mbid=release_mbid,
@@ -560,6 +610,7 @@ class MusicBrainzClient:
             releases = recording.get('releases', [])
             album = None
             release_date = None
+            original_release_date = None
             genre = None
             
             if releases:
@@ -567,11 +618,13 @@ class MusicBrainzClient:
                 album = release.get('title', '')
                 release_date = release.get('date', '')
                 
-                # If release date is missing, try to get it from release-group's first-release-date
-                if not release_date:
-                    release_group = release.get('release-group')
-                    if release_group and release_group.get('first-release-date'):
-                        release_date = release_group.get('first-release-date')
+                # Get original release date from release-group
+                release_group = release.get('release-group')
+                if release_group:
+                    original_release_date = release_group.get('first-release-date')
+                    # If release date is missing, use original release date as fallback
+                    if not release_date and original_release_date:
+                        release_date = original_release_date
                 
                 genre = release.get('genres', [])
                 if genre:
@@ -583,6 +636,7 @@ class MusicBrainzClient:
                 artist=artist,
                 album=album,
                 release_date=release_date,
+                original_release_date=original_release_date,
                 genre=genre,
                 mbid=mbid,
                 score=score,
@@ -609,6 +663,7 @@ class MusicBrainzClient:
             
             # Get release type from release-group
             release_type = None
+            original_release_date = None
             release_group = release.get('release-group')
             if release_group:
                 release_type = release_group.get('primary-type')
@@ -618,9 +673,13 @@ class MusicBrainzClient:
                     # If there are secondary types, prefer them (e.g., "Live" over "Album")
                     release_type = secondary_types[0] if secondary_types else release_type
                 
-                # If release date is missing, try to get it from release-group's first-release-date
-                if not release_date and release_group.get('first-release-date'):
-                    release_date = release_group.get('first-release-date')
+                # Always capture the original release date from release-group (first-release-date)
+                # This helps identify original releases vs re-releases
+                original_release_date = release_group.get('first-release-date')
+                
+                # If release date is missing, use original release date as fallback
+                if not release_date and original_release_date:
+                    release_date = original_release_date
             
             url = f"https://musicbrainz.org/release/{mbid}"
             
@@ -629,6 +688,7 @@ class MusicBrainzClient:
                 artist=artist,
                 album=album,
                 release_date=release_date,
+                original_release_date=original_release_date,
                 genre=None,  # Releases don't have genre in basic search
                 release_type=release_type,
                 mbid=mbid,

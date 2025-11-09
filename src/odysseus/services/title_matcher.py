@@ -11,13 +11,14 @@ class TitleMatcher:
     """Matches video titles to albums and tracks."""
     
     def _normalize_for_matching(self, text: str) -> str:
-        """Normalize text for matching (lowercase, remove special chars, etc.)."""
+        """Normalize text for matching (lowercase, remove special chars, Unicode combining chars, etc.)."""
         if not text:
             return ""
-        # Convert to lowercase and remove common special characters
-        normalized = text.lower()
-        # Remove common punctuation and special characters
-        normalized = normalized.replace("'", "").replace("'", "").replace('"', '').replace('"', '')
+        # Use the proper normalization function that handles Unicode combining characters
+        # This removes characters like ̲ (combining low line) from "P̲ink Flo̲yd"
+        normalized = normalize_string(text)
+        # Remove common punctuation and special characters (beyond what normalize_string does)
+        normalized = normalized.replace("'", "").replace('"', '')
         normalized = normalized.replace("&", "and").replace("+", "and")
         # Remove extra spaces
         normalized = ' '.join(normalized.split())
@@ -166,9 +167,12 @@ class TitleMatcher:
         # First, try exact phrase match (most reliable)
         # Check if the full normalized album title appears as a phrase in the video title
         if album_normalized in video_normalized:
-            # If year is provided, require it to match (strict check for versioned albums)
+            # If year is provided, check if it matches (flexible matching for year)
             if release_year:
-                year_in_title = release_year in video_title
+                # Normalize video title for year matching (handles Unicode combining chars)
+                video_for_year_check = normalize_string(video_title)
+                # Check if year appears in normalized title (handles cases like "wall1979" or "wall 1979")
+                year_in_title = release_year in video_for_year_check
                 if version_suffix:
                     # For versioned albums, year match is required to distinguish versions
                     if not year_in_title:
@@ -177,31 +181,37 @@ class TitleMatcher:
                 # (some videos don't include year in title)
             return True
         
-        # If exact phrase not found, check word-by-word with stricter requirements
+        # If exact phrase not found, check word-by-word with flexible matching
         album_words = [w for w in album_normalized.split() if len(w) > 1]  # Include 2+ char words
         if not album_words:
             # If album title is very short, require exact match
             return album_normalized in video_normalized
         
-        # For word-by-word matching, require at least 90% of words (stricter than before)
-        # This helps avoid matching similar album names
+        # For word-by-word matching, be more flexible with common variations
+        # Handle cases like "Gate" vs "Gates", "At" vs "At The", etc.
         matching_words = sum(1 for word in album_words if word in video_normalized)
         word_match_ratio = matching_words / len(album_words) if album_words else 0
         
-        # Require at least 90% word match (was 70%)
-        if word_match_ratio < 0.9:
+        # Require at least 80% word match (more flexible for typos/variations)
+        # This handles cases like "The Piper At The Gate Of Dawn" vs "The Piper at the Gates of Dawn"
+        if word_match_ratio < 0.8:
             return False
         
-        # Additional check: ensure all "important" words (3+ chars) are present
-        important_words = [w for w in album_words if len(w) >= 3]
+        # Additional check: ensure all "important" words (4+ chars) are present
+        # Use 4+ chars to avoid false positives with short words like "at", "the", "of"
+        important_words = [w for w in album_words if len(w) >= 4]
         if important_words:
             important_matches = sum(1 for word in important_words if word in video_normalized)
-            if important_matches < len(important_words):
-                return False  # Missing important words
+            # Allow 1 missing important word for typos/variations (e.g., "Gate" vs "Gates")
+            if important_matches < len(important_words) - 1:
+                return False  # Missing too many important words
         
         # If year is provided, make it required for versioned albums
         if release_year:
-            year_in_title = release_year in video_title
+            # Normalize video title for year matching (handles Unicode combining chars)
+            video_for_year_check = normalize_string(video_title)
+            # Check if year appears in normalized title (handles cases like "wall1979" or "wall 1979")
+            year_in_title = release_year in video_for_year_check
             if version_suffix:
                 # For versioned albums, year match is required
                 if not year_in_title:
