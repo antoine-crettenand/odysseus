@@ -327,7 +327,7 @@ class MetadataMerger:
         try:
             # Try to import mutagen for metadata writing
             from mutagen import File as MutagenFile
-            from mutagen.id3 import APIC, TIT2, TPE1, TALB, TYER, TCON, TRCK, ID3NoHeaderError
+            from mutagen.id3 import APIC, TIT2, TPE1, TPE2, TALB, TYER, TCON, TRCK, TCMP, ID3NoHeaderError
             
             # Convert to Path if it's a string
             if isinstance(file_path, str):
@@ -354,6 +354,8 @@ class MetadataMerger:
                         audio_file.tags['TIT2'] = TIT2(encoding=3, text=self.final_metadata.title)
                     if self.final_metadata.artist:
                         audio_file.tags['TPE1'] = TPE1(encoding=3, text=self.final_metadata.artist)
+                    if self.final_metadata.album_artist:
+                        audio_file.tags['TPE2'] = TPE2(encoding=3, text=self.final_metadata.album_artist)
                     if self.final_metadata.album:
                         audio_file.tags['TALB'] = TALB(encoding=3, text=self.final_metadata.album)
                     if self.final_metadata.year:
@@ -367,6 +369,10 @@ class MetadataMerger:
                         else:
                             track_str = str(self.final_metadata.track_number)
                         audio_file.tags['TRCK'] = TRCK(encoding=3, text=track_str)
+                    # Compilation flag for iTunes (TCMP tag)
+                    if self.final_metadata.compilation is not None:
+                        # TCMP should be "1" for compilations, "0" or absent for non-compilations
+                        audio_file.tags['TCMP'] = TCMP(encoding=3, text="1" if self.final_metadata.compilation else "0")
                 except Exception as e:
                     logger.warning(f"Error setting ID3 tags: {e}")
                     # Fallback to simple assignment
@@ -374,6 +380,9 @@ class MetadataMerger:
                         audio_file['title'] = self.final_metadata.title
                     if self.final_metadata.artist:
                         audio_file['artist'] = self.final_metadata.artist
+                    if self.final_metadata.album_artist:
+                        audio_file['albumartist'] = self.final_metadata.album_artist
+                        audio_file['TPE2'] = self.final_metadata.album_artist
                     if self.final_metadata.album:
                         audio_file['album'] = self.final_metadata.album
                     if self.final_metadata.year:
@@ -387,12 +396,17 @@ class MetadataMerger:
                         else:
                             track_str = str(self.final_metadata.track_number)
                         audio_file['TRCK'] = track_str
+                    # Compilation flag for iTunes (TCMP tag)
+                    if self.final_metadata.compilation is not None:
+                        audio_file['TCMP'] = "1" if self.final_metadata.compilation else "0"
             else:
                 # For other formats, use simple assignment
                 if self.final_metadata.title:
                     audio_file['title'] = self.final_metadata.title
                 if self.final_metadata.artist:
                     audio_file['artist'] = self.final_metadata.artist
+                if self.final_metadata.album_artist:
+                    audio_file['albumartist'] = self.final_metadata.album_artist
                 if self.final_metadata.album:
                     audio_file['album'] = self.final_metadata.album
                 if self.final_metadata.year:
@@ -408,6 +422,10 @@ class MetadataMerger:
                     # Try common tag names for track number
                     audio_file['tracknumber'] = track_str
                     audio_file['TRCK'] = track_str
+                # Compilation flag for iTunes (for non-MP3 formats)
+                if self.final_metadata.compilation is not None:
+                    audio_file['compilation'] = "1" if self.final_metadata.compilation else "0"
+                    audio_file['TCMP'] = "1" if self.final_metadata.compilation else "0"
             
             # Apply cover art if available
             if self.final_metadata.cover_art_data:

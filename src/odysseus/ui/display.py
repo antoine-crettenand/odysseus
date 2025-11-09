@@ -71,7 +71,7 @@ class DisplayManager:
         
         table.add_column("#", style="bold white", width=4, justify="center")
         table.add_column("Title", style="white", width=30)
-        table.add_column("Artist", style="green", width=25)
+        table.add_column("Artist", style="green", width=30, no_wrap=False)  # Increased width for collaborative artists
         table.add_column("Album", style="yellow", width=25, no_wrap=False)
         table.add_column("Type", style="magenta", width=12, justify="center")
         table.add_column("Release Date", style="cyan", width=12, justify="center")
@@ -194,7 +194,15 @@ class DisplayManager:
         
         for track in release_info.tracks:
             duration = track.duration or "—"
-            artist = track.artist if track.artist != release_info.artist else ""
+            # Show track artist if it's different from release artist, or if track artist exists
+            # This handles cases where tracks have collaborative artists that match the release artist
+            if track.artist and track.artist != release_info.artist:
+                artist = track.artist
+            elif track.artist:
+                # Track artist matches release artist - show it anyway for clarity
+                artist = track.artist
+            else:
+                artist = ""
             
             table.add_row(
                 str(track.position),

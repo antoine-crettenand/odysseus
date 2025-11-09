@@ -55,6 +55,7 @@ class AudioMetadata:
     mood: Optional[str] = None
     cover_art_url: Optional[str] = None
     cover_art_data: Optional[bytes] = None
+    compilation: Optional[bool] = None  # For iTunes compilation detection (TCMP tag)
     source: str = "unknown"
     
     def __post_init__(self):

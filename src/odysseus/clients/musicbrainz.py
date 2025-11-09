@@ -612,11 +612,9 @@ class MusicBrainzClient:
             score = release.get('score', 0)
             release_date = release.get('date', '')
             
-            # Get artist information
+            # Get artist information (properly handle collaborative artists)
             artist_credits = release.get('artist-credit', [])
-            artist = ''
-            if artist_credits:
-                artist = artist_credits[0].get('name', '')
+            artist = self._parse_artist_credit(artist_credits)
             
             # Get release type from release-group
             release_type = None
@@ -650,6 +648,70 @@ class MusicBrainzClient:
         
         return results
     
+    def _parse_artist_credit(self, artist_credits: List[Dict[str, Any]]) -> str:
+        """
+        Parse MusicBrainz artist-credit array to build full artist name.
+        
+        Handles collaborative artists with join phrases (e.g., "Artist A & Artist B").
+        Format: [
+            {"artist": {"name": "Artist A"}},
+            {"name": " & "},  // join phrase
+            {"artist": {"name": "Artist B"}}
+        ]
+        Or simplified: [{"name": "Artist A"}, {"name": " & "}, {"name": "Artist B"}]
+        """
+        if not artist_credits:
+            return ''
+        
+        artist_names = []
+        join_phrases = []
+        artist_parts = []
+        
+        for i, credit in enumerate(artist_credits):
+            # If it has an "artist" key, it's an artist entry
+            if 'artist' in credit:
+                artist_obj = credit['artist']
+                if isinstance(artist_obj, dict) and 'name' in artist_obj:
+                    artist_name = artist_obj['name']
+                    artist_names.append(artist_name)
+                    artist_parts.append(artist_name)
+                elif isinstance(artist_obj, str):
+                    artist_names.append(artist_obj)
+                    artist_parts.append(artist_obj)
+            # If it only has a "name" key, it could be either:
+            # 1. A join phrase (like " & " or " and ")
+            # 2. A simplified artist name (legacy format)
+            elif 'name' in credit:
+                name = credit['name']
+                # Check if this looks like a join phrase (contains &, and, or is mostly spaces/punctuation)
+                name_stripped = name.strip()
+                is_join_phrase = (
+                    not name_stripped or  # Empty or just whitespace
+                    name_stripped in ['&', 'and', 'And', 'AND'] or
+                    '&' in name_stripped or
+                    (len(name_stripped) <= 5 and not any(c.isalnum() for c in name_stripped))  # Just punctuation/spaces
+                )
+                
+                if is_join_phrase:
+                    # Normalize join phrase to " & " if it's just "&" or similar
+                    if name_stripped in ['&', 'and', 'And', 'AND']:
+                        join_phrases.append(' & ')
+                        artist_parts.append(' & ')
+                    else:
+                        join_phrases.append(name)
+                        artist_parts.append(name)
+                else:
+                    # This is an artist name (legacy format)
+                    artist_names.append(name)
+                    artist_parts.append(name)
+        
+        # If we have multiple artists but no join phrases, add " & " between them
+        if len(artist_names) > 1 and not join_phrases:
+            # Rebuild with " & " separators
+            return ' & '.join(artist_names)
+        
+        return ''.join(artist_parts) if artist_parts else ''
+    
     def _parse_release_info(self, data: Dict[str, Any]) -> Optional[ReleaseInfo]:
         """Parse detailed release information."""
         try:
@@ -658,11 +720,9 @@ class MusicBrainzClient:
             mbid = data.get('id', '')
             release_date = data.get('date', '')
             
-            # Get artist information
+            # Get artist information (properly handle collaborative artists)
             artist_credits = data.get('artist-credit', [])
-            artist = ''
-            if artist_credits:
-                artist = artist_credits[0].get('name', '')
+            artist = self._parse_artist_credit(artist_credits)
             
             # Get genre information
             genres = data.get('genres', [])
@@ -701,11 +761,11 @@ class MusicBrainzClient:
                     track_title = recording.get('title', '')
                     track_mbid = recording.get('id', '')
                     
-                    # Get track artist (usually same as release artist)
+                    # Get track artist (properly handle collaborative artists)
                     track_artist_credits = recording.get('artist-credit', [])
                     track_artist = artist  # Default to release artist
                     if track_artist_credits:
-                        track_artist = track_artist_credits[0].get('name', artist)
+                        track_artist = self._parse_artist_credit(track_artist_credits) or artist
                     
                     # Get duration - check track-level length first, then recording-level
                     duration = None

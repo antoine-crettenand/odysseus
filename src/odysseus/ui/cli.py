@@ -13,7 +13,7 @@ from ..services.search_service import SearchService
 from ..services.download_service import DownloadService
 from ..services.metadata_service import MetadataService
 from ..ui.display import DisplayManager
-from ..ui.handlers import RecordingHandler, ReleaseHandler, DiscographyHandler, MetadataHandler
+from ..ui.handlers import RecordingHandler, ReleaseHandler, DiscographyHandler, MetadataHandler, SpotifyHandler
 from ..core.config import PROJECT_NAME, PROJECT_VERSION
 
 
@@ -51,6 +51,12 @@ class OdysseusCLI:
             self.metadata_service,
             self.display_manager
         )
+        self.spotify_handler = SpotifyHandler(
+            self.search_service,
+            self.download_service,
+            self.metadata_service,
+            self.display_manager
+        )
     
     def create_parser(self) -> argparse.ArgumentParser:
         """Create the argument parser."""
@@ -58,11 +64,12 @@ class OdysseusCLI:
             prog=PROJECT_NAME,
             description=f"{PROJECT_NAME} - Music Discovery Tool v{PROJECT_VERSION}",
             formatter_class=argparse.RawDescriptionHelpFormatter,
-            epilog="""
+            epilog=            """
 Examples:
   %(prog)s recording --title "Bohemian Rhapsody" --artist "Queen"
   %(prog)s release --album "Dark Side of the Moon" --artist "Pink Floyd"
   %(prog)s discography --artist "The Beatles" --year 1965
+  %(prog)s spotify --url "https://open.spotify.com/playlist/..."
   %(prog)s metadata /path/to/file.mp3 --album "Album Name" --artist "Artist Name"
   %(prog)s metadata /path/to/directory --album "Album Name" --artist "Artist Name"
             """
@@ -97,6 +104,12 @@ Examples:
             help='Browse artist discography and download selected releases'
         )
         self._add_discography_args(discography_parser)
+        
+        spotify_parser = subparsers.add_parser(
+            'spotify',
+            help='Parse Spotify playlist/album URL and download selected tracks'
+        )
+        self._add_spotify_args(spotify_parser)
         
         metadata_parser = subparsers.add_parser(
             'metadata',
@@ -211,6 +224,29 @@ Examples:
             help='Browse only, do not download'
         )
     
+    def _add_spotify_args(self, parser: argparse.ArgumentParser):
+        """Add arguments for Spotify mode."""
+        parser.add_argument(
+            '--url', '-u',
+            required=True,
+            help='Spotify playlist, album, or track URL'
+        )
+        parser.add_argument(
+            '--quality', '-q',
+            choices=['best', 'audio', 'worst'],
+            default='audio',
+            help='Download quality (default: audio)'
+        )
+        parser.add_argument(
+            '--tracks', '-k',
+            help='Comma-separated list of track numbers to download (e.g., 1,3,5)'
+        )
+        parser.add_argument(
+            '--no-download',
+            action='store_true',
+            help='Parse URL only, do not download'
+        )
+    
     def _add_metadata_args(self, parser: argparse.ArgumentParser):
         """Add arguments for metadata mode."""
         parser.add_argument(
@@ -291,6 +327,15 @@ Examples:
                     if not Confirm.ask("[bold]Go back to discography display?[/bold]", default=False):
                         break
                     self.display_manager.console.print()
+            elif parsed_args.mode == 'spotify':
+                self.spotify_handler.handle(
+                    url=parsed_args.url,
+                    quality=parsed_args.quality,
+                    tracks=parsed_args.tracks,
+                    no_download=parsed_args.no_download
+                )
+                # Exit after spotify - no search info for another spotify URL
+                sys.exit(0)
             elif parsed_args.mode == 'metadata':
                 self.metadata_handler.handle(
                     file_path=parsed_args.file,

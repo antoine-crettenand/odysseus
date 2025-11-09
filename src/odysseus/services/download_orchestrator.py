@@ -2,6 +2,7 @@
 Download orchestrator service for coordinating downloads.
 """
 
+import re
 import subprocess
 from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
@@ -28,6 +29,35 @@ class DownloadOrchestrator:
         self.metadata_service = metadata_service
         self.search_service = search_service
         self.display_manager = display_manager
+    
+    def _is_compilation(self, release_info: ReleaseInfo) -> bool:
+        """
+        Check if a release is a compilation (has multiple different artists).
+        
+        A compilation has different artists on different tracks.
+        A collaboration album has the same collaborating artists on all tracks.
+        
+        Returns True if there are at least 2 tracks with different artists.
+        """
+        if not release_info.tracks or len(release_info.tracks) < 2:
+            return False
+        
+        # Normalize artist names for comparison (case-insensitive, strip whitespace)
+        from ..utils.string_utils import normalize_string
+        artists = set()
+        for track in release_info.tracks:
+            artist = normalize_string(track.artist) if track.artist else ""
+            if artist:  # Only count non-empty artists
+                artists.add(artist)
+        
+        # If all tracks have the same artist (even if it's "Artist A & Artist B"),
+        # it's a collaboration album, not a compilation
+        if len(artists) == 1:
+            return False
+        
+        # If we have 2 or more different artists across tracks, it's a compilation
+        # This means different tracks have different artists (not just different artist names)
+        return len(artists) >= 2
     
     def download_recording(
         self,
@@ -187,7 +217,6 @@ class DownloadOrchestrator:
             'concert',
             'performance',
             'on stage',
-            'at ',
             'recorded live',
             'live session',
             'live recording',
@@ -208,9 +237,19 @@ class DownloadOrchestrator:
             'encore'
         ]
         
-        # Check for live keywords
+        # Keywords that need word boundary matching (to avoid false positives)
+        word_boundary_keywords = [
+            r'\bat\b',  # "at" as a standalone word (e.g., "Live at Red Rocks")
+        ]
+        
+        # Check for live keywords (simple substring match)
         for keyword in live_keywords:
             if keyword in title_lower:
+                return True
+        
+        # Check for word-boundary keywords (to avoid matching "at" in "heat", "cat", etc.)
+        for pattern in word_boundary_keywords:
+            if re.search(pattern, title_lower):
                 return True
         
         return False
@@ -701,9 +740,13 @@ class DownloadOrchestrator:
                 temp_dir.mkdir(exist_ok=True)
                 
                 # Create metadata for the full album download
+                # Use "Various Artists" for folder structure if this is a compilation
+                is_compilation = self._is_compilation(release_info)
+                folder_artist = "Various Artists" if is_compilation else release_info.artist
+                
                 album_metadata = {
                     'title': release_info.title,
-                    'artist': release_info.artist,
+                    'artist': folder_artist,  # Use "Various Artists" for folder structure in compilations
                     'album': release_info.title,
                     'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
                 }
@@ -813,6 +856,50 @@ class DownloadOrchestrator:
         if not silent:
             console.print("[yellow]⚠[/yellow] All full album videos failed. Trying next strategy...")
         return None, None
+    
+    def _are_titles_similar(self, track_title: str, album_title: str) -> bool:
+        """Check if track title is similar to album title."""
+        from ..utils.string_utils import normalize_string
+        
+        track_title_norm = normalize_string(track_title)
+        album_title_norm = normalize_string(album_title)
+        
+        return (
+            track_title_norm == album_title_norm or
+            track_title_norm in album_title_norm or
+            album_title_norm in track_title_norm or
+            # Check if they share significant words (at least 2 words in common)
+            len(set(track_title_norm.split()) & set(album_title_norm.split())) >= 2
+        )
+    
+    def _build_track_search_query(self, track: Track, release_info: ReleaseInfo) -> str:
+        """
+        Build an optimized YouTube search query for a track.
+        
+        When track title matches or is similar to album name, adds disambiguating terms
+        to improve search results and avoid interviews, live versions, etc.
+        """
+        # Check if track title is similar to album title
+        titles_similar = self._are_titles_similar(track.title, release_info.title)
+        
+        # Build base query
+        query_parts = [track.artist, track.title]
+        
+        # If titles are similar, add disambiguating terms
+        if titles_similar:
+            # Add "album" to help find the album version
+            query_parts.append("album")
+            
+            # Add year if available to make it more specific
+            if release_info.release_date:
+                year = release_info.release_date[:4] if len(release_info.release_date) >= 4 else None
+                if year and year.isdigit():
+                    query_parts.append(year)
+        
+        # Join query parts
+        search_query = " ".join(query_parts)
+        
+        return search_query
     
     def _match_playlist_video_to_track(
         self,
@@ -1192,14 +1279,19 @@ class DownloadOrchestrator:
                 
                 progress.update(task, description=f"[cyan]Downloading: {track.title}")
                 
-                # Search YouTube for this track (get multiple results to validate)
-                search_query = f"{track.artist} {track.title}"
+                # Build a better search query, especially when track title matches album name
+                search_query = self._build_track_search_query(track, release_info)
+                
+                # Check if we need more results (when track title is similar to album name)
+                titles_similar = self._are_titles_similar(track.title, release_info.title)
+                max_results = 10 if titles_similar else 5  # Get more results when titles are similar
+                
                 try:
                     videos = self.display_manager.show_loading_spinner(
                         f"Searching YouTube for: {track.title}",
                         self.search_service.search_youtube,
                         search_query,
-                        5  # Get up to 5 results to find a valid (non-live) one
+                        max_results
                     )
                     
                     if not videos:
@@ -1232,9 +1324,14 @@ class DownloadOrchestrator:
                         continue
                     
                     # Create metadata for download
+                    # Use "Various Artists" for folder structure if this is a compilation
+                    # but keep the actual track artist in metadata
+                    is_compilation = self._is_compilation(release_info)
+                    folder_artist = "Various Artists" if is_compilation else track.artist
+                    
                     metadata_dict = {
                         'title': track.title,
-                        'artist': track.artist,
+                        'artist': folder_artist,  # Use "Various Artists" for folder structure in compilations
                         'album': release_info.title,
                         'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
                         'track_number': track.position,

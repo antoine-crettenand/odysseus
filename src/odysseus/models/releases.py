@@ -26,6 +26,7 @@ class ReleaseInfo:
     release_type: Optional[str] = None  # e.g., "Album", "Single", "EP", "Compilation", "Live", etc.
     mbid: str = ""
     url: str = ""
+    cover_art_url: Optional[str] = None  # URL to cover art (e.g., from Spotify)
     tracks: List[Track] = None
     
     def __post_init__(self):
