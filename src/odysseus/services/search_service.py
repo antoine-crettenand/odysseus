@@ -677,6 +677,46 @@ class SearchService:
             'applause',
             'encore'
         ]
+        
+        # Known concert venues (these are strong indicators of live performances)
+        concert_venues = [
+            'red rocks',
+            'madison square garden',
+            'msg',
+            'royal albert hall',
+            'apollo theater',
+            'apollo theatre',
+            'fillmore',
+            'hollywood bowl',
+            'coachella',
+            'glastonbury',
+            'woodstock',
+            'monterey pop',
+            'newport folk',
+            'newport jazz',
+            'montreux jazz',
+            'blue note',
+            'village vanguard',
+            'ronnie scott\'s',
+            'ronnie scotts',
+            'troubadour',
+            'whisky a go go',
+            'cbgb',
+            'palladium',
+            'hammersmith',
+            'brixton academy',
+            'o2 arena',
+            'wembley',
+            'festival',
+            'festival de',
+            'rock in rio',
+            'lollapalooza',
+            'bonnaroo',
+            'sxsw',
+            'austin city limits',
+            'acoustic',
+            'acoustic session'
+        ]
         non_album_keywords = [
             'reaction', 'react', 'reacting', 'reacts', 'first reaction', 'first time listening',
             'review', 'album review', 'unboxing', 'reaction to', 'reacting to', 'my reaction',
@@ -707,7 +747,24 @@ class SearchService:
                             is_live = True
                             break
                     if not is_live:
+                        # Check for "at [venue]" pattern (e.g., "at Red Rocks", "at Madison Square Garden")
+                        # This catches live performances at venues even without the word "live"
+                        if re.search(r'\bat\s+[a-z\s]+(?:rocks|garden|hall|theater|theatre|bowl|arena|festival|acoustic)', title_lower):
+                            is_live = True
+                    if not is_live:
+                        # Check for known concert venues
+                        is_live = any(venue in title_lower for venue in concert_venues)
+                    if not is_live:
+                        # Check for standalone "live" word (e.g., "PHANTOM ISLAND LIVE")
+                        if re.search(r'\blive\b', title_lower):
+                            is_live = True
+                    if not is_live:
                         is_live = any(keyword in title_lower for keyword in live_keywords_simple)
+                    if not is_live:
+                        # Check for year patterns that suggest live recordings (e.g., "at Red Rocks 2024")
+                        # Pattern: "at [venue] [year]" where year is 4 digits
+                        if re.search(r'\bat\s+[a-z\s]+\s+\d{4}\b', title_lower):
+                            is_live = True
                     
                     is_non_album = any(keyword in title_lower for keyword in non_album_keywords)
                     if is_live or is_non_album:

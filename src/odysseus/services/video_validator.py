@@ -110,6 +110,46 @@ class VideoValidator:
             'encore'
         ]
         
+        # Known concert venues (these are strong indicators of live performances)
+        concert_venues = [
+            'red rocks',
+            'madison square garden',
+            'msg',
+            'royal albert hall',
+            'apollo theater',
+            'apollo theatre',
+            'fillmore',
+            'hollywood bowl',
+            'coachella',
+            'glastonbury',
+            'woodstock',
+            'monterey pop',
+            'newport folk',
+            'newport jazz',
+            'montreux jazz',
+            'blue note',
+            'village vanguard',
+            'ronnie scott\'s',
+            'ronnie scotts',
+            'troubadour',
+            'whisky a go go',
+            'cbgb',
+            'palladium',
+            'hammersmith',
+            'brixton academy',
+            'o2 arena',
+            'wembley',
+            'festival',
+            'festival de',
+            'rock in rio',
+            'lollapalooza',
+            'bonnaroo',
+            'sxsw',
+            'austin city limits',
+            'acoustic',
+            'acoustic session'
+        ]
+        
         # Check for word-boundary keywords first (more specific, avoids false positives)
         for pattern in word_boundary_keywords:
             if re.search(pattern, title_lower):
@@ -121,9 +161,52 @@ class VideoValidator:
                         continue  # Skip this match, it's a remastered studio album
                 return True
         
+        # Check for "at [venue]" pattern (e.g., "at Red Rocks", "at Madison Square Garden")
+        # This catches live performances at venues even without the word "live"
+        if re.search(r'\bat\s+[a-z\s]+(?:rocks|garden|hall|theater|theatre|bowl|arena|festival|acoustic)', title_lower):
+            # Additional check: if it's a remaster, be more careful
+            if has_remaster_keyword and ('full album' in title_lower or 'complete album' in title_lower):
+                pass  # Skip this match, it's a remastered studio album
+            else:
+                return True
+        
+        # Check for known concert venues
+        for venue in concert_venues:
+            if venue in title_lower:
+                # Additional check: if it's a remaster, be more careful
+                if has_remaster_keyword and ('full album' in title_lower or 'complete album' in title_lower):
+                    pass  # Skip this match, it's a remastered studio album
+                else:
+                    return True
+        
+        # Check for standalone "live" word (e.g., "PHANTOM ISLAND LIVE" or "ALBUM TITLE LIVE")
+        # This catches cases where "live" appears as a standalone word in the title
+        if re.search(r'\blive\b', title_lower):
+            # Additional check: if it's a remaster with "live" in context, be more careful
+            if has_remaster_keyword:
+                # "live" in remaster context might be false positive - check if it's actually about live performance
+                # If it says "remaster" and "full album", it's not live (it's a remastered studio album)
+                if 'full album' in title_lower or 'complete album' in title_lower:
+                    pass  # Skip this match, it's a remastered studio album, not a live version
+                else:
+                    # Has remaster keyword but no "full album" - likely still a live version
+                    return True
+            else:
+                # No remaster keyword, so "live" definitely indicates a live version
+                return True
+        
         # Check for simple keywords (substring match is fine for these)
         for keyword in simple_keywords:
             if keyword in title_lower:
+                return True
+        
+        # Check for year patterns that suggest live recordings (e.g., "at Red Rocks 2024")
+        # Pattern: "at [venue] [year]" or "[venue] [year]" where year is 4 digits
+        if re.search(r'\bat\s+[a-z\s]+\s+\d{4}\b', title_lower):
+            # Additional check: if it's a remaster, be more careful
+            if has_remaster_keyword and ('full album' in title_lower or 'complete album' in title_lower):
+                pass  # Skip this match, it's a remastered studio album
+            else:
                 return True
         
         return False

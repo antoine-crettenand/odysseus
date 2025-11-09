@@ -445,6 +445,16 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                             )
                             
                             try:
+                                # Display download result first
+                                if not silent:
+                                    if file_existed:
+                                        # For existing files, just show skipped message (no need for full display)
+                                        console.print(f"[yellow]⏭[/yellow] Skipped existing track: {track.title}")
+                                    else:
+                                        # For new downloads, show the full download confirmation
+                                        self.display_manager.display_track_download_result(
+                                            track.title, True, str(split_file), file_existed=False
+                                        )
                                 # Apply metadata with cover art to each split file
                                 self.metadata_service.apply_metadata_with_cover_art(
                                     split_file,
@@ -456,8 +466,6 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                                 )
                                 if file_existed:
                                     skipped_count += 1
-                                    if not silent:
-                                        console.print(f"[yellow]⏭[/yellow] Skipped existing track: {track.title}")
                                 else:
                                     downloaded_count += 1
                             except Exception as e:

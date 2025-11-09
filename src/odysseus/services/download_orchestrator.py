@@ -328,14 +328,15 @@ class DownloadOrchestrator:
                     progress.update(task, description=f"[cyan]Applying metadata: {track.title}")
                     
                     try:
-                        # Apply metadata with cover art
-                        self.metadata_service.apply_metadata_with_cover_art(
-                            file_path, track, release_info, console, cover_art_data=cover_art_data, path_manager=self.path_manager
-                        )
+                        # Display result first (file already exists, so it will show "Use existing file")
                         if not silent:
                             self.display_manager.display_track_download_result(
                                 track.title, True, str(file_path), file_existed=True
                             )
+                        # Apply metadata with cover art
+                        self.metadata_service.apply_metadata_with_cover_art(
+                            file_path, track, release_info, console, cover_art_data=cover_art_data, path_manager=self.path_manager
+                        )
                         processed_count += 1
                     except Exception as e:
                         if not silent:

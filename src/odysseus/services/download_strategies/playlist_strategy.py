@@ -325,6 +325,11 @@ class PlaylistStrategy(BaseDownloadStrategy):
                                     pass
                             
                             if downloaded_path:
+                                # Display download confirmation first
+                                if not silent:
+                                    self.display_manager.display_track_download_result(
+                                        track.title, True, str(downloaded_path), file_existed=file_existed
+                                    )
                                 # Apply metadata (including cover art) to all downloaded files
                                 # Cover art was already fetched earlier, so we can apply it to all tracks
                                 try:
@@ -335,10 +340,6 @@ class PlaylistStrategy(BaseDownloadStrategy):
                                     # If metadata application fails, still count as downloaded but log the error
                                     if not silent and console:
                                         console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
-                                if not silent:
-                                    self.display_manager.display_track_download_result(
-                                        track.title, True, str(downloaded_path), file_existed=file_existed
-                                    )
                                 downloaded_count += 1
                             else:
                                 if not silent:
