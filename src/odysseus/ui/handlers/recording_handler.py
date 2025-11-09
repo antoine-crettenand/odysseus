@@ -126,11 +126,26 @@ class RecordingHandler(BaseHandler):
                 
                 break
             
+            # Extract year from release_date (which can be a string like "1964" or "2017-06-08")
+            release_year = None
+            if selected_song.release_date:
+                try:
+                    # Try to extract year from date string (e.g., "1964" or "2017-06-08")
+                    if isinstance(selected_song.release_date, str):
+                        # Extract first 4 digits (year)
+                        year_str = selected_song.release_date[:4]
+                        if year_str.isdigit():
+                            release_year = int(year_str)
+                    elif isinstance(selected_song.release_date, int):
+                        release_year = selected_song.release_date
+                except (ValueError, AttributeError):
+                    release_year = None
+            
             song_data = SongData(
                 title=selected_song.title,
                 artist=selected_song.artist,
                 album=selected_song.album,
-                release_year=selected_song.release_date
+                release_year=release_year
             )
             
             self.download_orchestrator.download_recording(

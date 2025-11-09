@@ -9,6 +9,8 @@ import sys
 import re
 import json
 import threading
+import time
+import random
 from queue import Queue
 from typing import Dict, Any, Optional, List, Callable, Tuple
 from pathlib import Path
@@ -30,6 +32,13 @@ class YouTubeDownloader:
         self.audio_format = DOWNLOAD_CONFIG["AUDIO_FORMAT"]
         self.timeout = DOWNLOAD_CONFIG["TIMEOUT"]
         
+        # Retry configuration for robust downloads
+        self.max_retries = 5  # Increased retries for connection errors
+        self.base_retry_delay = 2.0  # Base delay in seconds
+        self.max_retry_delay = 60.0  # Maximum delay between retries
+        self.max_total_time = 1800  # Maximum total time for all retries (30 minutes)
+        self.yt_dlp_update_attempted = False  # Track if we've tried updating
+        
         # Check and update yt-dlp if needed
         self._ensure_yt_dlp_updated()
     
@@ -37,7 +46,7 @@ class YouTubeDownloader:
         """Ensure yt-dlp is up to date to avoid 403 errors."""
         try:
             print("Checking yt-dlp version...")
-            result = subprocess.run(['yt-dlp', '--version'], capture_output=True, text=True)
+            result = subprocess.run(['yt-dlp', '--version'], capture_output=True, text=True, timeout=10)
             if result.returncode == 0:
                 current_version = result.stdout.strip()
                 print(f"Current yt-dlp version: {current_version}")
@@ -45,29 +54,397 @@ class YouTubeDownloader:
                 # Try to update yt-dlp
                 print("Updating yt-dlp to latest version...")
                 update_result = subprocess.run(['pip3', 'install', '--upgrade', 'yt-dlp'], 
-                                             capture_output=True, text=True)
+                                             capture_output=True, text=True, timeout=120)
                 if update_result.returncode == 0:
                     print("✅ yt-dlp updated successfully")
                 else:
                     print("⚠️  Could not update yt-dlp, continuing with current version")
             else:
                 print("❌ yt-dlp not found, please install it with: pip install yt-dlp")
+        except subprocess.TimeoutExpired:
+            print("⚠️  yt-dlp version check timed out, continuing...")
         except Exception as e:
             print(f"⚠️  Could not check yt-dlp version: {e}")
     
-    def update_yt_dlp(self) -> bool:
-        """Manually update yt-dlp."""
+    def _force_update_yt_dlp(self) -> bool:
+        """Force update yt-dlp (used when signature extraction fails)."""
+        if self.yt_dlp_update_attempted:
+            return False  # Already tried updating
+        
+        self.yt_dlp_update_attempted = True
         try:
-            print("Updating yt-dlp...")
-            result = subprocess.run(['pip3', 'install', '--upgrade', 'yt-dlp'], 
-                                  capture_output=True, text=True, check=True)
+            print("🔄 Signature extraction failed - updating yt-dlp...")
+            print("   This usually happens when YouTube changes their API. Updating yt-dlp should fix it.")
+            print("   Note: Known issue as of 2025 - yt-dlp team is working on fixes.")
+            result = subprocess.run(
+                ['pip3', 'install', '--upgrade', '--no-cache-dir', 'yt-dlp'], 
+                capture_output=True, 
+                text=True, 
+                timeout=180,
+                check=True
+            )
             print("✅ yt-dlp updated successfully")
+            
+            # Check if update was successful and get version
+            try:
+                version_result = subprocess.run(
+                    ['yt-dlp', '--version'], 
+                    capture_output=True, 
+                    text=True, 
+                    timeout=10
+                )
+                if version_result.returncode == 0:
+                    version = version_result.stdout.strip()
+                    print(f"   Updated to version: {version}")
+                    # Warn about future Deno requirement if version is recent
+                    if version >= "2025.10.22":
+                        print("   ⚠️  Note: Future versions may require Deno (JavaScript runtime) for YouTube downloads")
+            except:
+                pass
+            
+            print("   Retrying download with updated version...")
+            # Reset flag after successful update to allow future updates
+            time.sleep(2)  # Give yt-dlp a moment to be ready
+            return True
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, Exception) as e:
+            print(f"⚠️  Could not automatically update yt-dlp: {e}")
+            print("   You may need to manually update yt-dlp:")
+            print("   Run: pip3 install --upgrade yt-dlp")
+            print("   Or: pip install --upgrade yt-dlp")
+            print("   Or use: yt-dlp -U (if installed via standalone)")
+            print("   Known issues: Check https://github.com/yt-dlp/yt-dlp/issues for updates")
+            return False
+    
+    def _is_retryable_error(self, error_output: str) -> Tuple[bool, Optional[str]]:
+        """
+        Determine if an error is retryable and return error type.
+        
+        Returns:
+            Tuple of (is_retryable, error_type)
+        """
+        error_lower = error_output.lower()
+        
+        # HTTP 403/401 errors - retryable (often bot detection or access denied)
+        # Check this first as it's a common YouTube blocking mechanism
+        # yt-dlp may format these as: "HTTP Error 403", "403 Forbidden", "Unauthorized", etc.
+        if any(keyword in error_lower for keyword in [
+            '403', '401', 'forbidden', 'unauthorized', 'access denied',
+            'http error 403', 'http error 401', 'http 403', 'http 401',
+            'error 403', 'error 401', 'status code 403', 'status code 401'
+        ]):
+            return True, 'bot_detection'  # Treat as bot detection to trigger cookie usage
+        
+        # Connection errors - definitely retryable
+        if any(keyword in error_lower for keyword in [
+            'connection', 'network', 'timeout', 'timed out', 
+            'unreachable', 'refused', 'reset', 'broken pipe'
+        ]):
+            return True, 'connection'
+        
+        # Signature extraction errors - retryable after update
+        if any(keyword in error_lower for keyword in [
+            'signature extraction', 'signature', 'player', 'extractor',
+            'unable to extract', 'could not extract'
+        ]):
+            return True, 'signature'
+        
+        # Rate limiting - retryable with backoff
+        if any(keyword in error_lower for keyword in [
+            'rate limit', '429', 'too many requests', 'quota'
+        ]):
+            return True, 'rate_limit'
+        
+        # HTTP 5xx errors - retryable
+        if any(keyword in error_lower for keyword in [
+            '500', '502', '503', '504', 'internal server error',
+            'bad gateway', 'service unavailable', 'gateway timeout'
+        ]):
+            return True, 'server_error'
+        
+        # Bot detection - might be retryable with cookies
+        if any(keyword in error_lower for keyword in [
+            'bot', 'sign in to confirm', 'captcha', 'verify'
+        ]):
+            return True, 'bot_detection'
+        
+        # Video unavailable - not retryable
+        if any(keyword in error_lower for keyword in [
+            'video unavailable', 'private video', 'deleted', 'removed',
+            'not available', 'does not exist'
+        ]):
+            return False, 'unavailable'
+        
+        # Default: retryable for unknown errors
+        return True, 'unknown'
+    
+    def _calculate_retry_delay(self, attempt: int, error_type: str) -> float:
+        """
+        Calculate retry delay with exponential backoff and jitter.
+        
+        Args:
+            attempt: Current attempt number (0-indexed)
+            error_type: Type of error encountered
+            
+        Returns:
+            Delay in seconds
+        """
+        # Base exponential backoff
+        delay = min(
+            self.base_retry_delay * (2 ** attempt),
+            self.max_retry_delay
+        )
+        
+        # Adjust delay based on error type
+        if error_type == 'rate_limit':
+            delay = max(delay, 10.0)  # Longer delay for rate limits
+        elif error_type == 'signature':
+            delay = max(delay, 3.0)  # Shorter delay for signature errors
+        elif error_type == 'connection':
+            delay = max(delay, 5.0)  # Medium delay for connection errors
+        
+        # Add jitter (random 0-20% of delay) to prevent thundering herd
+        jitter = random.uniform(0, delay * 0.2)
+        return delay + jitter
+    
+    def _run_yt_dlp_with_retry(
+        self,
+        cmd: List[str],
+        operation_name: str = "yt-dlp operation",
+        progress_callback: Optional[Callable] = None,
+        quiet: bool = False
+    ) -> subprocess.CompletedProcess:
+        """
+        Run yt-dlp command with comprehensive retry logic and error handling.
+        
+        This method implements:
+        - Exponential backoff with jitter
+        - Automatic yt-dlp updates on signature errors
+        - Connection error recovery
+        - Rate limit handling
+        - Timeout protection (per attempt and total time limit)
+        
+        Args:
+            cmd: Command to run
+            operation_name: Name of operation for error messages
+            progress_callback: Optional callback for progress updates
+            quiet: If True, suppress non-critical output
+            
+        Returns:
+            CompletedProcess object
+            
+        Raises:
+            subprocess.CalledProcessError: If all retries fail
+            subprocess.TimeoutExpired: If operation times out
+        """
+        last_error = None
+        last_error_type = None
+        signature_error_occurred = False
+        start_time = time.time()  # Track total elapsed time
+        
+        for attempt in range(self.max_retries):
+            # Check if we've exceeded maximum total time
+            elapsed_time = time.time() - start_time
+            if elapsed_time > self.max_total_time:
+                if not quiet:
+                    total_minutes = self.max_total_time / 60
+                    print(f"⏱️  Maximum total time ({total_minutes:.0f} minutes) exceeded for {operation_name}")
+                    print(f"   Elapsed time: {elapsed_time / 60:.1f} minutes")
+                    print(f"   This download is taking too long and may be stuck.")
+                raise subprocess.TimeoutExpired(
+                    cmd, 
+                    self.max_total_time, 
+                    f"Total time limit ({self.max_total_time}s) exceeded after {attempt} attempts"
+                )
+            try:
+                # If this is a retry, add a delay
+                if attempt > 0:
+                    if last_error_type:
+                        delay = self._calculate_retry_delay(attempt - 1, last_error_type)
+                        if not quiet:
+                            error_type_msg = {
+                                'connection': 'Connection error',
+                                'signature': 'Signature extraction error',
+                                'rate_limit': 'Rate limit',
+                                'server_error': 'Server error',
+                                'timeout': 'Timeout',
+                                'bot_detection': 'Bot detection',
+                                'unknown': 'Error'
+                            }.get(last_error_type, 'Error')
+                            print(f"⏳ {error_type_msg} - Retrying {operation_name} in {delay:.1f} seconds... (attempt {attempt + 1}/{self.max_retries})")
+                        time.sleep(delay)
+                    
+                    # If signature error occurred, try updating yt-dlp
+                    if signature_error_occurred and not self.yt_dlp_update_attempted:
+                        self._force_update_yt_dlp()
+                
+                # Run the command
+                if progress_callback:
+                    # Use progress tracking method with timeout tracking
+                    result = self._run_download_with_progress(
+                        cmd, 
+                        progress_callback,
+                        start_time=start_time,
+                        max_total_time=self.max_total_time
+                    )
+                    # Check return code for progress-based downloads
+                    if result.returncode != 0:
+                        # Download failed - raise exception to trigger retry
+                        error_output = result.stderr if result.stderr else (result.stdout if result.stdout else f"yt-dlp exited with code {result.returncode}")
+                        raise subprocess.CalledProcessError(result.returncode, cmd, stderr=error_output, output=result.stdout)
+                else:
+                    # Use standard subprocess
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=self.timeout,
+                        check=True
+                    )
+                
+                # Success - reset update flag for future errors
+                if signature_error_occurred:
+                    self.yt_dlp_update_attempted = False
+                
+                return result
+                
+            except subprocess.TimeoutExpired as e:
+                last_error = str(e)
+                last_error_type = 'timeout'
+                elapsed_time = time.time() - start_time
+                
+                if attempt < self.max_retries - 1:
+                    # Check if we have enough time left for another retry
+                    if elapsed_time + self.timeout + self.max_retry_delay > self.max_total_time:
+                        if not quiet:
+                            print(f"⏱️  Timeout on {operation_name} (attempt {attempt + 1})")
+                            print(f"   Elapsed time: {elapsed_time / 60:.1f} minutes")
+                            print(f"   Not enough time remaining for another retry (max {self.max_total_time / 60:.0f} minutes)")
+                        raise
+                    
+                    if not quiet:
+                        remaining_time = (self.max_total_time - elapsed_time) / 60
+                        print(f"⏱️  Timeout on {operation_name} (attempt {attempt + 1}/{self.max_retries})")
+                        print(f"   Elapsed: {elapsed_time / 60:.1f} min, Remaining: {remaining_time:.1f} min")
+                        print(f"   Will retry...")
+                    continue
+                else:
+                    if not quiet:
+                        print(f"⏱️  Timeout on {operation_name} after {self.max_retries} attempts")
+                        print(f"   Total elapsed time: {elapsed_time / 60:.1f} minutes")
+                        print(f"   Maximum allowed time: {self.max_total_time / 60:.0f} minutes")
+                        print(f"   This download may be stuck or your connection is too slow.")
+                        print(f"   Try again later or check your internet connection.")
+                    raise
+                    
+            except subprocess.CalledProcessError as e:
+                error_output = e.stderr if e.stderr else (e.stdout if e.stdout else str(e))
+                last_error = error_output
+                
+                # Check if error is retryable
+                is_retryable, error_type = self._is_retryable_error(error_output)
+                last_error_type = error_type
+                
+                # Track signature errors for update
+                if error_type == 'signature':
+                    signature_error_occurred = True
+                
+                if not is_retryable:
+                    # Non-retryable error - fail immediately
+                    if not quiet:
+                        print(f"❌ {operation_name} failed with non-retryable error: {error_output[:200]}")
+                    raise
+                
+                # Retryable error - continue to next attempt
+                if attempt < self.max_retries - 1:
+                    if not quiet:
+                        error_preview = error_output[:150].replace('\n', ' ')
+                        print(f"⚠️  {operation_name} failed ({error_type}): {error_preview}")
+                        if error_type == 'signature' and not signature_error_occurred:
+                            print("   This usually means yt-dlp needs to be updated. Will try updating...")
+                        print(f"   Retrying... (attempt {attempt + 2}/{self.max_retries})")
+                    continue
+                else:
+                    # Last attempt failed
+                    if not quiet:
+                        print(f"❌ {operation_name} failed after {self.max_retries} attempts")
+                        if error_type == 'signature':
+                            print("\n💡 Signature extraction errors usually mean yt-dlp needs updating.")
+                            print("   Try manually updating: pip3 install --upgrade yt-dlp")
+                            print("   Or if that doesn't work, sign in to YouTube in Chrome/Firefox")
+                            print("   to use cookies (helps bypass YouTube's bot detection)")
+                        elif error_type == 'bot_detection':
+                            # Check if it was a 403/401 error
+                            if any(keyword in (last_error or '').lower() for keyword in ['403', '401', 'forbidden', 'unauthorized']):
+                                print("\n💡 YouTube blocked the request (403/401 Forbidden).")
+                                print("   This usually means YouTube detected automated access.")
+                                print("   Solutions:")
+                                print("   1. Sign in to YouTube in Chrome or Firefox")
+                                print("   2. The system will automatically use your browser cookies")
+                                print("   3. Or wait a few minutes and try again")
+                            else:
+                                print("\n💡 YouTube bot detection triggered.")
+                                print("   Try signing in to YouTube in Chrome/Firefox to use cookies")
+                                print("   (helps bypass YouTube's bot detection)")
+                    raise
+                    
+            except Exception as e:
+                # Unexpected error - treat as retryable
+                last_error = str(e)
+                last_error_type = 'unknown'
+                if attempt < self.max_retries - 1:
+                    if not quiet:
+                        print(f"⚠️  Unexpected error in {operation_name}: {e}")
+                        print(f"   Retrying... (attempt {attempt + 2}/{self.max_retries})")
+                    time.sleep(self._calculate_retry_delay(attempt, 'unknown'))
+                    continue
+                else:
+                    raise
+        
+        # Should never reach here, but just in case
+        raise subprocess.CalledProcessError(
+            1,
+            cmd,
+            stderr=last_error or "Unknown error",
+            output=""
+        )
+    
+    def update_yt_dlp(self) -> bool:
+        """
+        Manually update yt-dlp.
+        
+        Call this method if you're experiencing signature extraction errors
+        and the automatic update didn't work.
+        
+        Returns:
+            True if update was successful, False otherwise
+        """
+        try:
+            print("🔄 Updating yt-dlp...")
+            # Reset the update flag to allow manual updates
+            self.yt_dlp_update_attempted = False
+            result = subprocess.run(
+                ['pip3', 'install', '--upgrade', '--no-cache-dir', 'yt-dlp'], 
+                capture_output=True, 
+                text=True, 
+                timeout=180,
+                check=True
+            )
+            print("✅ yt-dlp updated successfully")
+            print("   You can now retry your download.")
             return True
         except subprocess.CalledProcessError as e:
             print(f"❌ Failed to update yt-dlp: {e}")
+            print("   Try running manually: pip3 install --upgrade yt-dlp")
+            return False
+        except subprocess.TimeoutExpired:
+            print("❌ Update timed out. Try running manually: pip3 install --upgrade yt-dlp")
+            return False
+        except Exception as e:
+            print(f"❌ Unexpected error updating yt-dlp: {e}")
             return False
     
     def get_video_info(self, url: str) -> Optional[Dict[str, Any]]:
+        """Get video information with robust retry logic."""
         try:
             cmd = [
                 'yt-dlp',
@@ -76,14 +453,58 @@ class YouTubeDownloader:
                 url
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            # Add cookies if available to avoid bot detection
+            cookie_browser = self._get_cookie_browser()
+            if cookie_browser:
+                cmd.extend(['--cookies-from-browser', cookie_browser])
+            
+            # Use robust retry wrapper
+            result = self._run_yt_dlp_with_retry(
+                cmd,
+                operation_name=f"getting video info for {url[:50]}",
+                quiet=True
+            )
             return json.loads(result.stdout)  # Parse JSON output
             
         except subprocess.CalledProcessError as e:
-            print(f"Error getting video info: {e}")
+            error_output = e.stderr if e.stderr else (e.stdout if e.stdout else str(e))
+            # Check for bot detection error
+            if "Sign in to confirm you're not a bot" in error_output or "bot" in error_output.lower():
+                cookie_browser = self._get_cookie_browser()
+                if not cookie_browser:
+                    print("Error: YouTube is blocking requests. Please:")
+                    print("  1. Sign in to YouTube in Chrome or Firefox")
+                    print("  2. Or export cookies manually: yt-dlp --cookies-from-browser chrome --cookies cookies.txt")
+                    print("  3. Then use: yt-dlp --cookies cookies.txt ...")
+                else:
+                    print(f"Error: YouTube bot detection triggered. Trying with {cookie_browser} cookies...")
+                    # Retry with cookies explicitly using retry wrapper
+                    try:
+                        cmd = [
+                            'yt-dlp',
+                            '--dump-json',
+                            '--no-download',
+                            '--cookies-from-browser', cookie_browser,
+                            url
+                        ]
+                        result = self._run_yt_dlp_with_retry(
+                            cmd,
+                            operation_name=f"getting video info with cookies for {url[:50]}",
+                            quiet=True
+                        )
+                        return json.loads(result.stdout)
+                    except Exception:
+                        pass
+            print(f"Error getting video info: {error_output[:200]}")
+            return None
+        except FileNotFoundError:
+            print("Error: yt-dlp command not found. Please install it with: pip install yt-dlp")
+            return None
+        except subprocess.TimeoutExpired:
+            print("Error: yt-dlp command timed out while getting video info")
             return None
         except Exception as e:
-            print(f"Unexpected error: {e}")
+            print(f"Unexpected error getting video info: {e}")
             return None
     
     def get_video_chapters(self, url: str) -> Optional[List[Dict[str, Any]]]:
@@ -257,6 +678,8 @@ class YouTubeDownloader:
         
         Args:
             metadata: Optional metadata dictionary
+                - If 'is_playlist' is True, creates Playlists/[playlist_name]/ structure
+                - Otherwise, creates Artist/Album (year)/ structure
             
         Returns:
             Path object for the organized directory
@@ -267,7 +690,32 @@ class YouTubeDownloader:
         if not metadata:
             return self.download_dir
         
-        # Extract metadata fields
+        # Check if this is a playlist (e.g., from Spotify)
+        is_playlist = metadata.get('is_playlist', False)
+        if is_playlist:
+            playlist_name = metadata.get('playlist_name', metadata.get('album', 'Unknown Playlist'))
+            playlist_name = self._sanitize_filename(playlist_name)
+            
+            # Create folder structure: Playlists/[Playlist Name]/
+            organized_dir = self.download_dir / "Playlists" / playlist_name
+            
+            # Security: Resolve the path and ensure it's still within download_dir
+            try:
+                resolved_path = organized_dir.resolve()
+                download_dir_resolved = self.download_dir.resolve()
+                
+                # Check that the resolved path is within the download directory
+                if not str(resolved_path).startswith(str(download_dir_resolved)):
+                    # Fallback to download_dir if path traversal detected
+                    return self.download_dir
+            except (OSError, ValueError):
+                # If resolution fails, fallback to download_dir
+                return self.download_dir
+            
+            organized_dir.mkdir(parents=True, exist_ok=True)
+            return organized_dir
+        
+        # Extract metadata fields for regular album structure
         artist = metadata.get('artist', 'Unknown Artist')
         album = metadata.get('album', 'Unknown Album')
         year = metadata.get('year')
@@ -359,6 +807,20 @@ class YouTubeDownloader:
             
             line_lower = line.lower()
             
+            # Detect different stages of the download process
+            status = 'downloading'
+            if '[extractaudio]' in line_lower or 'extracting' in line_lower:
+                status = 'extracting'
+            elif '[mergeformat]' in line_lower or 'merging' in line_lower:
+                status = 'merging'
+            elif '[download]' in line_lower:
+                status = 'downloading'
+            elif '[info]' in line_lower:
+                if 'downloading' in line_lower:
+                    status = 'downloading'
+                elif 'extracting' in line_lower:
+                    status = 'extracting'
+            
             # Check if this is a download progress line
             # yt-dlp can output progress in various formats
             # Also check for extractor progress: [extractor] or [ExtractAudio]
@@ -367,6 +829,17 @@ class YouTubeDownloader:
                 if '%' in line and ('downloading' in line_lower or 'of' in line_lower):
                     pass  # Might be a progress line
                 else:
+                    # Check if it's a status message we should report
+                    if any(keyword in line_lower for keyword in ['extracting', 'merging', 'downloading', 'converting']):
+                        # Return a status update even without percentage
+                        if progress_callback:
+                            progress_callback({
+                                'percent': 0,
+                                'status': status,
+                                'speed': None,
+                                'eta': None,
+                                'message': line.strip()
+                            })
                     return None
             
             # Extract percentage
@@ -438,7 +911,7 @@ class YouTubeDownloader:
                 'speed_bytes_per_sec': speed_bytes_per_sec,
                 'eta': eta_str,
                 'eta_seconds': eta_seconds,
-                'status': 'downloading' if percent < 100 else 'completed'
+                'status': status if percent < 100 else 'completed'
             }
             
             if progress_callback:
@@ -452,9 +925,15 @@ class YouTubeDownloader:
         
         return None
     
-    def _run_download_with_progress(self, cmd: List[str], progress_callback: Optional[Callable] = None) -> subprocess.CompletedProcess:
+    def _run_download_with_progress(self, cmd: List[str], progress_callback: Optional[Callable] = None, start_time: Optional[float] = None, max_total_time: Optional[float] = None) -> subprocess.CompletedProcess:
         """
         Run download command with progress tracking and timeout protection.
+        
+        Args:
+            cmd: Command to run
+            progress_callback: Optional callback for progress updates
+            start_time: Optional start time for total timeout tracking
+            max_total_time: Optional maximum total time limit
         """
         import time
         
@@ -482,7 +961,7 @@ class YouTubeDownloader:
         
         # Read output from both stdout and stderr
         output_lines = []
-        start_time = time.time()
+        download_start_time = time.time()  # Start time for this download attempt
         timeout = self.timeout
         
         # Use threading to read from both streams simultaneously
@@ -519,20 +998,41 @@ class YouTubeDownloader:
         stderr_done = False
         last_activity_time = time.time()
         no_activity_timeout = 60  # If no output for 60 seconds, consider it stuck
+        download_start_time = time.time()
+        
+        stdout_lines = []
+        stderr_lines = []
         
         while not (stdout_done and stderr_done):
-            # Check for overall timeout
-            elapsed = time.time() - start_time
+            current_time = time.time()
+            
+            # Check for overall timeout (per attempt)
+            elapsed = current_time - download_start_time
             if elapsed > timeout:
                 process.kill()
-                raise subprocess.TimeoutExpired(cmd, timeout, "Download operation timed out")
+                raise subprocess.TimeoutExpired(cmd, timeout, f"Download operation timed out after {timeout}s")
+            
+            # Check for maximum total time (across all retries)
+            if start_time and max_total_time:
+                total_elapsed = current_time - start_time
+                if total_elapsed > max_total_time:
+                    process.kill()
+                    raise subprocess.TimeoutExpired(
+                        cmd, 
+                        max_total_time, 
+                        f"Maximum total time ({max_total_time}s) exceeded. Download may be stuck."
+                    )
             
             # Check for no activity timeout (process might be stuck)
-            if time.time() - last_activity_time > no_activity_timeout:
+            if current_time - last_activity_time > no_activity_timeout:
                 # Check if process is still running
                 if process.poll() is None:
                     process.kill()
-                    raise subprocess.TimeoutExpired(cmd, no_activity_timeout, "Download operation appears stuck (no output)")
+                    raise subprocess.TimeoutExpired(
+                        cmd, 
+                        no_activity_timeout, 
+                        f"Download operation appears stuck (no output for {no_activity_timeout}s)"
+                    )
             
             # Check stdout
             if not stdout_done:
@@ -541,6 +1041,7 @@ class YouTubeDownloader:
                     if item_type == 'done':
                         stdout_done = True
                     else:
+                        stdout_lines.append(line)
                         output_lines.append(line)
                         last_activity_time = time.time()  # Update activity time
                         # Some progress might be in stdout too
@@ -556,6 +1057,7 @@ class YouTubeDownloader:
                     if item_type == 'done':
                         stderr_done = True
                     else:
+                        stderr_lines.append(line)
                         output_lines.append(line)
                         last_activity_time = time.time()  # Update activity time
                         # Progress output is usually in stderr
@@ -575,12 +1077,12 @@ class YouTubeDownloader:
             process.kill()
             raise subprocess.TimeoutExpired(cmd, 10, "Process did not terminate after streams closed")
         
-        # Create CompletedProcess-like object
+        # Create CompletedProcess-like object with proper stdout/stderr separation
         result = subprocess.CompletedProcess(
             modified_cmd,
             process.returncode,
-            stdout='\n'.join(output_lines),
-            stderr=''
+            stdout='\n'.join(stdout_lines),
+            stderr='\n'.join(stderr_lines)
         )
         
         return result
@@ -718,15 +1220,27 @@ class YouTubeDownloader:
                         if f.is_file() and f.name not in system_files
                     }
                     
-                    # Run download with progress tracking if callback provided
-                    if progress_callback:
-                        result = self._run_download_with_progress(cmd, progress_callback)
-                        # Check return code for progress-based downloads
-                        if result.returncode != 0:
-                            # Download failed - continue to next strategy
-                            continue
-                    else:
-                        result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=self.timeout)
+                    # Run download with robust retry logic
+                    last_error = None
+                    try:
+                        # Use robust retry wrapper (handles both progress and non-progress cases)
+                        result = self._run_yt_dlp_with_retry(
+                            cmd,
+                            operation_name=f"download (strategy {i})",
+                            progress_callback=progress_callback,
+                            quiet=quiet
+                        )
+                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                        # Download failed - capture error message
+                        last_error = e.stderr if hasattr(e, 'stderr') and e.stderr else (e.stdout if hasattr(e, 'stdout') and e.stdout else str(e))
+                        last_strategy_error = last_error
+                        # Continue to next strategy
+                        continue
+                    except Exception as e:
+                        # Unexpected error
+                        last_error = str(e)
+                        last_strategy_error = last_error
+                        continue
                     
                     # Find the downloaded file - look for NEW files that weren't there before
                     # Find all audio files in the directory, excluding system files
@@ -745,8 +1259,17 @@ class YouTubeDownloader:
                     
                     # CRITICAL: Only return NEW files - if no new files, download failed
                     if not new_files:
-                        # No new files created - download likely failed
+                        # No new files created - download likely failed even though returncode was 0
+                        # This can happen if yt-dlp reports success but doesn't actually download
                         downloaded_file = None
+                        # Capture error from stderr if available
+                        if progress_callback and hasattr(result, 'stderr') and result.stderr:
+                            last_error = result.stderr
+                        elif not progress_callback and hasattr(result, 'stderr') and result.stderr:
+                            last_error = result.stderr
+                        else:
+                            last_error = "Download completed but no file was created (yt-dlp may have failed silently)"
+                        last_strategy_error = last_error
                     else:
                         # We have new files - find the one matching our expected pattern
                         if metadata and metadata.get('title'):
@@ -796,10 +1319,59 @@ class YouTubeDownloader:
                             except ImportError:
                                 print(f"{Colors.green('✅')} Success with strategy {i}")
                         return downloaded_file, False
+                    else:
+                        # No file was downloaded even though returncode was 0
+                        # Log this and continue to next strategy
+                        if not quiet and not progress_callback:
+                            error_msg = last_error or "Download completed but no file was created"
+                            try:
+                                from rich.console import Console
+                                console = Console()
+                                console.print(f"[bold red]✗[/bold red] Strategy {i} failed: {error_msg[:200]}")
+                                if i < len(strategies):
+                                    console.print("[blue]ℹ[/blue] Trying next strategy...")
+                            except ImportError:
+                                print(f"{Colors.red('❌')} Strategy {i} failed: {error_msg[:200]}")
+                                if i < len(strategies):
+                                    print(f"{Colors.blue('ℹ')} Trying next strategy...")
+                        # Continue to next strategy
+                        if i < len(strategies):
+                            continue
+                        else:
+                            # Last strategy failed - raise exception with last error
+                            final_error = last_error or last_strategy_error or "All strategies completed but no files were downloaded"
+                            raise Exception(f"All download strategies failed. Last error: {final_error[:200]}")
                         
-                except subprocess.CalledProcessError as e:
-                    error_msg = e.stderr if e.stderr else str(e)
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                    error_msg = e.stderr if hasattr(e, 'stderr') and e.stderr else (e.stdout if hasattr(e, 'stdout') and e.stdout else str(e))
+                    last_strategy_error = error_msg
                     # Only print error messages if not in quiet mode and no progress callback
+                    if not quiet and not progress_callback:
+                        try:
+                            from rich.console import Console
+                            console = Console()
+                            console.print(f"[bold red]✗[/bold red] Strategy {i} failed: {error_msg[:200]}")
+                            if i < len(strategies):
+                                console.print("[blue]ℹ[/blue] Trying next strategy...")
+                        except ImportError:
+                            print(f"{Colors.red('❌')} Strategy {i} failed: {error_msg[:200]}")
+                            if i < len(strategies):
+                                print(f"{Colors.blue('ℹ')} Trying next strategy...")
+                    
+                    if i < len(strategies):
+                        continue
+                    else:
+                        raise Exception(f"All download strategies failed. Last error: {error_msg[:200]}")
+                except FileNotFoundError as e:
+                    # Check which command was not found
+                    cmd_name = str(e).split("'")[1] if "'" in str(e) else "command"
+                    if "youtube-dl" in cmd_name:
+                        install_cmd = "pip install youtube-dl"
+                    elif "yt-dlp" in cmd_name:
+                        install_cmd = "pip install yt-dlp"
+                    else:
+                        install_cmd = f"pip install {cmd_name}"
+                    error_msg = f"{cmd_name} not found. Please install it with: {install_cmd}"
                     if not quiet and not progress_callback:
                         try:
                             from rich.console import Console
@@ -815,10 +1387,23 @@ class YouTubeDownloader:
                     if i < len(strategies):
                         continue
                     else:
-                        raise Exception(f"All download strategies failed. Last error: {e}")
+                        raise Exception(f"All download strategies failed. {error_msg}")
                 
         except Exception as e:
-            raise Exception(f"Error downloading video: {e}") from e
+            # Extract more meaningful error message
+            error_str = str(e)
+            if "No such file or directory" in error_str:
+                # Try to extract the command name
+                if "youtube-dl" in error_str:
+                    error_str = "youtube-dl not found. Please install yt-dlp with: pip install yt-dlp"
+                elif "yt-dlp" in error_str:
+                    error_str = "yt-dlp not found. Please install it with: pip install yt-dlp"
+            raise Exception(f"Error downloading video: {error_str}") from e
+        
+        # If we get here, all strategies were tried but none succeeded
+        # This should not happen (should raise exception above), but just in case:
+        final_error = last_strategy_error if 'last_strategy_error' in locals() else "All strategies failed without creating files"
+        raise Exception(f"All download strategies failed. {final_error[:200]}")
     
     def _has_chrome_cookies(self) -> bool:
         """Check if Chrome cookies database exists."""
@@ -836,6 +1421,30 @@ class YouTubeDownloader:
                 return True
         return False
     
+    def _has_firefox_cookies(self) -> bool:
+        """Check if Firefox cookies database exists."""
+        firefox_cookie_paths = [
+            Path.home() / "Library/Application Support/Firefox/Profiles",
+            Path.home() / ".mozilla/firefox",
+            Path.home() / "AppData/Roaming/Mozilla/Firefox/Profiles",
+        ]
+        
+        for path in firefox_cookie_paths:
+            if path.exists() and path.is_dir():
+                # Check if there are any profile directories
+                profiles = [p for p in path.iterdir() if p.is_dir()]
+                if profiles:
+                    return True
+        return False
+    
+    def _get_cookie_browser(self) -> Optional[str]:
+        """Get the first available browser for cookies (Chrome preferred, then Firefox)."""
+        if self._has_chrome_cookies():
+            return 'chrome'
+        elif self._has_firefox_cookies():
+            return 'firefox'
+        return None
+    
     def _build_command_strategy_1(self, url: str, quality: str, audio_only: bool, output_template: str) -> List[str]:
         """Strategy 1: Basic yt-dlp with user agent, optionally with cookies if available"""
         cmd = [
@@ -847,9 +1456,10 @@ class YouTubeDownloader:
             '--extractor-args', 'youtube:player_client=web'
         ]
         
-        # Only add cookies if Chrome is available
-        if self._has_chrome_cookies():
-            cmd.extend(['--cookies-from-browser', 'chrome'])
+        # Add cookies if available to avoid bot detection
+        cookie_browser = self._get_cookie_browser()
+        if cookie_browser:
+            cmd.extend(['--cookies-from-browser', cookie_browser])
         
         if audio_only:
             cmd.extend([
@@ -872,9 +1482,18 @@ class YouTubeDownloader:
             '--age-limit', '0',  # Bypass age restriction
             '--no-check-certificate',
             '--ignore-errors',
-            '--extractor-args', 'youtube:player_client=android,web',
             '--no-warnings'
         ]
+        
+        # Add cookies if available to avoid bot detection
+        cookie_browser = self._get_cookie_browser()
+        if cookie_browser:
+            cmd.extend(['--cookies-from-browser', cookie_browser])
+            # Use only cookie-compatible clients when cookies are present
+            cmd.extend(['--extractor-args', 'youtube:player_client=web'])
+        else:
+            # Use android,web when no cookies (android doesn't support cookies)
+            cmd.extend(['--extractor-args', 'youtube:player_client=android,web'])
         
         if audio_only:
             cmd.extend([
@@ -897,9 +1516,18 @@ class YouTubeDownloader:
             '--referer', 'https://www.youtube.com/',
             '--no-check-certificate',
             '--ignore-errors',
-            '--extractor-args', 'youtube:player_client=ios',
             '--no-warnings'
         ]
+        
+        # Add cookies if available to avoid bot detection
+        cookie_browser = self._get_cookie_browser()
+        if cookie_browser:
+            cmd.extend(['--cookies-from-browser', cookie_browser])
+            # Use only cookie-compatible clients when cookies are present
+            cmd.extend(['--extractor-args', 'youtube:player_client=web'])
+        else:
+            # Use ios when no cookies (ios doesn't support cookies)
+            cmd.extend(['--extractor-args', 'youtube:player_client=ios'])
         
         if audio_only:
             cmd.extend([
@@ -919,16 +1547,24 @@ class YouTubeDownloader:
         cmd = [
             'yt-dlp',
             '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:91.0) Gecko/20100101 Firefox/91.0',
-            '--cookies-from-browser', 'firefox',
             '--no-check-certificate',
             '--ignore-errors',
-            '--extractor-args', 'youtube:player_client=android_music,web',
             '--sleep-requests', '1',  # Add delay between requests
             '--sleep-interval', '1',
             '--max-sleep-interval', '5',
             '--no-warnings',
             '--retries', '3'
         ]
+        
+        # Check if Firefox cookies are available
+        cookie_browser = self._get_cookie_browser()
+        if cookie_browser == 'firefox' or self._has_firefox_cookies():
+            cmd.extend(['--cookies-from-browser', 'firefox'])
+            # Use only cookie-compatible clients when cookies are present
+            cmd.extend(['--extractor-args', 'youtube:player_client=web'])
+        else:
+            # Use android_music,web when no cookies (android_music doesn't support cookies)
+            cmd.extend(['--extractor-args', 'youtube:player_client=android_music,web'])
         
         if audio_only:
             cmd.extend([
@@ -944,15 +1580,24 @@ class YouTubeDownloader:
         return cmd
     
     def _build_command_strategy_5(self, url: str, quality: str, audio_only: bool, output_template: str) -> List[str]:
-        """Strategy 5: Use youtube-dl as fallback with different options"""
+        """Strategy 5: Use yt-dlp with minimal options as last resort"""
         cmd = [
-            'youtube-dl',  # Try youtube-dl instead of yt-dlp
+            'yt-dlp',  # Use yt-dlp (not youtube-dl) for consistency
             '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             '--no-check-certificate',
             '--ignore-errors',
-            '--no-warnings',
-            '--extractor-args', 'youtube:player_client=android,web'
+            '--no-warnings'
         ]
+        
+        # Add cookies if available to avoid bot detection
+        cookie_browser = self._get_cookie_browser()
+        if cookie_browser:
+            cmd.extend(['--cookies-from-browser', cookie_browser])
+            # Use only cookie-compatible clients when cookies are present
+            cmd.extend(['--extractor-args', 'youtube:player_client=web'])
+        else:
+            # Use android,web when no cookies (android doesn't support cookies)
+            cmd.extend(['--extractor-args', 'youtube:player_client=android,web'])
         
         if audio_only:
             cmd.extend([
@@ -1005,7 +1650,12 @@ class YouTubeDownloader:
                 url
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
+            # Use robust retry wrapper
+            result = self._run_yt_dlp_with_retry(
+                cmd,
+                operation_name=f"getting playlist info for {url[:50]}",
+                quiet=True
+            )
             
             # Parse JSON lines (one per video)
             videos = []
@@ -1060,7 +1710,12 @@ class YouTubeDownloader:
                 url
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=120)
+            # Use robust retry wrapper
+            result = self._run_yt_dlp_with_retry(
+                cmd,
+                operation_name=f"getting playlist info (fallback) for {url[:50]}",
+                quiet=True
+            )
             
             videos = []
             output_lines = result.stdout.strip().split('\n')
