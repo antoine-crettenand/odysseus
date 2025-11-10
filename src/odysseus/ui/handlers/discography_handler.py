@@ -130,6 +130,11 @@ class DiscographyHandler(BaseHandler):
                 total_failed += 1
                 continue
             
+            # Fallback: If release_info.artist is empty, use the artist from release
+            # This handles cases where the API response doesn't include artist-credit data
+            if not release_info.artist and release.artist:
+                release_info.artist = release.artist
+            
             # Validate that the fetched release matches what we expected
             # Normalize strings for comparison (case-insensitive, ignore whitespace)
             from ...utils.string_utils import normalize_string

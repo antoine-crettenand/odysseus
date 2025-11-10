@@ -254,7 +254,7 @@ class DownloadOrchestrator:
             summary_content += f"[yellow]⏭[/yellow] Skipped existing: [yellow]{skipped}[/yellow] track{'s' if skipped != 1 else ''}\n"
         if failed > 0:
             summary_content += f"[bold red]✗[/bold red] Failed downloads: [red]{failed}[/red] track{'s' if failed != 1 else ''}\n"
-        summary_content += f"[blue]ℹ[/blue] Total tracks processed: [cyan]{total}[/cyan]"
+        summary_content += f"[dim blue]ℹ[/dim blue] [dim]Total tracks processed: {total}[/dim]"
         
         from rich.panel import Panel
         from rich import box
@@ -292,7 +292,8 @@ class DownloadOrchestrator:
         # If all tracks exist, only apply metadata
         if not missing_track_numbers:
             if not silent:
-                console.print("[cyan]ℹ[/cyan] All tracks already exist. Applying metadata only...")
+                styling = self.display_manager.styling
+                styling.log_info("All tracks already exist. Applying metadata only...")
                 console.print()
             
             # Apply metadata to all existing tracks
@@ -335,7 +336,7 @@ class DownloadOrchestrator:
                             )
                         # Apply metadata with cover art
                         self.metadata_service.apply_metadata_with_cover_art(
-                            file_path, track, release_info, console, cover_art_data=cover_art_data, path_manager=self.path_manager
+                            file_path, track, release_info, console, cover_art_data=cover_art_data, path_manager=self.path_manager, file_existed_before=True
                         )
                         processed_count += 1
                     except Exception as e:
@@ -351,7 +352,7 @@ class DownloadOrchestrator:
                 summary_content = f"[bold green]✓[/bold green] Successfully processed: [green]{processed_count}[/green] track{'s' if processed_count != 1 else ''}\n"
                 if failed_count > 0:
                     summary_content += f"[bold red]✗[/bold red] Failed: [red]{failed_count}[/red] track{'s' if failed_count != 1 else ''}\n"
-                summary_content += f"[blue]ℹ[/blue] Total tracks processed: [cyan]{len(track_numbers)}[/cyan]"
+                summary_content += f"[dim blue]ℹ[/dim blue] [dim]Total tracks processed: {len(track_numbers)}[/dim]"
                 
                 from rich.panel import Panel
                 from rich import box
@@ -380,7 +381,8 @@ class DownloadOrchestrator:
             if missing_track_titles:
                 missing_info += f" ({', '.join(missing_track_titles)})"
             
-            console.print(f"[cyan]ℹ[/cyan] Found {len(existing_tracks)} existing track{'s' if len(existing_tracks) != 1 else ''}. Downloading {missing_info}...")
+            styling = self.display_manager.styling
+            styling.log_info(f"Found {len(existing_tracks)} existing track{'s' if len(existing_tracks) != 1 else ''}. Downloading {missing_info}...")
             
             # Display which tracks were found (helpful for debugging ordering issues)
             tracks_with_wrong_numbers = []
@@ -484,7 +486,8 @@ class DownloadOrchestrator:
             return
         
         if not silent:
-            console.print(f"[cyan]📝 Applying metadata to {len(existing_tracks)} existing track{'s' if len(existing_tracks) != 1 else ''}...[/cyan]")
+            styling = self.display_manager.styling
+            styling.log_info(f"Applying metadata to {len(existing_tracks)} existing track{'s' if len(existing_tracks) != 1 else ''}...", icon="📝")
         
         for track_num, file_path in existing_tracks.items():
             # Find the track
@@ -498,15 +501,16 @@ class DownloadOrchestrator:
                 continue
             
             try:
-                # Apply metadata with cover art
-                self.metadata_service.apply_metadata_with_cover_art(
-                    file_path, track, release_info, console if not silent else None,
-                    cover_art_data=cover_art_data, path_manager=self.path_manager
-                )
+                # Display result first
                 if not silent:
                     self.display_manager.display_track_download_result(
                         track.title, True, str(file_path), file_existed=True
                     )
+                # Apply metadata with cover art
+                self.metadata_service.apply_metadata_with_cover_art(
+                    file_path, track, release_info, console if not silent else None,
+                    cover_art_data=cover_art_data, path_manager=self.path_manager, file_existed_before=True
+                )
             except Exception as e:
                 if not silent:
                     console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")

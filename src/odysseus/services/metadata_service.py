@@ -68,7 +68,8 @@ class MetadataService:
         release_info: ReleaseInfo,
         console=None,
         cover_art_data: Optional[bytes] = None,
-        path_manager=None
+        path_manager=None,
+        file_existed_before: bool = False
     ):
         """
         Apply metadata including cover art to downloaded file.
@@ -82,6 +83,8 @@ class MetadataService:
                            It's recommended to fetch cover art once per release and pass it
                            to all tracks in that release for better performance.
             path_manager: Optional PathManager instance for compilation detection
+            file_existed_before: If True, indicates the file existed before download.
+                                Used to prevent deletion of existing files on errors.
         """
         try:
             # Check if this is a compilation
@@ -137,40 +140,36 @@ class MetadataService:
             success = self.merger.apply_metadata_to_file(str(file_path), quiet=True)
             
             if success:
-                # Check if actual file duration differs significantly from expected duration
-                if track.duration and console:
-                    from ..utils.file_duration_reader import (
-                        get_file_duration, 
-                        format_duration, 
-                        parse_duration_to_seconds
-                    )
-                    
-                    actual_duration_seconds = get_file_duration(file_path)
-                    expected_duration_seconds = parse_duration_to_seconds(track.duration)
-                    
-                    if actual_duration_seconds and expected_duration_seconds:
-                        # Check if durations differ by more than 5% (allowing for small differences)
-                        diff_ratio = abs(actual_duration_seconds - expected_duration_seconds) / expected_duration_seconds
-                        if diff_ratio > 0.05:  # More than 5% difference
-                            actual_duration_str = format_duration(actual_duration_seconds)
-                            console.print(
-                                f"[yellow]⚠[/yellow] Duration mismatch for [white]{track.title}[/white]: "
-                                f"expected [cyan]{track.duration}[/cyan], "
-                                f"actual [cyan]{actual_duration_str}[/cyan] "
-                                f"(difference: {diff_ratio*100:.1f}%)"
-                            )
-                
                 if console:
                     if cover_art_fetched:
-                        console.print(f"[blue]ℹ[/blue] ✓ Applied metadata and cover art to [white]{track.title}[/white]")
+                        console.print(f"[dim blue]ℹ[/dim blue] [dim]✓ Applied metadata and cover art to {track.title}[/dim]")
                     else:
-                        console.print(f"[blue]ℹ[/blue] ✓ Applied metadata to [white]{track.title}[/white]")
+                        console.print(f"[dim blue]ℹ[/dim blue] [dim]✓ Applied metadata to {track.title}[/dim]")
             else:
                 if console:
                     console.print(f"[yellow]⚠[/yellow] Failed to apply metadata to {track.title}")
+                # Only delete file if it didn't exist before and metadata application failed
+                if not file_existed_before:
+                    try:
+                        if file_path.exists():
+                            file_path.unlink()
+                            if console:
+                                console.print(f"[dim]Removed file due to metadata application failure[/dim]")
+                    except Exception as delete_error:
+                        if console:
+                            console.print(f"[dim yellow]⚠[/dim yellow] [dim]Could not remove file: {delete_error}[/dim]")
                 raise Exception("Metadata application returned False")
             
         except Exception as e:
             if console:
                 console.print(f"[yellow]⚠[/yellow] Could not apply metadata and cover art to {track.title}: {e}")
+            # Only delete file if it didn't exist before and there's an error
+            if not file_existed_before:
+                try:
+                    if file_path.exists():
+                        file_path.unlink()
+                        if console:
+                            console.print(f"[dim]Removed file due to error[/dim]")
+                except Exception:
+                    pass  # Ignore deletion errors
             raise  # Re-raise to allow caller to handle

@@ -74,10 +74,18 @@ class MusicBrainzClient:
         attempt = 0
         while attempt < max_retries:
             try:
-                if batch_progress:
-                    print(f"{progress_prefix}Making request to MusicBrainz{page_info} (attempt {attempt + 1}/{max_retries})")
+                # Dimmed text for technical/log message
+                import sys
+                if sys.stdout.isatty():
+                    if batch_progress:
+                        print(f"{progress_prefix}\033[2mMaking request to MusicBrainz{page_info} (attempt {attempt + 1}/{max_retries})\033[0m", flush=True)
+                    else:
+                        print(f"\033[2mMaking request to MusicBrainz{page_info} (attempt {attempt + 1}/{max_retries})\033[0m", flush=True)
                 else:
-                    print(f"Making request to MusicBrainz{page_info} (attempt {attempt + 1}/{max_retries})")
+                    if batch_progress:
+                        print(f"{progress_prefix}Making request to MusicBrainz{page_info} (attempt {attempt + 1}/{max_retries})")
+                    else:
+                        print(f"Making request to MusicBrainz{page_info} (attempt {attempt + 1}/{max_retries})")
                 response = self.session.get(url, params=params, timeout=self.timeout)
                 response.raise_for_status()
                 
@@ -802,42 +810,54 @@ class MusicBrainzClient:
             tracks = []
             media = data.get('media', [])
             if media:
-                # Get tracks from the first medium (disc)
-                medium = media[0]
-                track_list = medium.get('tracks', [])
+                # Get tracks from all media (discs) and assign sequential positions
+                current_position = 1
                 
-                for track_data in track_list:
-                    position = track_data.get('position', 0)
-                    recording = track_data.get('recording', {})
-                    track_title = recording.get('title', '')
-                    track_mbid = recording.get('id', '')
+                for medium in media:
+                    track_list = medium.get('tracks', [])
                     
-                    # Get track artist (properly handle collaborative artists)
-                    track_artist_credits = recording.get('artist-credit', [])
-                    track_artist = artist  # Default to release artist
-                    if track_artist_credits:
-                        track_artist = self._parse_artist_credit(track_artist_credits) or artist
-                    
-                    # Get duration - check track-level length first, then recording-level
-                    duration = None
-                    # Track-level length (if available) - this is the actual length on this release
-                    # Note: MusicBrainz 'length' field in track/recording objects is in milliseconds
-                    if 'length' in track_data and track_data['length']:
-                        duration_value = track_data['length']
-                        duration = self._format_duration(duration_value)
-                    # Fall back to recording-level length if track-level not available
-                    elif 'length' in recording and recording['length']:
-                        duration_value = recording['length']
-                        duration = self._format_duration(duration_value)
-                    
-                    track = Track(
-                        position=position,
-                        title=track_title,
-                        artist=track_artist,
-                        duration=duration,
-                        mbid=track_mbid
-                    )
-                    tracks.append(track)
+                    for track_data in track_list:
+                        # Position might be a string or int from API - convert to int
+                        # But we'll use sequential position across all discs instead
+                        position_raw = track_data.get('position', 0)
+                        try:
+                            disc_position = int(position_raw) if position_raw else 0
+                        except (ValueError, TypeError):
+                            disc_position = 0
+                        
+                        recording = track_data.get('recording', {})
+                        track_title = recording.get('title', '')
+                        track_mbid = recording.get('id', '')
+                        
+                        # Get track artist (properly handle collaborative artists)
+                        track_artist_credits = recording.get('artist-credit', [])
+                        track_artist = artist  # Default to release artist
+                        if track_artist_credits:
+                            track_artist = self._parse_artist_credit(track_artist_credits) or artist
+                        
+                        # Get duration - check track-level length first, then recording-level
+                        duration = None
+                        # Track-level length (if available) - this is the actual length on this release
+                        # Note: MusicBrainz 'length' field in track/recording objects is in milliseconds
+                        if 'length' in track_data and track_data['length']:
+                            duration_value = track_data['length']
+                            duration = self._format_duration(duration_value)
+                        # Fall back to recording-level length if track-level not available
+                        elif 'length' in recording and recording['length']:
+                            duration_value = recording['length']
+                            duration = self._format_duration(duration_value)
+                        
+                        # Use sequential position across all discs (1, 2, 3, ..., N)
+                        # instead of per-disc positions (1, 2, 3, 1, 2, 3, ...)
+                        track = Track(
+                            position=current_position,
+                            title=track_title,
+                            artist=track_artist,
+                            duration=duration,
+                            mbid=track_mbid
+                        )
+                        tracks.append(track)
+                        current_position += 1
             
             return ReleaseInfo(
                 title=title,

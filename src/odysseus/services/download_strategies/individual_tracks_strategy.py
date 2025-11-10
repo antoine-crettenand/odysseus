@@ -175,7 +175,7 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
                             'is_playlist': True,
                             'playlist_name': release_info.title,
                             'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
-                            'track_number': track.position,
+                            'track_number': track_num,  # Use track_num (requested position) not track.position (API position)
                             'total_tracks': len(release_info.tracks)
                         }
                     else:
@@ -189,7 +189,7 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
                             'artist': folder_artist,  # Use "Various Artists" for folder structure in compilations
                             'album': release_info.title,
                             'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
-                            'track_number': track.position,
+                            'track_number': track_num,  # Use track_num (requested position) not track.position (API position)
                             'total_tracks': len(release_info.tracks)
                         }
                     
@@ -255,17 +255,19 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
                             self.display_manager.display_track_download_result(
                                 track.title, True, str(downloaded_path), file_existed=file_existed
                             )
+                            console.print(f"  [dim]YouTube: {youtube_url}[/dim]")
                         # Apply metadata (including cover art) to all downloaded files
                         # Cover art was already fetched earlier, so we can apply it to all tracks
                         try:
                             self.metadata_service.apply_metadata_with_cover_art(
-                                downloaded_path, track, release_info, console if not silent else None, cover_art_data=cover_art_data, path_manager=self.path_manager
+                                downloaded_path, track, release_info, console if not silent else None, cover_art_data=cover_art_data, path_manager=self.path_manager, file_existed_before=file_existed
                             )
+                            downloaded_count += 1
                         except Exception as e:
                             # If metadata application fails, still count as downloaded but log the error
                             if not silent and console:
                                 console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
-                        downloaded_count += 1
+                            downloaded_count += 1
                     else:
                         if not silent:
                             # Display concise error for failed track

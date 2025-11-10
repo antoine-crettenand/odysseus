@@ -75,7 +75,8 @@ class PlaylistStrategy(BaseDownloadStrategy):
         
         if not playlists:
             if not silent:
-                console.print("[yellow]⚠[/yellow] No playlist found. Trying next strategy...")
+                styling = self.display_manager.styling
+                styling.log_warning("No playlist found. Trying next strategy...")
             return None, None
         
         # Try downloading from playlist
@@ -260,7 +261,9 @@ class PlaylistStrategy(BaseDownloadStrategy):
                             
                             if not is_valid:
                                 if not silent:
-                                    console.print(f"[yellow]⚠[/yellow] Skipping invalid video for {track.title}: {reason}")
+                                    styling = self.display_manager.styling
+                                    styling.log_warning(f"Skipping invalid video for {track.title}: {reason}")
+                                    console.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
                                 failed_count += 1
                                 progress.update(task, advance=1)
                                 continue
@@ -367,17 +370,19 @@ class PlaylistStrategy(BaseDownloadStrategy):
                                     self.display_manager.display_track_download_result(
                                         track.title, True, str(downloaded_path), file_existed=file_existed
                                     )
+                                    console.print(f"  [dim]YouTube: {video_url}[/dim]")
                                 # Apply metadata (including cover art) to all downloaded files
                                 # Cover art was already fetched earlier, so we can apply it to all tracks
                                 try:
                                     self.metadata_service.apply_metadata_with_cover_art(
-                                        downloaded_path, track, release_info, console if not silent else None, cover_art_data=cover_art_data, path_manager=self.path_manager
+                                        downloaded_path, track, release_info, console if not silent else None, cover_art_data=cover_art_data, path_manager=self.path_manager, file_existed_before=file_existed
                                     )
+                                    downloaded_count += 1
                                 except Exception as e:
                                     # If metadata application fails, still count as downloaded but log the error
                                     if not silent and console:
                                         console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
-                                downloaded_count += 1
+                                    downloaded_count += 1
                             else:
                                 if not silent:
                                     # Display concise error for failed track
@@ -447,6 +452,7 @@ class PlaylistStrategy(BaseDownloadStrategy):
         
         # If we get here, all playlists failed
         if not silent:
-            console.print("[yellow]⚠[/yellow] All playlists failed. Trying next strategy...")
+            styling = self.display_manager.styling
+            styling.log_warning("All playlists failed. Trying next strategy...")
         return None, None
 

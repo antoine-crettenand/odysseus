@@ -119,10 +119,11 @@ class PathUtils:
             return organized_dir
         
         # Extract metadata fields for regular album structure
-        artist = metadata.get('artist', 'Unknown Artist')
-        album = metadata.get('album', 'Unknown Album')
+        # Treat empty strings as missing values (use defaults)
+        artist = metadata.get('artist') or 'Unknown Artist'
+        album = metadata.get('album') or 'Unknown Album'
         year = metadata.get('year')
-        title = metadata.get('title', 'Unknown Title')
+        title = metadata.get('title') or 'Unknown Title'
         
         # Sanitize all components (this also prevents path traversal)
         artist = PathUtils.sanitize_filename(artist)

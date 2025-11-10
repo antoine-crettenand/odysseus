@@ -38,18 +38,18 @@ class CoverArtFetcher:
         if use_cache and url in self._cover_art_cache:
             cached_data = self._cover_art_cache[url]
             if cached_data is not None and console:
-                console.print(f"[blue]ℹ[/blue] Using cached cover art from URL ({len(cached_data)} bytes)")
+                console.print(f"[dim blue]ℹ[/dim blue] [dim]Using cached cover art from URL ({len(cached_data)} bytes)[/dim]")
             return cached_data
         
         try:
             headers = {
-                'User-Agent': 'Odysseus/1.0 (https://github.com/antoinecrettenand/odysseus)'
+                'User-Agent': 'Odysseus/1.0'
             }
             response = requests.get(url, headers=headers, timeout=10)
             
             if response.status_code == 200:
                 if console:
-                    console.print(f"[blue]ℹ[/blue] Fetched cover art from URL ({len(response.content)} bytes)")
+                    console.print(f"[dim blue]ℹ[/dim blue] [dim]Fetched cover art from URL ({len(response.content)} bytes)[/dim]")
                 # Cache the result
                 if use_cache:
                     self._cover_art_cache[url] = response.content
@@ -91,7 +91,7 @@ class CoverArtFetcher:
         if use_cache and cache_key in self._cover_art_cache:
             cached_data = self._cover_art_cache[cache_key]
             if cached_data is not None and console:
-                console.print(f"[blue]ℹ[/blue] Using cached cover art from MusicBrainz ({len(cached_data)} bytes)")
+                console.print(f"[dim blue]ℹ[/dim blue] [dim]Using cached cover art from MusicBrainz ({len(cached_data)} bytes)[/dim]")
             return cached_data
             
         try:
@@ -122,7 +122,7 @@ class CoverArtFetcher:
                             img_response = requests.get(image_url, headers=headers, timeout=10)
                             if img_response.status_code == 200:
                                 if console:
-                                    console.print(f"[blue]ℹ[/blue] Fetched front cover art ({len(img_response.content)} bytes)")
+                                    console.print(f"[dim blue]ℹ[/dim blue] [dim]Fetched front cover art ({len(img_response.content)} bytes)[/dim]")
                                 # Cache the result
                                 if use_cache:
                                     self._cover_art_cache[cache_key] = img_response.content
@@ -135,7 +135,7 @@ class CoverArtFetcher:
                         img_response = requests.get(image_url, headers=headers, timeout=10)
                         if img_response.status_code == 200:
                             if console:
-                                console.print(f"[blue]ℹ[/blue] Fetched cover art (first available, {len(img_response.content)} bytes)")
+                                console.print(f"[dim blue]ℹ[/dim blue] [dim]Fetched cover art (first available, {len(img_response.content)} bytes)[/dim]")
                             # Cache the result
                             if use_cache:
                                 self._cover_art_cache[cache_key] = img_response.content
@@ -196,7 +196,7 @@ class CoverArtFetcher:
                     return None
                 # Use cached URL
                 if console:
-                    console.print(f"[blue]ℹ[/blue] Using cached Discogs cover art URL")
+                    console.print(f"[dim blue]ℹ[/dim blue] [dim]Using cached Discogs cover art URL[/dim]")
                 cover_art_data = self.fetch_cover_art_from_url(cached_url, console)
                 if cover_art_data:
                     if console:
@@ -207,7 +207,7 @@ class CoverArtFetcher:
             
             # Not in cache, need to search
             if console:
-                console.print(f"[blue]ℹ[/blue] Trying to find cover art from Discogs...")
+                console.print(f"[dim blue]ℹ[/dim blue] [dim]Trying to find cover art from Discogs...[/dim]")
             
             discogs_client = DiscogsClient()
             
@@ -242,7 +242,7 @@ class CoverArtFetcher:
                                 if result.cover_art_url:
                                     cover_art_url = result.cover_art_url
                                     if console:
-                                        console.print(f"[blue]ℹ[/blue] Found Discogs release: {result.album}")
+                                        console.print(f"[dim blue]ℹ[/dim blue] [dim]Found Discogs release: {result.album}[/dim]")
                                 
                                 # If no cover art URL in search result, try to get detailed release info
                                 if not cover_art_url and result.discogs_id:
@@ -333,7 +333,7 @@ class CoverArtFetcher:
                                 cover_art_url = images[0].get('url')
                                 if cover_art_url:
                                     if console:
-                                        console.print(f"[blue]ℹ[/blue] Found Spotify album: {album_name}")
+                                        console.print(f"[dim blue]ℹ[/dim blue] [dim]Found Spotify album: {album_name}[/dim]")
                                     cover_art_data = self.fetch_cover_art_from_url(cover_art_url, console)
                                     if cover_art_data:
                                         if console:
@@ -471,14 +471,14 @@ class CoverArtFetcher:
         # First, try Spotify cover art URL if available
         if release_info.cover_art_url:
             if console:
-                console.print(f"[blue]ℹ[/blue] Fetching cover art from Spotify for release...")
+                console.print(f"[dim blue]ℹ[/dim blue] [dim]Fetching cover art from Spotify for release...[/dim]")
             cover_art_data = self.fetch_cover_art_from_url(release_info.cover_art_url, console)
             if cover_art_data:
                 return cover_art_data
         
         # If no Spotify URL, try searching Spotify
         if console:
-            console.print(f"[blue]ℹ[/blue] Trying to find cover art from Spotify...")
+            console.print(f"[dim blue]ℹ[/dim blue] [dim]Trying to find cover art from Spotify...[/dim]")
         cover_art_data = self._fetch_cover_art_from_spotify(release_info, console)
         if cover_art_data:
             return cover_art_data
@@ -496,7 +496,7 @@ class CoverArtFetcher:
         
         if mbid and is_musicbrainz_mbid:
             if console:
-                console.print(f"[blue]ℹ[/blue] Fetching cover art from MusicBrainz for release...")
+                console.print(f"[dim blue]ℹ[/dim blue] [dim]Fetching cover art from MusicBrainz for release...[/dim]")
             cover_art_data = self.fetch_cover_art(mbid, console)
             if cover_art_data:
                 return cover_art_data
@@ -510,7 +510,7 @@ class CoverArtFetcher:
         # Fallback 3: Try to extract cover art from existing tracks in the folder
         if folder_path and folder_path.exists():
             if console:
-                console.print(f"[blue]ℹ[/blue] Trying to extract cover art from existing tracks in folder...")
+                console.print(f"[dim blue]ℹ[/dim blue] [dim]Trying to extract cover art from existing tracks in folder...[/dim]")
             cover_art_data = self._extract_cover_art_from_folder(folder_path, console)
             if cover_art_data:
                 return cover_art_data

@@ -138,22 +138,24 @@ class TitleMatcher:
         Args:
             video_title: YouTube video title
             album_title: Album title to match
-            artist: Artist name
+            artist: Artist name (can be empty - will skip artist check if empty)
             release_year: Optional release year for additional validation
             
         Returns:
             True if video title matches the album
         """
-        if not video_title or not album_title or not artist:
+        if not video_title or not album_title:
             return False
         
         video_normalized = self._normalize_for_matching(video_title)
         album_normalized = self._normalize_for_matching(album_title)
         
         # Check if artist matches (with flexible matching)
-        artist_matches = self.artist_matches(video_title, artist)
-        if not artist_matches:
-            return False
+        # If artist is empty, skip artist check (some releases don't have artist info)
+        if artist:
+            artist_matches = self.artist_matches(video_title, artist)
+            if not artist_matches:
+                return False
         
         # Extract version suffix from album title (e.g., "ii", "2", "part 2")
         version_suffix = self._extract_version_suffix(album_title)
@@ -281,8 +283,8 @@ class TitleMatcher:
                 matching_words = sum(1 for word in artist_words if word in video_normalized)
                 score += 0.2 * (matching_words / len(artist_words))
         
-        # Penalize if video appears to be live or non-album content
-        if video_validator.is_live_version(video_title) or video_validator.is_reaction_or_review_video(video_title):
+        # Penalize if video appears to be live or non-album content (pass track_title to avoid false positives)
+        if video_validator.is_live_version(video_title, track_title) or video_validator.is_reaction_or_review_video(video_title):
             score *= 0.3  # Heavy penalty
         
         return min(score, 1.0)

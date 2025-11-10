@@ -118,6 +118,11 @@ class ReleaseHandler(BaseHandler):
             console.print("[bold red]✗[/bold red] Failed to get release details.")
             return
         
+        # Fallback: If release_info.artist is empty, use the artist from selected_release
+        # This handles cases where the API response doesn't include artist-credit data
+        if not release_info.artist and selected_release.artist:
+            release_info.artist = selected_release.artist
+        
         # Validate that the fetched release matches what we expected
         # Normalize strings for comparison (case-insensitive, ignore whitespace)
         from ...utils.string_utils import normalize_string

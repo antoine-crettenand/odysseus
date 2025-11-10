@@ -179,7 +179,13 @@ class DiscogsClient:
             params['format'] = release_type.lower()
         
         try:
-            print(f"Searching Discogs releases with query: {query}")
+            # Dimmed text for technical/log message - Discogs is used for deduplication (filling gaps in MusicBrainz results)
+            import sys
+            if sys.stdout.isatty():
+                # Use dim (2m) with dim cyan (36m) for icon, then dim for text
+                print(f"\033[2;36mℹ\033[0m \033[2mSearching Discogs (for deduplication): {query}\033[0m", flush=True)
+            else:
+                print(f"Searching Discogs releases with query: {query}")
             data = self._make_request(url, params)
             
             if data:
@@ -524,6 +530,9 @@ class DiscogsClient:
             tracks = []
             tracklist = data.get('tracklist', [])
             
+            # Use sequential positions (1, 2, 3, ..., N) instead of parsing Discogs positions
+            # Discogs positions are per-side for vinyl (A1, A2, B1, B2, etc.) which causes duplicates
+            # Sequential positions work better for downloads and track selection
             for idx, track_data in enumerate(tracklist, start=1):
                 track_title = track_data.get('title', '')
                 duration = track_data.get('duration', '')
@@ -533,21 +542,10 @@ class DiscogsClient:
                 if 'artists' in track_data and track_data['artists']:
                     track_artist = track_data['artists'][0].get('name', artist)
                 
-                # Position might be a string like "A1" or a number
-                position = track_data.get('position', str(idx))
-                # Try to extract numeric position if it's a string like "A1"
-                try:
-                    if isinstance(position, str) and position:
-                        # Extract number from position string (e.g., "A1" -> 1)
-                        numeric_pos = ''.join(filter(str.isdigit, position))
-                        if numeric_pos:
-                            position = int(numeric_pos)
-                        else:
-                            position = idx
-                    elif not isinstance(position, int):
-                        position = idx
-                except (ValueError, TypeError):
-                    position = idx
+                # Use sequential position (idx) instead of parsing Discogs position field
+                # This ensures positions are 1, 2, 3, ..., N across all sides/discs
+                # Discogs positions like "A1", "A2", "B1", "B2" would become 1, 2, 1, 2 (duplicates)
+                position = idx
                 
                 track = Track(
                     position=position,

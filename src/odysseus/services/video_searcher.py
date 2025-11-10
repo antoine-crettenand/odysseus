@@ -93,8 +93,8 @@ class VideoSearcher:
         best_score = 0.0
         
         for video in videos:
-            # Skip if it's clearly a live version
-            if self.video_validator.is_live_version(video.title):
+            # Skip if it's clearly a live version (pass track title to avoid false positives)
+            if self.video_validator.is_live_version(video.title, track.title):
                 continue
             
             # Calculate fuzzy match score
@@ -225,7 +225,10 @@ class VideoSearcher:
                         selected_video = video
                         break
                     elif not silent and attempt == 0:
-                        console.print(f"[yellow]⚠[/yellow] Skipping invalid video: {reason}")
+                        from ..ui.styling import Styling
+                        styling = Styling(console)
+                        styling.log_warning(f"Skipping invalid video: {reason}")
+                        console.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
                 
                 # If found valid video, break retry loop
                 if selected_video:

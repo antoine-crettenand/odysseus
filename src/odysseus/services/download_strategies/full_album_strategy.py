@@ -81,11 +81,12 @@ class FullAlbumStrategy(BaseDownloadStrategy):
             "spotify.com" in release_info.url
         ):
             if not silent:
-                console = self.display_manager.console
-                console.print("[cyan]ℹ[/cyan] Skipping full album strategy for playlist (not applicable)...")
+                styling = self.display_manager.styling
+                styling.log_info("Skipping full album strategy for playlist (not applicable)...")
             return None, None
         
         console = self.display_manager.console
+        styling = self.display_manager.styling
         
         if not silent:
             console.print("[cyan]🎵 Strategy 1: Searching for full album video...[/cyan]")
@@ -118,7 +119,7 @@ class FullAlbumStrategy(BaseDownloadStrategy):
         
         if not full_album_videos:
             if not silent:
-                console.print("[yellow]⚠[/yellow] No full album video found. Trying next strategy...")
+                styling.log_warning("No full album video found. Trying next strategy...")
             return None, None  # Signal to try next strategy
         
         # Try each full album video until one works
@@ -131,11 +132,13 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                 
                 if not is_valid:
                     if not silent:
-                        console.print(f"[yellow]⚠[/yellow] Skipping invalid video: {reason}")
+                        styling.log_warning(f"Skipping invalid video: {reason}")
+                        console.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
                     continue
                 
                 if not silent:
-                    console.print(f"[cyan]📥 Found valid full album video: {video.title}[/cyan]")
+                    console.print(f"[bold cyan]📥 Found valid full album video:[/bold cyan] [cyan]{video.title}[/cyan]")
+                    console.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
                 
                 youtube_url = video.youtube_url
                 
@@ -149,19 +152,30 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                 ]
                 selected_tracks.sort(key=lambda x: x.position)
                 
+                # Debug: Check if we have tracks and if positions match
+                if not selected_tracks:
+                    # Log diagnostic information
+                    available_positions = [t.position for t in release_info.tracks] if release_info.tracks else []
+                    reason = f"No tracks found matching requested positions. Requested: {track_numbers}, Available: {available_positions}, Total tracks: {len(release_info.tracks)}"
+                    if not silent:
+                        styling.log_warning(reason)
+                    continue
+                
                 # Prepare track timestamps
                 track_timestamps = []
+                using_youtube_chapters = False  # Track if we're using YouTube chapters
                 if chapters and len(chapters) >= len(selected_tracks):
                     # Use YouTube chapters
+                    using_youtube_chapters = True
                     if not silent:
-                        console.print(f"[green]✓[/green] Using YouTube chapters for track splitting ({len(chapters)} chapters found)")
+                        styling.log_info(f"Using YouTube chapters for track splitting ({len(chapters)} chapters found)", icon="✓")
                     
                     # Additional validation: check if number of chapters roughly matches number of tracks
                     # Allow some flexibility (chapters might include intro/outro)
                     if len(chapters) < len(selected_tracks) * 0.8:
                         reason = f"Number of chapters ({len(chapters)}) doesn't match number of tracks ({len(selected_tracks)}) - likely wrong video"
                         if not silent:
-                            console.print(f"[yellow]⚠[/yellow] {reason}")
+                            styling.log_warning(reason)
                         continue
                     
                     for i, track in enumerate(selected_tracks):
@@ -177,8 +191,8 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                 else:
                     # Calculate from MusicBrainz durations
                     if not silent:
-                        console.print("[yellow]⚠[/yellow] No YouTube chapters found. Using MusicBrainz durations...")
-                        console.print("[yellow]ℹ[/yellow] Note: Split track durations may differ from metadata due to video timing differences")
+                        styling.log_warning("No YouTube chapters found. Using MusicBrainz durations...")
+                        styling.log_technical("Note: Split track durations may differ from metadata due to video timing differences")
                     
                     # For full album downloads without chapters, we need to be more careful
                     # Check if we have durations for all tracks
@@ -186,7 +200,7 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                     if not all_tracks_have_durations:
                         reason = f"Missing track durations for some tracks - cannot safely split without chapters"
                         if not silent:
-                            console.print(f"[yellow]⚠[/yellow] {reason}")
+                            styling.log_warning(reason)
                         continue
                     
                     track_timestamps = self._calculate_track_timestamps_from_durations(
@@ -196,7 +210,7 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                 if not track_timestamps or len(track_timestamps) != len(selected_tracks):
                     reason = f"Could not prepare track timestamps (got {len(track_timestamps) if track_timestamps else 0}, expected {len(selected_tracks)})"
                     if not silent:
-                        console.print(f"[yellow]⚠[/yellow] {reason}")
+                        styling.log_warning(reason)
                     continue
                 
                 # Download the full album video to a temporary location
@@ -236,7 +250,7 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                 
                 # Download full album video
                 if not silent:
-                    console.print("[cyan]📥 Downloading full album video...[/cyan]")
+                    console.print("[bold cyan]📥 Downloading full album video...[/bold cyan]")
                 
                 file_progress, file_task_id = self.display_manager.create_download_progress_bar(
                     f"Initializing download: {video.title[:40]}"
@@ -286,7 +300,7 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                             if not stuck_warning_shown and elapsed_time > 60:
                                 # Show warning in console (not progress bar)
                                 if not silent:
-                                    console.print(f"[yellow]⚠[/yellow] Download taking longer than expected at 0% ({int(elapsed_time)}s elapsed)")
+                                    styling.log_warning(f"Download taking longer than expected at 0% ({int(elapsed_time)}s elapsed)")
                                 stuck_warning_shown = True
                         else:
                             status_msg = "Connecting to YouTube..."
@@ -340,7 +354,7 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                 
                 if not full_video_path:
                     if not silent:
-                        console.print("[yellow]⚠[/yellow] Failed to download full album video. Trying next...")
+                        styling.log_warning("Failed to download full album video. Trying next...")
                     continue
                 
                 # Create output directory for split tracks
@@ -386,7 +400,7 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                 
                 # Split video into tracks
                 if not silent:
-                    console.print("[cyan]✂️  Splitting album into tracks...[/cyan]")
+                    console.print("[bold cyan]✂️  Splitting album into tracks...[/bold cyan]")
                 
                 split_progress, split_task_id = self.display_manager.create_download_progress_bar(
                     "Splitting tracks"
@@ -423,7 +437,7 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                     failed_count = 0
                     
                     if not silent:
-                        console.print("[cyan]📝 Applying metadata and cover art to tracks...[/cyan]")
+                        console.print("[bold cyan]📝 Applying metadata and cover art to tracks...[/bold cyan]")
                     
                     # Create progress bar for metadata application
                     metadata_progress, metadata_task_id = self.display_manager.create_download_progress_bar(
@@ -456,44 +470,50 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                                         self.display_manager.display_track_download_result(
                                             track.title, True, str(split_file), file_existed=False
                                         )
+                                        # Show YouTube URL for first track only (all tracks come from same video)
+                                        if downloaded_count == 0:
+                                            console.print(f"  [dim]YouTube: {youtube_url}[/dim]")
                                 # Apply metadata with cover art to each split file
-                                # This will also check and warn about duration mismatches
                                 self.metadata_service.apply_metadata_with_cover_art(
                                     split_file,
                                     track,
                                     release_info,
                                     console if not silent else None,
                                     cover_art_data=cover_art_data,
-                                    path_manager=self.path_manager
+                                    path_manager=self.path_manager,
+                                    file_existed_before=file_existed
                                 )
                                 if file_existed:
                                     skipped_count += 1
                                 else:
                                     downloaded_count += 1
                             except Exception as e:
+                                # If metadata application fails, still count as downloaded but log the error
                                 failed_count += 1
                                 if not silent:
-                                    console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
+                                    styling.log_warning(f"Could not apply metadata to {track.title}: {e}")
                             
                             metadata_progress.update(metadata_task_id, advance=1)
                     
                     if not silent:
                         if downloaded_count > 0:
+                            # Add a subtle success indicator
+                            styling.log_info(f"Successfully downloaded and split {downloaded_count} track{'s' if downloaded_count != 1 else ''} from full album video", icon="✓")
                             console.print(f"[bold green]✓[/bold green] Successfully downloaded and split {downloaded_count} track{'s' if downloaded_count != 1 else ''} from full album video")
                         if skipped_count > 0:
-                            console.print(f"[yellow]⏭[/yellow] Skipped {skipped_count} existing track{'s' if skipped_count != 1 else ''}")
+                            styling.log_info(f"Skipped {skipped_count} existing track{'s' if skipped_count != 1 else ''}", icon="⏭")
                         if failed_count > 0:
-                            console.print(f"[yellow]⚠[/yellow] Failed to apply metadata to {failed_count} track(s)")
+                            styling.log_warning(f"Failed to apply metadata to {failed_count} track(s)")
                     
                     return downloaded_count, failed_count
                 
             except Exception as e:
                 if not silent:
-                    console.print(f"[yellow]⚠[/yellow] Error with full album video: {e}. Trying next...")
+                    styling.log_warning(f"Error with full album video: {e}. Trying next...")
                 continue
         
         # If we get here, all full album videos failed
         if not silent:
-            console.print("[yellow]⚠[/yellow] All full album videos failed. Trying next strategy...")
+            styling.log_warning("All full album videos failed. Trying next strategy...")
         return None, None
 

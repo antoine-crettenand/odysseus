@@ -171,6 +171,16 @@ VALIDATION_RULES = {
     "MAX_ARTIST_LENGTH": 100,
 }
 
+# Duration Validation Thresholds
+# Asymmetric thresholds for validating video/file durations against expected durations:
+# - Longer durations: strict threshold (likely live versions with extended sections)
+# - Shorter durations: lenient threshold (could be different versions/remixes, less risky)
+DURATION_VALIDATION_THRESHOLDS = {
+    "LONGER_THRESHOLD": 0.10,  # 10% - strict threshold for longer videos/files
+    "SHORTER_THRESHOLD": 0.25,  # 25% - lenient threshold for shorter videos/files
+    "WARNING_THRESHOLD": 0.05,  # 5% - warn but allow if between 5% and threshold
+}
+
 # Color Codes for Terminal Output (if supported)
 COLORS = {
     "RED": "\033[91m",

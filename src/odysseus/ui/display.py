@@ -11,6 +11,7 @@ from ..models.releases import ReleaseInfo
 from .formatters import DisplayFormatters
 from .input_handlers import InputHandlers
 from .progress_displays import ProgressDisplays
+from .styling import Styling
 
 
 class DisplayManager:
@@ -24,6 +25,7 @@ class DisplayManager:
         self.formatters = DisplayFormatters(self.console)
         self.input_handlers = InputHandlers(self.console, self.formatters)
         self.progress_displays = ProgressDisplays(self.console)
+        self.styling = Styling(self.console)
     
     # Delegate to formatters
     def _create_header_panel(self, title: str, subtitle: Optional[str] = None):

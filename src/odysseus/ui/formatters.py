@@ -13,6 +13,7 @@ from rich import box
 
 from ..models.search_results import SearchResult, MusicBrainzSong, YouTubeVideo
 from ..models.releases import ReleaseInfo
+from .styling import Styling
 
 
 class DisplayFormatters:
@@ -20,6 +21,7 @@ class DisplayFormatters:
     
     def __init__(self, console: Console):
         self.console = console
+        self.styling = Styling(console)
     
     def create_header_panel(self, title: str, subtitle: Optional[str] = None) -> Panel:
         """Create a styled header panel."""
@@ -340,7 +342,7 @@ class DisplayFormatters:
         summary_content = f"[bold green]✓[/bold green] Total tracks downloaded: [green]{downloaded}[/green]\n"
         if failed > 0:
             summary_content += f"[bold red]✗[/bold red] Total tracks failed: [red]{failed}[/red]\n"
-        summary_content += f"[blue]ℹ[/blue] Releases processed: [cyan]{total}[/cyan]"
+        summary_content += f"[dim blue]ℹ[/dim blue] [dim]Releases processed: {total}[/dim]"
         
         self.console.print(Panel(
             summary_content,
@@ -363,22 +365,25 @@ class DisplayFormatters:
             else:
                 self.console.print(f"[bold green]✓[/bold green] Downloaded: [green]{track_title}[/green]")
             if path:
-                self.console.print(f"  [dim]Path: {path}[/dim]")
+                self.styling.log_path(path)
         else:
             self.console.print(f"[bold red]✗[/bold red] Failed: [red]{track_title}[/red]")
     
     def display_download_strategy_attempt(self, strategy_num: int, total_strategies: int):
         """Display download strategy attempt."""
-        self.console.print(f"[blue]Trying strategy [bold white]{strategy_num}[/bold white]...[/blue]")
+        self.styling.log_technical(f"Trying strategy {strategy_num}...")
     
     def display_download_strategy_result(self, strategy_num: int, success: bool, error: Optional[str] = None):
         """Display download strategy result."""
         if success:
             self.console.print(f"[bold green]✓[/bold green] Success with strategy {strategy_num}")
         else:
-            self.console.print(f"[bold red]✗[/bold red] Strategy {strategy_num} failed: {error}")
+            if error:
+                self.styling.log_error(f"Strategy {strategy_num} failed: {error}")
+            else:
+                self.styling.log_error(f"Strategy {strategy_num} failed")
             if strategy_num < 5:
-                self.console.print("[blue]ℹ[/blue] Trying next strategy...")
+                self.styling.log_technical("Trying next strategy...")
     
     def display_download_info(self, url: str, quality: str, audio_only: bool, save_location: str, metadata: Optional[dict] = None):
         """Display download information."""

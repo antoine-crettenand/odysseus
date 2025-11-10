@@ -130,6 +130,11 @@ class MetadataHandler(BaseHandler):
             console.print("[bold red]✗[/bold red] Failed to get release details.")
             return
         
+        # Fallback: If release_info.artist is empty, use the artist from selected_release
+        # This handles cases where the API response doesn't include artist-credit data
+        if not release_info.artist and selected_release.artist:
+            release_info.artist = selected_release.artist
+        
         # Store source info for cover art checking
         # Check if this is a MusicBrainz release (needed for cover art)
         is_musicbrainz = source == 'musicbrainz' or 'musicbrainz.org' in release_info.url
