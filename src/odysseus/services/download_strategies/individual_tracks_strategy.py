@@ -6,50 +6,47 @@ import subprocess
 from typing import List, Optional, Dict, Any, Tuple
 from .base_strategy import BaseDownloadStrategy
 from ...models.releases import ReleaseInfo
+from ...services.video_searcher import VideoSearcher
+from ...services.playlist_checker import PlaylistChecker
 
 
 class IndividualTracksStrategy(BaseDownloadStrategy):
     """Strategy for downloading individual tracks one by one."""
     
-    def _build_track_search_query(self, track, release_info: ReleaseInfo) -> str:
-        """
-        Build an optimized YouTube search query for a track.
-        
-        When track title matches or is similar to album name, adds disambiguating terms
-        to improve search results and avoid interviews, live versions, etc.
-        """
-        # For Spotify playlists, don't compare track title to playlist name - that doesn't make sense
-        # Only compare to album name for actual albums
-        # Verify it's a Spotify playlist (extra safeguard)
-        is_playlist = (
-            release_info.release_type == "Playlist" and 
-            release_info.url and 
-            "spotify.com" in release_info.url
+    def __init__(
+        self,
+        download_service,
+        metadata_service,
+        search_service,
+        display_manager,
+        video_validator,
+        title_matcher,
+        path_manager
+    ):
+        """Initialize strategy with helper services."""
+        super().__init__(
+            download_service,
+            metadata_service,
+            search_service,
+            display_manager,
+            video_validator,
+            title_matcher,
+            path_manager
         )
-        titles_similar = False
-        
-        if not is_playlist:
-            # Check if track title is similar to album title (only for actual albums)
-            titles_similar = self.title_matcher.are_titles_similar(track.title, release_info.title)
-        
-        # Build base query
-        query_parts = [track.artist, track.title]
-        
-        # If titles are similar, add disambiguating terms
-        if titles_similar:
-            # Add "album" to help find the album version
-            query_parts.append("album")
-            
-            # Add year if available to make it more specific
-            if release_info.release_date:
-                year = release_info.release_date[:4] if len(release_info.release_date) >= 4 else None
-                if year and year.isdigit():
-                    query_parts.append(year)
-        
-        # Join query parts
-        search_query = " ".join(query_parts)
-        
-        return search_query
+        # Initialize helper services
+        self.video_searcher = VideoSearcher(
+            search_service,
+            video_validator,
+            title_matcher,
+            display_manager
+        )
+        self.playlist_checker = PlaylistChecker(
+            download_service,
+            search_service,
+            video_validator,
+            title_matcher,
+            display_manager
+        )
     
     def download(
         self,
@@ -120,55 +117,30 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
                 
                 progress.update(task, description=f"[cyan]Downloading: {track.title}")
                 
-                # Build a better search query, especially when track title matches album name
-                search_query = self._build_track_search_query(track, release_info)
-                
-                # Check if we need more results (when track title is similar to album name)
-                # For Spotify playlists, don't compare track title to playlist name
-                # Verify it's a Spotify playlist (extra safeguard)
-                is_playlist = (
-                    release_info.release_type == "Playlist" and 
-                    release_info.url and 
-                    "spotify.com" in release_info.url
-                )
-                if is_playlist:
-                    titles_similar = False
-                else:
-                    titles_similar = self.title_matcher.are_titles_similar(track.title, release_info.title)
-                max_results = 10 if titles_similar else 5  # Get more results when titles are similar
-                
                 try:
-                    # Display search query with artist and title for clarity
-                    search_display = f"{track.artist} - {track.title}" if track.artist else track.title
-                    videos = self.display_manager.show_loading_spinner(
-                        f"Searching YouTube for: {search_display}",
-                        self.search_service.search_youtube,
-                        search_query,
-                        max_results
+                    # Search for and match video using VideoSearcher
+                    selected_video, playlist_ids_found = self.video_searcher.search_and_match_video(
+                        track, release_info, silent
                     )
                     
-                    if not videos:
-                        if not silent:
-                            console.print(f"[bold red]✗[/bold red] No YouTube results found for: [white]{track.title}[/white]")
-                        failed_count += 1
-                        progress.update(task, advance=1)
-                        continue
-                    
-                    # Try videos until we find a valid one (not live)
-                    selected_video = None
-                    for video in videos:
-                        # Validate video (check for live versions, duration, etc.)
-                        is_valid, reason = self.video_validator.validate_video_for_track(
-                            video, track, silent
+                    # If no direct match found, try checking playlists from search results
+                    if not selected_video and playlist_ids_found:
+                        selected_video = self.playlist_checker.check_playlists_from_ids(
+                            list(playlist_ids_found),
+                            track,
+                            release_info,
+                            silent
                         )
-                        
-                        if is_valid:
-                            selected_video = video
-                            break
-                        elif not silent:
-                            console.print(f"[yellow]⚠[/yellow] Skipping invalid video: {reason}")
                     
-                    # If no valid video found, skip this track
+                    # If still no match, search for playlists containing this track
+                    if not selected_video:
+                        selected_video = self.playlist_checker.search_and_check_playlists(
+                            track,
+                            release_info,
+                            silent
+                        )
+                    
+                    # If still no valid video found, skip this track
                     if not selected_video:
                         if not silent:
                             console.print(f"[bold red]✗[/bold red] No valid (non-live) video found for: [white]{track.title}[/white]")
@@ -176,6 +148,15 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
                         progress.update(task, advance=1)
                         continue
                     
+                except Exception as e:
+                    # Catch any errors in the search/retry process
+                    if not silent:
+                        console.print(f"[yellow]⚠[/yellow] Error during track search: {e}")
+                    failed_count += 1
+                    progress.update(task, advance=1)
+                    continue
+                
+                try:
                     # Create metadata for download
                     # Check if this is a Spotify playlist (only Spotify sets release_type to "Playlist")
                     # Also verify URL to ensure it's from Spotify (extra safeguard)

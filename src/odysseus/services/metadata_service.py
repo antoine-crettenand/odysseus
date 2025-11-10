@@ -137,6 +137,29 @@ class MetadataService:
             success = self.merger.apply_metadata_to_file(str(file_path), quiet=True)
             
             if success:
+                # Check if actual file duration differs significantly from expected duration
+                if track.duration and console:
+                    from ..utils.file_duration_reader import (
+                        get_file_duration, 
+                        format_duration, 
+                        parse_duration_to_seconds
+                    )
+                    
+                    actual_duration_seconds = get_file_duration(file_path)
+                    expected_duration_seconds = parse_duration_to_seconds(track.duration)
+                    
+                    if actual_duration_seconds and expected_duration_seconds:
+                        # Check if durations differ by more than 5% (allowing for small differences)
+                        diff_ratio = abs(actual_duration_seconds - expected_duration_seconds) / expected_duration_seconds
+                        if diff_ratio > 0.05:  # More than 5% difference
+                            actual_duration_str = format_duration(actual_duration_seconds)
+                            console.print(
+                                f"[yellow]⚠[/yellow] Duration mismatch for [white]{track.title}[/white]: "
+                                f"expected [cyan]{track.duration}[/cyan], "
+                                f"actual [cyan]{actual_duration_str}[/cyan] "
+                                f"(difference: {diff_ratio*100:.1f}%)"
+                            )
+                
                 if console:
                     if cover_art_fetched:
                         console.print(f"[blue]ℹ[/blue] ✓ Applied metadata and cover art to [white]{track.title}[/white]")

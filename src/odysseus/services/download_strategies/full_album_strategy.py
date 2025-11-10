@@ -178,6 +178,7 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                     # Calculate from MusicBrainz durations
                     if not silent:
                         console.print("[yellow]⚠[/yellow] No YouTube chapters found. Using MusicBrainz durations...")
+                        console.print("[yellow]ℹ[/yellow] Note: Split track durations may differ from metadata due to video timing differences")
                     
                     # For full album downloads without chapters, we need to be more careful
                     # Check if we have durations for all tracks
@@ -456,6 +457,7 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                                             track.title, True, str(split_file), file_existed=False
                                         )
                                 # Apply metadata with cover art to each split file
+                                # This will also check and warn about duration mismatches
                                 self.metadata_service.apply_metadata_with_cover_art(
                                     split_file,
                                     track,

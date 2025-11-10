@@ -60,13 +60,17 @@ class PlaylistStrategy(BaseDownloadStrategy):
                 # Still fetch cover art in silent mode, just don't print messages
                 cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None, folder_path=output_dir)
         
+        # Extract track titles for more thorough playlist search
+        track_titles = [track.title for track in release_info.tracks[:5]]  # Use first 5 tracks
+        
         # Search for playlists
         playlists = self.display_manager.show_loading_spinner(
             f"Searching for playlist: {release_info.title}",
             self.search_service.search_playlist,
             release_info.artist,
             release_info.title,
-            3
+            3,
+            track_titles
         )
         
         if not playlists:
@@ -155,10 +159,10 @@ class PlaylistStrategy(BaseDownloadStrategy):
                 track_to_video = {}
                 used_videos = set()
                 
-                # First pass: try to find exact/very good matches
+                # First pass: try to find exact/very good matches (lower threshold for better coverage)
                 for track in selected_tracks:
                     best_match = None
-                    best_score = 0.5  # Minimum threshold
+                    best_score = 0.4  # Lowered threshold from 0.5 to 0.4 for better coverage
                     
                     for video in playlist_videos:
                         if video['id'] in used_videos:
@@ -179,11 +183,44 @@ class PlaylistStrategy(BaseDownloadStrategy):
                         track_to_video[track] = best_match
                         used_videos.add(best_match['id'])
                 
+                # Second pass: try to match remaining tracks with a lower threshold
+                unmatched_tracks = [t for t in selected_tracks if t not in track_to_video]
+                if unmatched_tracks:
+                    if not silent:
+                        console.print(f"[blue]ℹ[/blue] First pass matched {len(track_to_video)}/{len(selected_tracks)} tracks. Trying second pass with lower threshold...")
+                    
+                    for track in unmatched_tracks:
+                        best_match = None
+                        best_score = 0.25  # Lower threshold for second pass
+                        
+                        for video in playlist_videos:
+                            if video['id'] in used_videos:
+                                continue
+                            
+                            score = self.title_matcher.match_playlist_video_to_track(
+                                video['title'],
+                                track.title,
+                                release_info.artist,
+                                self.video_validator
+                            )
+                            
+                            if score > best_score:
+                                best_score = score
+                                best_match = video
+                        
+                        if best_match:
+                            track_to_video[track] = best_match
+                            used_videos.add(best_match['id'])
+                            if not silent:
+                                console.print(f"[blue]ℹ[/blue] Second pass matched: {track.title} (score: {best_score:.2f})")
+                
                 # Check how many tracks we matched
                 matched_count = len(track_to_video)
-                if matched_count < len(selected_tracks) * 0.5:  # Less than 50% matched
+                # Lower threshold: require at least 30% match OR at least 1 match (for single track downloads)
+                min_required = max(1, int(len(selected_tracks) * 0.3))
+                if matched_count < min_required:
                     if not silent:
-                        console.print(f"[yellow]⚠[/yellow] Only matched {matched_count}/{len(selected_tracks)} tracks. Trying next playlist...")
+                        console.print(f"[yellow]⚠[/yellow] Only matched {matched_count}/{len(selected_tracks)} tracks (minimum: {min_required}). Trying next playlist...")
                     continue
                 
                 if not silent:

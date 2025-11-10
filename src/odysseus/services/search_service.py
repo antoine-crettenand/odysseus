@@ -10,7 +10,8 @@ from ..models.search_results import SearchResult, MusicBrainzSong, YouTubeVideo,
 from ..clients.musicbrainz import MusicBrainzClient
 from ..clients.discogs import DiscogsClient
 from ..clients.youtube import YouTubeClient
-from ..utils.string_utils import normalize_string
+from .result_deduplicator import ResultDeduplicator
+from .year_validator import YearValidator
 
 
 class SearchService:
@@ -20,8 +21,15 @@ class SearchService:
         self.musicbrainz_client = MusicBrainzClient()
         self.discogs_client = DiscogsClient()
         self.youtube_client = None
+        
+        # Initialize helper services
+        self.year_validator = YearValidator(
+            spotify_client_getter=self._get_spotify_client,
+            discogs_client=self.discogs_client
+        )
+        self.deduplicator = ResultDeduplicator(year_validator=self.year_validator)
+        
         self._spotify_client = None  # Lazy initialization
-        self._year_validation_cache: Dict[Tuple[str, str], Optional[int]] = {}  # Cache for year validation
     
     
     def _get_release_year(self, release_date: Optional[str]) -> Optional[str]:
@@ -30,27 +38,6 @@ class SearchService:
             return None
         year_part = release_date[:4] if len(release_date) >= 4 else None
         return year_part if year_part and year_part.isdigit() else None
-    
-    def _create_deduplication_key(self, result: MusicBrainzSong) -> Tuple[str, str]:
-        """
-        Create a deduplication key for a search result (album + artist only, no year).
-        For releases: uses album (or title if album is empty) and artist
-        For recordings: uses title and artist (album is optional)
-        """
-        title = normalize_string(result.title)
-        album = normalize_string(result.album)
-        artist = normalize_string(result.artist)
-        
-        if album and title and album == title:
-            primary_key = album
-        elif album:
-            primary_key = album
-        elif title:
-            primary_key = title
-        else:
-            primary_key = ""
-        
-        return (primary_key, artist)
     
     def _parse_release_date(self, release_date: Optional[str]) -> Optional[tuple]:
         """
@@ -69,28 +56,6 @@ class SearchService:
         
         return None
     
-    def _is_remaster_or_reissue(self, result: MusicBrainzSong) -> bool:
-        """
-        Check if a release is likely a remaster, reissue, or re-release.
-        Returns True if it appears to be a remaster/reissue.
-        """
-        # Check album/title for remaster keywords
-        album_lower = (result.album or "").lower()
-        title_lower = (result.title or "").lower()
-        
-        remaster_keywords = [
-            'remaster', 'reissue', 're-release', 'remastered', 'deluxe',
-            'anniversary', 'edition', 'expanded', 'bonus', 'special edition',
-            'remastered version', 'digitally remastered', 'remastered edition'
-        ]
-        
-        # Check if any remaster keyword appears in album or title
-        for keyword in remaster_keywords:
-            if keyword in album_lower or keyword in title_lower:
-                return True
-        
-        return False
-    
     def _get_spotify_client(self):
         """Get Spotify client with lazy initialization."""
         if self._spotify_client is None:
@@ -101,385 +66,18 @@ class SearchService:
                 self._spotify_client = False  # Mark as unavailable
         return self._spotify_client if self._spotify_client else None
     
-    def _get_release_year_from_spotify(self, artist: str, album: str) -> Optional[int]:
-        """
-        Search Spotify for release year validation.
-        
-        Args:
-            artist: Artist name
-            album: Album name
-            
-        Returns:
-            Release year if found, None otherwise
-        """
-        cache_key = (normalize_string(artist), normalize_string(album))
-        if cache_key in self._year_validation_cache:
-            return self._year_validation_cache[cache_key]
-        
-        spotify_client = self._get_spotify_client()
-        if not spotify_client or not spotify_client.access_token:
-            self._year_validation_cache[cache_key] = None
-            return None
-        
-        try:
-            import requests
-            query = f"album:{album} artist:{artist}"
-            search_url = f"{spotify_client.base_url}/search"
-            headers = spotify_client._get_headers()
-            params = {
-                'q': query,
-                'type': 'album',
-                'limit': 5
-            }
-            
-            response = requests.get(search_url, headers=headers, params=params, timeout=10)
-            if response.status_code != 200:
-                self._year_validation_cache[cache_key] = None
-                return None
-            
-            data = response.json()
-            albums = data.get('albums', {}).get('items', [])
-            
-            if not albums:
-                self._year_validation_cache[cache_key] = None
-                return None
-            
-            # Find the best matching album (exact match preferred)
-            for album_data in albums:
-                album_name = album_data.get('name', '')
-                artists = album_data.get('artists', [])
-                artist_name = artists[0].get('name', '') if artists else ''
-                
-                # Check if this matches (normalized comparison)
-                if (normalize_string(album_name) == normalize_string(album) and
-                    normalize_string(artist_name) == normalize_string(artist)):
-                    release_date = album_data.get('release_date', '')
-                    if release_date and len(release_date) >= 4:
-                        try:
-                            year = int(release_date[:4])
-                            self._year_validation_cache[cache_key] = year
-                            return year
-                        except ValueError:
-                            continue
-            
-            # If no exact match, try first result
-            if albums:
-                release_date = albums[0].get('release_date', '')
-                if release_date and len(release_date) >= 4:
-                    try:
-                        year = int(release_date[:4])
-                        self._year_validation_cache[cache_key] = year
-                        return year
-                    except ValueError:
-                        pass
-            
-            self._year_validation_cache[cache_key] = None
-            return None
-            
-        except Exception:
-            self._year_validation_cache[cache_key] = None
-            return None
-    
-    def _get_release_year_from_discogs(self, artist: str, album: str, release_type: Optional[str] = None) -> Optional[int]:
-        """
-        Search Discogs for release year validation.
-        Only searches when necessary (not cached, and only for validation).
-        
-        Args:
-            artist: Artist name
-            album: Album name
-            release_type: Optional release type filter (e.g., "Album", "Single", "EP", etc.)
-            
-        Returns:
-            Release year if found, None otherwise
-        """
-        cache_key = (normalize_string(artist), normalize_string(album), release_type or "")
-        # Use a different cache key prefix to avoid conflicts
-        discogs_cache_key = ('discogs', cache_key[0], cache_key[1], cache_key[2])
-        if discogs_cache_key in self._year_validation_cache:
-            return self._year_validation_cache[discogs_cache_key]
-        
-        try:
-            song_data = SongData(
-                title="",
-                artist=artist,
-                album=album
-            )
-            
-            # Search for releases (limit to 5 for performance)
-            # Pass release_type to filter results
-            discogs_results = self.discogs_client.search_release(song_data, limit=5, release_type=release_type)
-            
-            if not discogs_results:
-                self._year_validation_cache[discogs_cache_key] = None
-                return None
-            
-            # Find the best matching release (exact match preferred)
-            for result in discogs_results:
-                # Check if this matches (normalized comparison)
-                if (normalize_string(result.album or "") == normalize_string(album) and
-                    normalize_string(result.artist or "") == normalize_string(artist)):
-                    if result.year:
-                        self._year_validation_cache[discogs_cache_key] = result.year
-                        return result.year
-            
-            # If no exact match, use first result's year
-            if discogs_results and discogs_results[0].year:
-                year = discogs_results[0].year
-                self._year_validation_cache[discogs_cache_key] = year
-                return year
-            
-            self._year_validation_cache[discogs_cache_key] = None
-            return None
-            
-        except Exception:
-            self._year_validation_cache[discogs_cache_key] = None
-            return None
-    
-    def _validate_release_year(self, artist: str, album: str, candidate_years: List[Optional[int]], release_type: Optional[str] = None) -> Optional[int]:
-        """
-        Cross-reference release year from Spotify and Discogs when there's doubt.
-        
-        Args:
-            artist: Artist name
-            album: Album name
-            candidate_years: List of candidate years to validate
-            release_type: Optional release type filter (e.g., "Album", "Single", "EP", etc.)
-            
-        Returns:
-            Validated year if found, None otherwise
-        """
-        # Try Spotify first
-        spotify_year = self._get_release_year_from_spotify(artist, album)
-        if spotify_year and spotify_year in candidate_years:
-            return spotify_year
-        
-        # Try Discogs (with release_type filter)
-        discogs_year = self._get_release_year_from_discogs(artist, album, release_type)
-        if discogs_year and discogs_year in candidate_years:
-            return discogs_year
-        
-        # If both agree (even if not in candidates), prefer that
-        if spotify_year and discogs_year and spotify_year == discogs_year:
-            return spotify_year
-        
-        # Return the most authoritative source (Spotify preferred)
-        return spotify_year or discogs_year
-    
     def _deduplicate_results(self, results: List[MusicBrainzSong], release_type: Optional[str] = None) -> List[MusicBrainzSong]:
-        """
-        Remove duplicate results based on normalized (album, artist) key.
-        When duplicates are found, prioritizes:
-        1. Original releases (where release_date matches original_release_date)
-        2. Original releases (earliest date, not remasters/reissues)
-        3. Earliest original release date (strongly prefer earliest year - likely original)
-        4. Cross-reference with Spotify/Discogs for year validation when in doubt
-        5. Highest score
-        This deduplicates by release name (album) + artist, regardless of year or MBID.
-        When multiple candidates have the same original release date, Spotify and Discogs
-        are consulted to confirm the correct release year.
-        """
-        if not results:
-            return results
-        
-        grouped_by_key: Dict[Tuple[str, str], List[MusicBrainzSong]] = {}
-        
-        for result in results:
-            key = self._create_deduplication_key(result)
-            
-            if not key[0]:
-                continue
-            
-            if key not in grouped_by_key:
-                grouped_by_key[key] = []
-            grouped_by_key[key].append(result)
-        
-        deduplicated = []
-        for key, group in grouped_by_key.items():
-            if len(group) == 1:
-                deduplicated.append(group[0])
-            else:
-                # Separate remasters/reissues from originals
-                originals = [r for r in group if not self._is_remaster_or_reissue(r)]
-                remasters = [r for r in group if self._is_remaster_or_reissue(r)]
-                
-                # Prefer originals over remasters
-                candidates = originals if originals else remasters
-                
-                # Separate candidates into:
-                # 1. Original releases (release_date matches original_release_date)
-                # 2. Re-releases (release_date differs from original_release_date)
-                true_originals = []
-                re_releases = []
-                candidates_without_original_date = []
-                
-                for result in candidates:
-                    # Check if this is the original release (release_date matches original_release_date)
-                    is_original_release = (
-                        result.original_release_date and 
-                        result.release_date and 
-                        result.release_date == result.original_release_date
-                    )
-                    
-                    # Use original_release_date for comparison if available, otherwise use release_date
-                    comparison_date = result.original_release_date or result.release_date
-                    date_tuple = self._parse_release_date(comparison_date)
-                    
-                    if is_original_release and date_tuple is not None:
-                        true_originals.append((result, date_tuple, result.score if result.score else 0))
-                    elif date_tuple is not None:
-                        re_releases.append((result, date_tuple, result.score if result.score else 0))
-                    else:
-                        candidates_without_original_date.append((result, result.score if result.score else 0))
-                
-                # Sort true originals by date (earliest first), then by score (highest first)
-                true_originals.sort(key=lambda x: (x[1], -x[2]))
-                
-                # Sort re-releases by original release date (earliest first), then by score
-                re_releases.sort(key=lambda x: (x[1], -x[2]))
-                
-                # Select best: prefer true originals, then earliest original release date
-                best = None
-                if true_originals:
-                    # If we have multiple true originals, check if we need validation
-                    if len(true_originals) > 1:
-                        # Extract unique years from candidates
-                        unique_years = set()
-                        for result, date_tuple, _ in true_originals:
-                            if date_tuple:
-                                unique_years.add(date_tuple[0])
-                        
-                        # Only validate if we have multiple different years (actual ambiguity)
-                        # If all candidates have the same year, just pick the earliest/highest score
-                        # Skip Discogs validation - rely on original_release_date logic which is usually sufficient
-                        # Only use Spotify if available (no Discogs searches)
-                        if len(unique_years) > 1:
-                            # Get artist and album from first candidate
-                            first_candidate = true_originals[0][0]
-                            artist = first_candidate.artist or ""
-                            album = first_candidate.album or first_candidate.title or ""
-                            
-                            if artist and album:
-                                candidate_years = list(unique_years)
-                                # Try Spotify only (no Discogs to avoid unnecessary searches)
-                                spotify_year = self._get_release_year_from_spotify(artist, album)
-                                
-                                if spotify_year and spotify_year in candidate_years:
-                                    # Prefer candidates that match the Spotify year
-                                    matching_candidates = [
-                                        (r, dt, score) for r, dt, score in true_originals
-                                        if dt and dt[0] == spotify_year
-                                    ]
-                                    if matching_candidates:
-                                        # Sort by score among matching candidates
-                                        matching_candidates.sort(key=lambda x: -x[2])
-                                        best = matching_candidates[0][0]
-                    
-                    # If no validation was needed or validation didn't find a match, use earliest/highest score
-                    if not best:
-                        best = true_originals[0][0]
-                elif re_releases:
-                    # If we have multiple re-releases with different original years, cross-reference
-                    if len(re_releases) > 1:
-                        # Extract unique years from candidates
-                        unique_years = set()
-                        for result, date_tuple, _ in re_releases:
-                            if date_tuple:
-                                unique_years.add(date_tuple[0])
-                        
-                        # Only validate if we have multiple different years (ambiguity)
-                        # Skip Discogs validation - rely on original_release_date logic
-                        # Only use Spotify if available (no Discogs searches)
-                        if len(unique_years) > 1:
-                            # Get artist and album from first candidate
-                            first_candidate = re_releases[0][0]
-                            artist = first_candidate.artist or ""
-                            album = first_candidate.album or first_candidate.title or ""
-                            
-                            if artist and album:
-                                candidate_years = list(unique_years)
-                                # Try Spotify only (no Discogs to avoid unnecessary searches)
-                                spotify_year = self._get_release_year_from_spotify(artist, album)
-                                
-                                if spotify_year and spotify_year in candidate_years:
-                                    # Prefer candidates that match the Spotify year
-                                    matching_candidates = [
-                                        (r, dt, score) for r, dt, score in re_releases
-                                        if dt and dt[0] == spotify_year
-                                    ]
-                                    if matching_candidates:
-                                        # Sort by score among matching candidates
-                                        matching_candidates.sort(key=lambda x: -x[2])
-                                        best = matching_candidates[0][0]
-                    
-                    if not best:
-                        best = re_releases[0][0]
-                elif candidates_without_original_date:
-                    # If no dates, try to get year from Spotify/Discogs for validation
-                    if len(candidates_without_original_date) > 1:
-                        first_candidate = candidates_without_original_date[0][0]
-                        artist = first_candidate.artist or ""
-                        album = first_candidate.album or first_candidate.title or ""
-                        
-                        if artist and album:
-                            # Try Spotify only (no Discogs to avoid unnecessary searches)
-                            spotify_year = self._get_release_year_from_spotify(artist, album)
-                            
-                            if spotify_year:
-                                # Check if any candidate's release_date matches Spotify year
-                                for result, score in candidates_without_original_date:
-                                    if result.release_date:
-                                        try:
-                                            year = int(result.release_date[:4])
-                                            if year == spotify_year:
-                                                best = result
-                                                break
-                                        except (ValueError, IndexError):
-                                            continue
-                    
-                    if not best:
-                        # If no dates, use highest score
-                        candidates_without_original_date.sort(key=lambda x: -x[1])  # Sort by score descending
-                        best = candidates_without_original_date[0][0]
-                else:
-                    # Fallback: just take first candidate
-                    best = candidates[0] if candidates else None
-                
-                if best:
-                    deduplicated.append(best)
-        
-        return deduplicated
+        """Delegate to ResultDeduplicator."""
+        return self.deduplicator.deduplicate_results(results, release_type)
     
     def _deduplicate_with_priority(self, mb_results: List[MusicBrainzSong], discogs_results: List[MusicBrainzSong]) -> List[MusicBrainzSong]:
-        """
-        Deduplicate results prioritizing MusicBrainz over Discogs.
-        Only keeps Discogs results that don't have a matching MusicBrainz result.
-        This ensures Discogs complements MusicBrainz without polluting good results.
-        """
-        # First, deduplicate MusicBrainz results internally
-        mb_deduped = self._deduplicate_results(mb_results, release_type=None)
-        
-        # Create a set of keys for MusicBrainz results
-        mb_keys = set()
-        for result in mb_deduped:
-            key = self._create_deduplication_key(result)
-            if key[0]:  # Only add non-empty keys
-                mb_keys.add(key)
-        
-        # Only keep Discogs results that don't match any MusicBrainz result
-        complementary_discogs = []
-        for discogs_result in discogs_results:
-            key = self._create_deduplication_key(discogs_result)
-            if key[0] and key not in mb_keys:
-                complementary_discogs.append(discogs_result)
-        
-        # Combine: MusicBrainz first (prioritized), then complementary Discogs
-        return mb_deduped + complementary_discogs
+        """Delegate to ResultDeduplicator."""
+        return self.deduplicator.deduplicate_with_priority(mb_results, discogs_results)
     
     def search_recordings(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None) -> List[MusicBrainzSong]:
         """Search for recordings in MusicBrainz."""
         results = self.musicbrainz_client.search_recording(song_data, offset=offset, limit=limit)
-        return self._deduplicate_results(results, release_type=None)
+        return self.deduplicator.deduplicate_results(results, release_type=None)
     
     def search_releases(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None, release_type: Optional[str] = None) -> List[MusicBrainzSong]:
         """Search for releases in MusicBrainz and Discogs in parallel.
@@ -777,8 +375,16 @@ class SearchService:
         
         return all_results[:max_results]
     
-    def search_playlist(self, artist: str, album: str, max_results: int = 5) -> List[Dict[str, Any]]:
-        """Search YouTube for playlists matching the album."""
+    def search_playlist(self, artist: str, album: str, max_results: int = 5, track_titles: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """
+        Search YouTube for playlists matching the album.
+        
+        Args:
+            artist: Artist name
+            album: Album name
+            max_results: Maximum number of playlists to return
+            track_titles: Optional list of track titles from the album to search for playlists containing them
+        """
         # Include queries for vinyl "Side 1" and "Side 2" playlists
         queries = [
             f"{artist} {album} playlist",
@@ -789,7 +395,16 @@ class SearchService:
             f"{artist} {album} vinyl side 2",
             f"{artist} {album} side a",
             f"{artist} {album} side b",
+            f"{artist} {album}",  # More general search
+            f"{album} playlist",  # Search without artist (in case of compilation albums)
         ]
+        
+        # Also search for playlists using individual track titles (helps find playlists that contain the tracks)
+        if track_titles:
+            # Use first few track titles to find playlists that might contain album tracks
+            for track_title in track_titles[:3]:  # Limit to first 3 tracks to avoid too many queries
+                queries.append(f"{artist} {track_title} playlist")
+                queries.append(f"{track_title} playlist")
         
         all_results = []
         seen_ids = set()
@@ -797,45 +412,52 @@ class SearchService:
         side_playlists = []
         regular_playlists = []
         
+        # Increase results per query to be more thorough
+        results_per_query = max(max_results * 3, 15)
+        
         for query in queries:
-            client = YouTubeClient(query, max_results * 2)
-            for video in client.videos:
-                if video.url_suffix and 'list=' in video.url_suffix:
-                    match = re.search(r'list=([^&]+)', video.url_suffix)
-                    if match:
-                        playlist_id = match.group(1)
-                        
-                        # Skip Radio playlists (RD prefix) - these are auto-generated and often inaccessible
-                        if playlist_id.startswith('RD'):
-                            continue
-                        
-                        if playlist_id not in seen_ids:
-                            playlist_info = {
-                                'playlist_id': playlist_id,
-                                'title': video.title,
-                                'url': f"https://www.youtube.com/playlist?list={playlist_id}",
-                                'video': video
-                            }
+            try:
+                client = YouTubeClient(query, results_per_query)
+                for video in client.videos:
+                    if video.url_suffix and 'list=' in video.url_suffix:
+                        match = re.search(r'list=([^&]+)', video.url_suffix)
+                        if match:
+                            playlist_id = match.group(1)
                             
-                            # Check if this is a "Side 1" or "Side 2" playlist
-                            title_lower = video.title.lower()
-                            is_side_playlist = any(
-                                keyword in title_lower 
-                                for keyword in ['side 1', 'side 2', 'side a', 'side b', 'side one', 'side two']
-                            )
+                            # Skip Radio playlists (RD prefix) - these are auto-generated and often inaccessible
+                            if playlist_id.startswith('RD'):
+                                continue
                             
-                            if is_side_playlist:
-                                side_playlists.append(playlist_info)
-                            else:
-                                regular_playlists.append(playlist_info)
-                            
-                            seen_ids.add(playlist_id)
-                            
-                            # If we have enough results, combine and return
-                            if len(side_playlists) + len(regular_playlists) >= max_results * 2:
-                                # Prioritize side playlists, then regular playlists
-                                all_results = side_playlists + regular_playlists
-                                return all_results[:max_results]
+                            if playlist_id not in seen_ids:
+                                playlist_info = {
+                                    'playlist_id': playlist_id,
+                                    'title': video.title,
+                                    'url': f"https://www.youtube.com/playlist?list={playlist_id}",
+                                    'video': video
+                                }
+                                
+                                # Check if this is a "Side 1" or "Side 2" playlist
+                                title_lower = video.title.lower()
+                                is_side_playlist = any(
+                                    keyword in title_lower 
+                                    for keyword in ['side 1', 'side 2', 'side a', 'side b', 'side one', 'side two']
+                                )
+                                
+                                if is_side_playlist:
+                                    side_playlists.append(playlist_info)
+                                else:
+                                    regular_playlists.append(playlist_info)
+                                
+                                seen_ids.add(playlist_id)
+                                
+                                # If we have enough results, combine and return
+                                if len(side_playlists) + len(regular_playlists) >= max_results * 2:
+                                    # Prioritize side playlists, then regular playlists
+                                    all_results = side_playlists + regular_playlists
+                                    return all_results[:max_results]
+            except Exception:
+                # Continue with next query if one fails
+                continue
         
         # Combine results with side playlists first
         all_results = side_playlists + regular_playlists
