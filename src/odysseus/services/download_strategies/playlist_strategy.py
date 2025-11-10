@@ -292,6 +292,10 @@ class PlaylistStrategy(BaseDownloadStrategy):
                                 "spotify.com" in release_info.url
                             )
                             
+                            # Use original_release_date for year if available (prefer original year over re-release year)
+                            date_to_use = release_info.original_release_date or release_info.release_date
+                            year = int(date_to_use[:4]) if date_to_use and len(date_to_use) >= 4 else None
+                            
                             if is_playlist:
                                 # For playlists, use playlist folder structure
                                 metadata_dict = {
@@ -300,7 +304,7 @@ class PlaylistStrategy(BaseDownloadStrategy):
                                     'album': release_info.title,
                                     'is_playlist': True,
                                     'playlist_name': release_info.title,
-                                    'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
+                                    'year': year,
                                     'track_number': track.position,
                                     'total_tracks': len(release_info.tracks)
                                 }
@@ -309,7 +313,7 @@ class PlaylistStrategy(BaseDownloadStrategy):
                                     'title': track.title,
                                     'artist': track.artist,
                                     'album': release_info.title,
-                                    'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
+                                    'year': year,
                                     'track_number': track.position,
                                     'total_tracks': len(release_info.tracks)
                                 }

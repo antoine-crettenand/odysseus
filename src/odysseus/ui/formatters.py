@@ -233,10 +233,13 @@ class DisplayFormatters:
             release_type = release.release_type or "Other"
             return type_priority.get(release_type, 99)
         
-        # Group releases by year
+        # Group releases by year (use original_release_date if available, otherwise release_date)
+        # This ensures re-releases are grouped with their original release year
         releases_by_year = {}
         for release in releases:
-            year = release.release_date[:4] if release.release_date and len(release.release_date) >= 4 else "Unknown Year"
+            # Prefer original_release_date for grouping (shows when the album was originally released)
+            date_to_use = release.original_release_date or release.release_date
+            year = date_to_use[:4] if date_to_use and len(date_to_use) >= 4 else "Unknown Year"
             if year not in releases_by_year:
                 releases_by_year[year] = []
             releases_by_year[year].append(release)

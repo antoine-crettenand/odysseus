@@ -104,8 +104,10 @@ class FullAlbumStrategy(BaseDownloadStrategy):
         
         # Extract release year if available
         release_year = None
-        if release_info.release_date and len(release_info.release_date) >= 4:
-            release_year = release_info.release_date[:4]
+        # Use original_release_date for year if available (prefer original year over re-release year)
+        date_to_use = release_info.original_release_date or release_info.release_date
+        if date_to_use and len(date_to_use) >= 4:
+            release_year = date_to_use[:4]
         
         # Search for full album video (with year for better accuracy)
         full_album_videos = self.display_manager.show_loading_spinner(
@@ -226,6 +228,10 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                     "spotify.com" in release_info.url
                 )
                 
+                # Use original_release_date for year if available (prefer original year over re-release year)
+                date_to_use = release_info.original_release_date or release_info.release_date
+                year = int(date_to_use[:4]) if date_to_use and len(date_to_use) >= 4 else None
+                
                 if is_playlist:
                     # For playlists, use playlist folder structure
                     album_metadata = {
@@ -234,7 +240,7 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                         'album': release_info.title,
                         'is_playlist': True,
                         'playlist_name': release_info.title,
-                        'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
+                        'year': year,
                     }
                 else:
                     # Use "Various Artists" for folder structure if this is a compilation
@@ -245,7 +251,7 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                         'title': release_info.title,
                         'artist': folder_artist,  # Use "Various Artists" for folder structure in compilations
                         'album': release_info.title,
-                        'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
+                        'year': year,
                     }
                 
                 # Download full album video
@@ -386,6 +392,10 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                             existing_files_before_split.add(existing_files[0])
                 
                 # Prepare metadata list for splitting
+                # Use original_release_date for year if available (prefer original year over re-release year)
+                date_to_use = release_info.original_release_date or release_info.release_date
+                year = int(date_to_use[:4]) if date_to_use and len(date_to_use) >= 4 else None
+                
                 metadata_list = []
                 for timestamp_info in track_timestamps:
                     track = timestamp_info['track']
@@ -393,7 +403,7 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                         'title': track.title,
                         'artist': track.artist,
                         'album': release_info.title,
-                        'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
+                        'year': year,
                         'track_number': track.position,
                         'total_tracks': len(release_info.tracks)
                     })

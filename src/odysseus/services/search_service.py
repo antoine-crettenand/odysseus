@@ -122,13 +122,38 @@ class SearchService:
                     filtered_results.append(result)
             all_results = filtered_results
         
-        # Sort results by original release date (earliest first) to prioritize original releases
-        # Use original_release_date if available, otherwise use release_date
-        # This ensures that even if deduplication kept the earliest, the display order is correct
-        all_results.sort(key=lambda r: (
-            self._parse_release_date(r.original_release_date or r.release_date) or (9999, 12, 31),  # Put items without dates at end
-            -(r.score if r.score else 0)  # Then by score descending
-        ))
+        # Sort results to prioritize original releases:
+        # 1. By original release date (earliest first) - this is the most important factor
+        # 2. True originals before re-releases (if same original date)
+        # 3. Then by score (highest first)
+        # This ensures original releases from the earliest year (1971) appear first
+        def sort_key(r):
+            # Use original_release_date for sorting (earliest first) - this is the key!
+            # For re-releases, original_release_date should be the original year (e.g., 1971)
+            # For true originals, original_release_date == release_date
+            original_date_tuple = self._parse_release_date(r.original_release_date) or (9999, 12, 31)
+            release_date_tuple = self._parse_release_date(r.release_date) or (9999, 12, 31)
+            
+            # Use the earlier of original_release_date or release_date for primary sorting
+            # This ensures 1971 (original) sorts before 2021 (re-release)
+            primary_date = original_date_tuple if original_date_tuple < release_date_tuple else release_date_tuple
+            
+            # Check if this is a true original (release_date matches original_release_date)
+            is_true_original = (
+                r.original_release_date and 
+                r.release_date and 
+                r.original_release_date == r.release_date
+            )
+            
+            # Sort key: date (earliest first), then is_original (True=0, False=1), then score (highest first)
+            # This ensures 1971 comes before 2021 regardless of whether they're true originals or re-releases
+            return (
+                primary_date,  # Primary sort: earliest original date first - 1971 before 2021
+                0 if is_true_original else 1,  # Then true originals before re-releases
+                -(r.score if r.score else 0)  # Then by score (highest first)
+            )
+        
+        all_results.sort(key=sort_key)
         
         # Apply pagination AFTER deduplication and sorting
         if offset > 0:

@@ -77,11 +77,17 @@ class PathManager:
         # Regular album structure
         is_compilation = self.is_compilation(release_info)
         folder_artist = "Various Artists" if is_compilation else release_info.artist
+        
+        # Use original_release_date for folder path if available (prefer original year over re-release year)
+        # This ensures re-releases are organized by their original release year
+        date_to_use = release_info.original_release_date or release_info.release_date
+        year = int(date_to_use[:4]) if date_to_use and len(date_to_use) >= 4 else None
+        
         album_metadata = {
             'title': release_info.title,
             'artist': folder_artist,
             'album': release_info.title,
-            'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
+            'year': year,
         }
         return self.download_service.downloader._create_organized_path(album_metadata)
     

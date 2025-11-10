@@ -125,15 +125,39 @@ class ResultDeduplicator:
                 re_releases = []
                 candidates_without_original_date = []
                 
+                # First pass: collect all dates to find the earliest (likely the original)
+                all_dates = []
+                for result in candidates:
+                    if result.original_release_date:
+                        date_tuple = self._parse_release_date(result.original_release_date)
+                        if date_tuple:
+                            all_dates.append(date_tuple)
+                    elif result.release_date:
+                        date_tuple = self._parse_release_date(result.release_date)
+                        if date_tuple:
+                            all_dates.append(date_tuple)
+                
+                earliest_date = min(all_dates) if all_dates else None
+                
                 for result in candidates:
                     # Check if this is the original release
                     is_original_release = (
                         result.original_release_date and 
                         result.release_date and 
-                        result.release_date == result.original_release_date
+                        result.original_release_date == result.release_date
                     )
                     
-                    # Use original_release_date for comparison if available
+                    # If original_release_date is missing but we have an earliest date from the group,
+                    # and this release's date is later, infer it's a re-release
+                    if not result.original_release_date and earliest_date and result.release_date:
+                        release_date_tuple = self._parse_release_date(result.release_date)
+                        if release_date_tuple and release_date_tuple > earliest_date:
+                            # This is likely a re-release - use the earliest date as original_release_date
+                            result.original_release_date = f"{earliest_date[0]}-{earliest_date[1]:02d}-{earliest_date[2]:02d}"[:10]
+                    
+                    # Use original_release_date for comparison if available (this is the key!)
+                    # For re-releases, original_release_date should be the original year (e.g., 1971)
+                    # For true originals, original_release_date == release_date
                     comparison_date = result.original_release_date or result.release_date
                     date_tuple = self._parse_release_date(comparison_date)
                     
@@ -145,15 +169,21 @@ class ResultDeduplicator:
                         candidates_without_original_date.append((result, result.score if result.score else 0))
                 
                 # Sort true originals by date (earliest first), then by score (highest first)
+                # This ensures 1971 comes before 2021 even if 2021 has a higher score
                 true_originals.sort(key=lambda x: (x[1], -x[2]))
                 
                 # Sort re-releases by original release date (earliest first), then by score
+                # This ensures re-releases of 1971 albums come before re-releases of later albums
                 re_releases.sort(key=lambda x: (x[1], -x[2]))
                 
-                # Select best: prefer true originals, then earliest original release date
+                # Select best: prefer true originals with earliest date, then re-releases with earliest original date
                 best = None
                 if true_originals:
-                    # If we have multiple true originals, check if we need validation
+                    # Always prefer the earliest true original (first in sorted list)
+                    # This ensures 1971 original is preferred over 2021 original (if both exist)
+                    best = true_originals[0][0]
+                    
+                    # If we have multiple true originals with different years, try validation
                     if len(true_originals) > 1:
                         # Extract unique years from candidates
                         unique_years = set()
@@ -180,12 +210,24 @@ class ResultDeduplicator:
                                         if dt and dt[0] == validated_year
                                     ]
                                     if matching_candidates:
+                                        # Still sort by score within the validated year
                                         matching_candidates.sort(key=lambda x: -x[2])
                                         best = matching_candidates[0][0]
+                
+                # If we have both true originals and re-releases, prefer true originals
+                # But if a re-release has an earlier original_release_date than any true original,
+                # it might actually be the original (if metadata is incorrect)
+                if true_originals and re_releases:
+                    # Compare earliest true original with earliest re-release
+                    earliest_true_original_date = true_originals[0][1]
+                    earliest_re_release_original_date = re_releases[0][1]
                     
-                    # If no validation was needed or validation didn't find a match
-                    if not best:
-                        best = true_originals[0][0]
+                    # If re-release's original date is earlier, it's likely the actual original
+                    # (metadata might be incorrect - re-release has correct original_release_date)
+                    if earliest_re_release_original_date < earliest_true_original_date:
+                        # Prefer the re-release with earliest original date
+                        best = re_releases[0][0]
+                    # Otherwise, keep the true original (already set above)
                 elif re_releases:
                     # If we have multiple re-releases with different original years
                     if len(re_releases) > 1:

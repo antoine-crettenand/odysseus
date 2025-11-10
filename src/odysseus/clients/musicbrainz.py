@@ -307,7 +307,7 @@ class MusicBrainzClient:
             'fmt': 'json',
             'limit': limit or self.max_results,
             'offset': offset,
-            'inc': 'release-groups'  # Include release-group info to get release type
+            'inc': 'release-groups'  # Include release-group info to get release type and first-release-date
         }
         
         try:
@@ -791,6 +791,7 @@ class MusicBrainzClient:
             
             # Get release type from release-group
             release_type = None
+            original_release_date = None
             release_group = data.get('release-group')
             if release_group:
                 release_type = release_group.get('primary-type')
@@ -800,9 +801,13 @@ class MusicBrainzClient:
                     # If there are secondary types, prefer them (e.g., "Live" over "Album")
                     release_type = secondary_types[0] if secondary_types else release_type
                 
-                # If release date is missing, try to get it from release-group's first-release-date
-                if not release_date and release_group.get('first-release-date'):
-                    release_date = release_group.get('first-release-date')
+                # Always capture the original release date from release-group (first-release-date)
+                # This helps identify original releases vs re-releases
+                original_release_date = release_group.get('first-release-date')
+                
+                # If release date is missing, use original release date as fallback
+                if not release_date and original_release_date:
+                    release_date = original_release_date
             
             url = f"https://musicbrainz.org/release/{mbid}"
             
@@ -863,6 +868,7 @@ class MusicBrainzClient:
                 title=title,
                 artist=artist,
                 release_date=release_date,
+                original_release_date=original_release_date,
                 genre=genre,
                 release_type=release_type,
                 mbid=mbid,

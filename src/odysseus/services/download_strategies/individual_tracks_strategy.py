@@ -168,13 +168,17 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
                     
                     if is_playlist:
                         # For playlists, use playlist folder structure
+                        # Use original_release_date for year if available (prefer original year over re-release year)
+                        date_to_use = release_info.original_release_date or release_info.release_date
+                        year = int(date_to_use[:4]) if date_to_use and len(date_to_use) >= 4 else None
+                        
                         metadata_dict = {
                             'title': track.title,
                             'artist': track.artist,  # Keep actual track artist in metadata
                             'album': release_info.title,
                             'is_playlist': True,
                             'playlist_name': release_info.title,
-                            'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
+                            'year': year,
                             'track_number': track_num,  # Use track_num (requested position) not track.position (API position)
                             'total_tracks': len(release_info.tracks)
                         }
@@ -184,11 +188,15 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
                         is_compilation = self.path_manager.is_compilation(release_info)
                         folder_artist = "Various Artists" if is_compilation else track.artist
                         
+                        # Use original_release_date for year if available (prefer original year over re-release year)
+                        date_to_use = release_info.original_release_date or release_info.release_date
+                        year = int(date_to_use[:4]) if date_to_use and len(date_to_use) >= 4 else None
+                        
                         metadata_dict = {
                             'title': track.title,
                             'artist': folder_artist,  # Use "Various Artists" for folder structure in compilations
                             'album': release_info.title,
-                            'year': int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,
+                            'year': year,
                             'track_number': track_num,  # Use track_num (requested position) not track.position (API position)
                             'total_tracks': len(release_info.tracks)
                         }
