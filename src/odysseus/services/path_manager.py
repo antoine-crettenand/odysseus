@@ -26,11 +26,15 @@ class PathManager:
         
         A compilation has different artists on different tracks.
         A collaboration album has the same collaborating artists on all tracks.
+        An album with featured artists (e.g., "Artist & Guest") is NOT a compilation.
         
-        Returns True if there are at least 2 tracks with different artists.
+        Returns True if there are at least 2 tracks with different primary artists.
         """
         if not release_info.tracks or len(release_info.tracks) < 2:
             return False
+        
+        # Normalize release artist for comparison
+        release_artist_normalized = normalize_string(release_info.artist) if release_info.artist else ""
         
         # Normalize artist names for comparison (case-insensitive, strip whitespace)
         artists = set()
@@ -44,9 +48,43 @@ class PathManager:
         if len(artists) == 1:
             return False
         
-        # If we have 2 or more different artists across tracks, it's a compilation
-        # This means different tracks have different artists (not just different artist names)
-        return len(artists) >= 2
+        # If we have a release artist, check if all track artists contain the release artist
+        # This handles cases like "Air" (release) with tracks by "Air" and "Air & Beth Hirsch"
+        if release_artist_normalized:
+            all_tracks_share_release_artist = True
+            for track in release_info.tracks:
+                track_artist_normalized = normalize_string(track.artist) if track.artist else ""
+                # Check if track artist contains release artist (handles collaborations)
+                # Also check if release artist contains track artist (handles cases where release artist is longer)
+                if track_artist_normalized and release_artist_normalized:
+                    # Extract primary artist from track (before "&" or "and")
+                    track_primary = track_artist_normalized.split(' and ')[0].split(' & ')[0].strip()
+                    release_primary = release_artist_normalized.split(' and ')[0].split(' & ')[0].strip()
+                    
+                    # Check if they match or if one contains the other
+                    if (track_primary != release_primary and 
+                        track_primary not in release_artist_normalized and 
+                        release_primary not in track_artist_normalized):
+                        all_tracks_share_release_artist = False
+                        break
+            
+            # If all tracks share the release artist, it's not a compilation
+            if all_tracks_share_release_artist:
+                return False
+        
+        # If we have 2 or more different primary artists across tracks, it's a compilation
+        # Extract primary artists (before "&" or "and") to avoid false positives from collaborations
+        primary_artists = set()
+        for track in release_info.tracks:
+            artist = normalize_string(track.artist) if track.artist else ""
+            if artist:
+                # Extract primary artist (before "&" or "and")
+                primary = artist.split(' and ')[0].split(' & ')[0].strip()
+                if primary:
+                    primary_artists.add(primary)
+        
+        # If we have 2 or more different primary artists, it's a compilation
+        return len(primary_artists) >= 2
     
     def get_release_folder_path(self, release_info: ReleaseInfo) -> Path:
         """
