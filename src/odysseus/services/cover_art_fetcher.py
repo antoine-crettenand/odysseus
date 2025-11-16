@@ -469,12 +469,18 @@ class CoverArtFetcher:
         """
         # Priority 1: Try Spotify (URL first, then search)
         # First, try Spotify cover art URL if available
+        # Only use it if it's actually a Spotify URL (to avoid Discogs URLs)
         if release_info.cover_art_url:
-            if console:
-                console.print(f"[dim blue]ℹ[/dim blue] [dim]Fetching cover art from Spotify for release...[/dim]")
-            cover_art_data = self.fetch_cover_art_from_url(release_info.cover_art_url, console)
-            if cover_art_data:
-                return cover_art_data
+            # Verify it's a Spotify URL (not Discogs or other sources)
+            is_spotify_url = 'spotify' in release_info.cover_art_url.lower() or 'i.scdn.co' in release_info.cover_art_url.lower()
+            if is_spotify_url:
+                if console:
+                    console.print(f"[dim blue]ℹ[/dim blue] [dim]Fetching cover art from Spotify for release...[/dim]")
+                cover_art_data = self.fetch_cover_art_from_url(release_info.cover_art_url, console)
+                if cover_art_data and len(cover_art_data) > 0:
+                    return cover_art_data
+            elif console:
+                console.print(f"[dim blue]ℹ[/dim blue] [dim]Skipping non-Spotify cover art URL, will search Spotify instead...[/dim]")
         
         # If no Spotify URL, try searching Spotify
         if console:
@@ -483,12 +489,7 @@ class CoverArtFetcher:
         if cover_art_data:
             return cover_art_data
         
-        # Priority 2: Try Discogs
-        cover_art_data = self._fetch_cover_art_from_discogs(release_info, console)
-        if cover_art_data:
-            return cover_art_data
-        
-        # Priority 3: Try MusicBrainz if we have MBID
+        # Priority 2: Try MusicBrainz if we have MBID
         mbid = release_info.mbid.strip() if release_info.mbid else ""
         
         # Check if MBID looks like a MusicBrainz UUID (has dashes)
@@ -507,7 +508,7 @@ class CoverArtFetcher:
             if console:
                 console.print(f"[yellow]⚠[/yellow] MBID appears to be from Discogs (not MusicBrainz). Cover art requires MusicBrainz MBID.")
         
-        # Fallback 3: Try to extract cover art from existing tracks in the folder
+        # Priority 3: Try to extract cover art from existing tracks in the folder
         if folder_path and folder_path.exists():
             if console:
                 console.print(f"[dim blue]ℹ[/dim blue] [dim]Trying to extract cover art from existing tracks in folder...[/dim]")

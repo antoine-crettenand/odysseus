@@ -7,6 +7,17 @@ from typing import Optional, Tuple
 from ..models.search_results import YouTubeVideo
 from ..models.releases import ReleaseInfo, Track
 from ..core.config import DURATION_VALIDATION_THRESHOLDS
+from .validation_keywords import (
+    REMASTER_KEYWORDS,
+    LIVE_WORD_BOUNDARY_KEYWORDS,
+    LIVE_SIMPLE_KEYWORDS,
+    CONCERT_VENUES,
+    EXPLICIT_LIVE_PATTERNS,
+    REACTION_WORD_BOUNDARY_KEYWORDS,
+    TOP_RANKING_PATTERNS,
+    REACTION_MULTI_WORD_PHRASES,
+    REACTION_SPECIFIC_KEYWORDS,
+)
 
 
 class VideoValidator:
@@ -43,26 +54,44 @@ class VideoValidator:
             return None
         
         # Try different duration fields
-        duration = video_info.get('duration')
-        if duration:
-            if isinstance(duration, (int, float)):
-                return float(duration)
-            elif isinstance(duration, str):
-                # Try parsing as seconds
+        for field in ['duration', 'lengthSeconds']:
+            value = video_info.get(field)
+            if value:
                 try:
-                    return float(duration)
-                except ValueError:
-                    pass
-        
-        # Try lengthSeconds field
-        length_seconds = video_info.get('lengthSeconds')
-        if length_seconds:
-            try:
-                return float(length_seconds)
-            except (ValueError, TypeError):
-                pass
-        
+                    return float(value)
+                except (ValueError, TypeError):
+                    continue
         return None
+    
+    def _is_remastered_album(self, title_lower: str) -> bool:
+        """Check if title indicates a remastered full album (not live)."""
+        has_remaster = any(kw in title_lower for kw in REMASTER_KEYWORDS)
+        has_full_album = 'full album' in title_lower or 'complete album' in title_lower
+        return has_remaster and has_full_album
+    
+    def _check_patterns(self, title_lower: str, patterns: list) -> bool:
+        """Check if any pattern matches the title."""
+        return any(re.search(pattern, title_lower) for pattern in patterns)
+    
+    def _is_live_in_track_title(self, title_lower: str, track_title_lower: str) -> bool:
+        """Check if 'live' is part of the track title (false positive prevention)."""
+        if not track_title_lower or not re.search(r'\blive\b', track_title_lower):
+            return False
+        
+        track_words = set(re.findall(r'\b\w+\b', track_title_lower))
+        video_words = set(re.findall(r'\b\w+\b', title_lower))
+        
+        if not track_words:
+            return False
+        
+        match_ratio = len(track_words.intersection(video_words)) / len(track_words)
+        return match_ratio >= 0.6
+    
+    def _log_rejection(self, reason: str, video: YouTubeVideo, console, silent: bool):
+        """Log rejection message."""
+        if not silent and console:
+            console.print(f"[yellow]⚠[/yellow] {reason}")
+            console.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
     
     def is_live_version(self, video_title: str, track_title: Optional[str] = None) -> bool:
         """
@@ -78,180 +107,46 @@ class VideoValidator:
         title_lower = video_title.lower()
         track_title_lower = track_title.lower() if track_title else ""
         
-        # Exclude remastered/reissue versions - these are studio albums, not live
-        # Check for remaster keywords first - if present, it's likely a studio remaster, not live
-        remaster_keywords = ['remaster', 'remastered', 'reissue', 're-release', 'deluxe edition', 'anniversary edition']
-        has_remaster_keyword = any(keyword in title_lower for keyword in remaster_keywords)
-        
-        # If it has remaster keywords and "full album" or similar, it's definitely not live
-        if has_remaster_keyword and ('full album' in title_lower or 'complete album' in title_lower):
+        # Exclude remastered full albums - these are studio albums, not live
+        if self._is_remastered_album(title_lower):
             return False
         
-        # Keywords that need word boundary matching (to avoid false positives)
-        # Use word boundaries to avoid matching "live" in words like "lives", "alive", "deliver", etc.
-        word_boundary_keywords = [
-            r'\blive\s+concert\b',  # "live concert"
-            r'\blive\s+performance\b',  # "live performance"
-            r'\blive\s+on\s+stage\b',  # "live on stage"
-            r'\brecorded\s+live\b',  # "recorded live"
-            r'\blive\s+session\b',  # "live session"
-            r'\blive\s+recording\b',  # "live recording"
-            r'\blive\s+from\b',  # "live from"
-            r'\blive\s+@\b',  # "live @"
-            r'\blive\s+in\b',  # "live in" (but not "live in" as part of song title)
-            r'\blive\s+at\b',  # "live at" (e.g., "Live at Red Rocks")
-            r'\blive\s+version\b',  # "live version"
-            r'\blive\s+take\b',  # "live take"
-            r'\blive\s+acoustic\b',  # "live acoustic"
-            r'\blive\s+bootleg\b',  # "live bootleg"
-            r'\blive\s+broadcast\b',  # "live broadcast"
-        ]
-        
-        # Keywords that don't need word boundaries (they're specific enough)
-        simple_keywords = [
-            'unplugged',
-            'mtv unplugged',
-            'kexp',
-            'npr tiny desk',
-            'audience',
-            'applause',
-            'encore'
-        ]
-        
-        # Known concert venues (these are strong indicators of live performances)
-        concert_venues = [
-            'red rocks',
-            'madison square garden',
-            'msg',
-            'royal albert hall',
-            'apollo theater',
-            'apollo theatre',
-            'fillmore',
-            'hollywood bowl',
-            'coachella',
-            'glastonbury',
-            'woodstock',
-            'monterey pop',
-            'newport folk',
-            'newport jazz',
-            'montreux jazz',
-            'blue note',
-            'village vanguard',
-            'ronnie scott\'s',
-            'ronnie scotts',
-            'troubadour',
-            'whisky a go go',
-            'cbgb',
-            'palladium',
-            'hammersmith',
-            'brixton academy',
-            'o2 arena',
-            'wembley',
-            'festival',
-            'festival de',
-            'rock in rio',
-            'lollapalooza',
-            'bonnaroo',
-            'sxsw',
-            'austin city limits',
-            'acoustic',
-            'acoustic session'
-        ]
-        
-        # Check for word-boundary keywords first (more specific, avoids false positives)
-        for pattern in word_boundary_keywords:
-            if re.search(pattern, title_lower):
-                # Additional check: if it's a remaster with "live" in context, be more careful
-                if has_remaster_keyword:
-                    # "live" in remaster context might be false positive - check if it's actually about live performance
-                    # If it says "remaster" and "full album", it's not live
-                    if 'full album' in title_lower or 'complete album' in title_lower:
-                        continue  # Skip this match, it's a remastered studio album
+        # Check word-boundary patterns (most specific)
+        if self._check_patterns(title_lower, LIVE_WORD_BOUNDARY_KEYWORDS):
+            if not self._is_remastered_album(title_lower):
                 return True
         
-        # Check for "at [venue]" pattern (e.g., "at Red Rocks", "at Madison Square Garden")
-        # This catches live performances at venues even without the word "live"
-        if re.search(r'\bat\s+[a-z\s]+(?:rocks|garden|hall|theater|theatre|bowl|arena|festival|acoustic)', title_lower):
-            # Additional check: if it's a remaster, be more careful
-            if has_remaster_keyword and ('full album' in title_lower or 'complete album' in title_lower):
-                pass  # Skip this match, it's a remastered studio album
-            else:
+        # Check venue patterns
+        venue_pattern = r'\bat\s+[a-z\s]+(?:rocks|garden|hall|theater|theatre|bowl|arena|festival|acoustic)'
+        if re.search(venue_pattern, title_lower) and not self._is_remastered_album(title_lower):
+            return True
+        
+        # Check known concert venues
+        if any(venue in title_lower for venue in CONCERT_VENUES):
+            if not self._is_remastered_album(title_lower):
                 return True
         
-        # Check for known concert venues
-        for venue in concert_venues:
-            if venue in title_lower:
-                # Additional check: if it's a remaster, be more careful
-                if has_remaster_keyword and ('full album' in title_lower or 'complete album' in title_lower):
-                    pass  # Skip this match, it's a remastered studio album
-                else:
-                    return True
-        
-        # Check for standalone "live" word (e.g., "PHANTOM ISLAND LIVE" or "ALBUM TITLE LIVE")
-        # This catches cases where "live" appears as a standalone word in the title
+        # Check standalone "live" word
         if re.search(r'\blive\b', title_lower):
-            # First, check for explicit live indicators that should always be flagged
-            # These patterns indicate a live performance regardless of track title
-            explicit_live_patterns = [
-                r'\(live\)',  # "(Live)" or "(live)"
-                r'\[live\]',  # "[Live]" or "[live]"
-                r'- live',    # "- Live" or "- live"
-                r': live',    # ": Live" or ": live"
-                r'live!',     # "Live!" or "live!"
-                r'live$',     # "Live" at end of title
-            ]
-            
-            has_explicit_live_indicator = any(re.search(pattern, title_lower) for pattern in explicit_live_patterns)
-            
-            # If there's an explicit live indicator, always flag it as live
-            if has_explicit_live_indicator:
+            # Explicit live indicators always flag as live
+            if self._check_patterns(title_lower, EXPLICIT_LIVE_PATTERNS):
                 return True
             
-            # IMPORTANT: Check if "live" is part of the track title itself (false positive prevention)
-            # If the track title contains "live" and the video title contains the track title,
-            # then "live" is likely part of the song title, not an indicator of a live performance
-            if track_title_lower and re.search(r'\blive\b', track_title_lower):
-                # Track title contains "live" - check if video title contains track title
-                # Normalize both for comparison (remove extra spaces, punctuation)
-                track_words = set(re.findall(r'\b\w+\b', track_title_lower))
-                video_words = set(re.findall(r'\b\w+\b', title_lower))
-                
-                # If most track title words appear in video title, "live" is likely part of song title
-                if len(track_words) > 0:
-                    matching_words = track_words.intersection(video_words)
-                    match_ratio = len(matching_words) / len(track_words)
-                    
-                    # If 60%+ of track words match, assume "live" is part of song title
-                    if match_ratio >= 0.6:
-                        # "live" is part of the song title, not a live performance indicator
-                        return False
+            # Check if "live" is part of track title (false positive prevention)
+            if self._is_live_in_track_title(title_lower, track_title_lower):
+                return False
             
-            # Additional check: if it's a remaster with "live" in context, be more careful
-            if has_remaster_keyword:
-                # "live" in remaster context might be false positive - check if it's actually about live performance
-                # If it says "remaster" and "full album", it's not live (it's a remastered studio album)
-                if 'full album' in title_lower or 'complete album' in title_lower:
-                    pass  # Skip this match, it's a remastered studio album, not a live version
-                else:
-                    # Has remaster keyword but no "full album" - likely still a live version
-                    return True
-            else:
-                # No remaster keyword, so "live" likely indicates a live version
-                # But only if we haven't determined it's part of the track title
+            # If remastered album, skip; otherwise likely live
+            if not self._is_remastered_album(title_lower):
                 return True
         
-        # Check for simple keywords (substring match is fine for these)
-        for keyword in simple_keywords:
-            if keyword in title_lower:
-                return True
+        # Check simple keywords
+        if any(kw in title_lower for kw in LIVE_SIMPLE_KEYWORDS):
+            return True
         
-        # Check for year patterns that suggest live recordings (e.g., "at Red Rocks 2024")
-        # Pattern: "at [venue] [year]" or "[venue] [year]" where year is 4 digits
+        # Check year patterns (e.g., "at Red Rocks 2024")
         if re.search(r'\bat\s+[a-z\s]+\s+\d{4}\b', title_lower):
-            # Additional check: if it's a remaster, be more careful
-            if has_remaster_keyword and ('full album' in title_lower or 'complete album' in title_lower):
-                pass  # Skip this match, it's a remastered studio album
-            else:
+            if not self._is_remastered_album(title_lower):
                 return True
         
         return False
@@ -263,126 +158,17 @@ class VideoValidator:
         
         title_lower = video_title.lower()
         
-        # Keywords that need word boundary matching (to avoid false positives)
-        # Short/common words that could appear in song titles
-        word_boundary_keywords = [
-            r'\bvs\b',  # "vs" but not "versus" (handled separately)
-            r'\brank\b',  # "rank" but not "ranking", "crank", etc.
-            r'\brate\b',  # "rate" but not "create", "irate", etc.
-        ]
+        # Check word-boundary patterns
+        if self._check_patterns(title_lower, REACTION_WORD_BOUNDARY_KEYWORDS):
+            return True
         
-        # Check word-boundary keywords first (more specific, avoids false positives)
-        for pattern in word_boundary_keywords:
-            if re.search(pattern, title_lower):
-                return True
+        # Special handling for "top" - only flag ranking contexts
+        if re.search(r'\btop\b', title_lower) and self._check_patterns(title_lower, TOP_RANKING_PATTERNS):
+            return True
         
-        # Special handling for "top" - it's common in song titles like "Top of the World"
-        # Only flag it if it appears in ranking contexts like "top 10", "top 5", "top songs", etc.
-        if re.search(r'\btop\b', title_lower):
-            # Check if "top" is in a ranking context
-            top_ranking_patterns = [
-                r'\btop\s+\d+',  # "top 10", "top 5", etc.
-                r'\btop\s+songs',  # "top songs"
-                r'\btop\s+tracks',  # "top tracks"
-                r'\btop\s+albums',  # "top albums"
-                r'\btop\s+artists',  # "top artists"
-                r'\btop\s+best',  # "top best"
-                r'\btop\s+worst',  # "top worst"
-            ]
-            
-            # If it matches a ranking pattern, flag it
-            if any(re.search(pattern, title_lower) for pattern in top_ranking_patterns):
-                return True
-            # If it's just "top" without ranking context, it might be a song title like "Top of the World"
-            # So don't flag it
-        
-        # Multi-word phrases (these are specific enough to use substring matching)
-        multi_word_phrases = [
-            'first reaction',
-            'first time listening',
-            'first listen',
-            'album review',
-            'music review',
-            'reaction to',
-            'reacting to',
-            'reacts to',
-            'my reaction',
-            'honest reaction',
-            'genuine reaction',
-            'blind reaction',
-            'album reaction',
-            'song reaction',
-            'listening to',
-            'listening session',
-            'first time hearing',
-            'lyrics explained',
-            'album explained',
-            'behind the scenes',
-            'making of',
-            'studio tour',
-            'best moments',
-            'tier list',
-            'top 10',
-            'top 5',
-            'worst to best',
-            'best to worst'
-        ]
-        
-        # Check multi-word phrases
-        for phrase in multi_word_phrases:
-            if phrase in title_lower:
-                return True
-        
-        # Single-word keywords that are specific enough (unlikely to appear in song titles)
-        specific_keywords = [
-            'reaction',
-            'react',
-            'reacting',
-            'reacts',
-            'review',
-            'unboxing',
-            'unbox',
-            'rating',
-            'ranking',
-            'worst',
-            'best',
-            'versus',
-            'comparison',
-            'breakdown',
-            'analysis',
-            'explained',
-            'meaning',
-            'discussion',
-            'podcast',
-            'interview',
-            'documentary',
-            'trailer',
-            'teaser',
-            'preview',
-            'snippet',
-            'clip',
-            'excerpt',
-            'highlights',
-            'compilation',
-            'mashup',
-            'remix',
-            'cover',
-            'covers',
-            'tribute',
-            'parody',
-            'meme',
-            'funny',
-            'comedy',
-            'prank',
-            'challenge',
-        ]
-        
-        # Check for specific keywords (substring match is fine for these)
-        for keyword in specific_keywords:
-            if keyword in title_lower:
-                return True
-        
-        return False
+        # Check multi-word phrases and specific keywords
+        return (any(phrase in title_lower for phrase in REACTION_MULTI_WORD_PHRASES) or
+                any(keyword in title_lower for keyword in REACTION_SPECIFIC_KEYWORDS))
     
     def validate_video_for_album(
         self,
@@ -412,34 +198,28 @@ class VideoValidator:
         if release_info.release_date and len(release_info.release_date) >= 4:
             release_year = release_info.release_date[:4]
         
+        # Check title matches album
         if not title_matcher.title_matches_album(video.title, release_info.title, release_info.artist, release_year):
             reason = f"Video title doesn't match album '{release_info.title}' by '{release_info.artist}' (title: {video.title})"
-            if not silent and console:
-                console.print(f"[yellow]⚠[/yellow] Skipping mismatched video: {video.title}")
-                console.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
+            self._log_rejection(f"Skipping mismatched video: {video.title}", video, console, silent)
             return False, reason
         
-        # Check 2: Title validation - filter out live versions
+        # Check for live versions
         if self.is_live_version(video.title):
             reason = f"Video appears to be a live version (title: {video.title})"
-            if not silent and console:
-                console.print(f"[yellow]⚠[/yellow] Skipping live version: {video.title}")
-                console.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
+            self._log_rejection(f"Skipping live version: {video.title}", video, console, silent)
             return False, reason
         
-        # Check 3: Filter out reaction videos, reviews, and other non-album content
+        # Check for reaction/review videos
         if self.is_reaction_or_review_video(video.title):
             reason = f"Video appears to be a reaction/review/non-album content (title: {video.title})"
-            if not silent and console:
-                console.print(f"[yellow]⚠[/yellow] Skipping non-album content: {video.title}")
-                console.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
+            self._log_rejection(f"Skipping non-album content: {video.title}", video, console, silent)
             return False, reason
         
         # Check 4: Duration validation
         # Get video info to check duration
         video_info = self.download_service.get_video_info(video.youtube_url)
         if not video_info:
-            # If we can't get video info, reject it for full album downloads (too risky)
             reason = f"Could not get video info for validation: {video.title}"
             if not silent and console:
                 console.print(f"[yellow]⚠[/yellow] {reason}")
@@ -447,24 +227,16 @@ class VideoValidator:
         
         video_duration = self._get_video_duration_seconds(video_info)
         if video_duration:
-            # Calculate expected album duration
-            # For full album videos, validate against ALL tracks (not just selected ones)
-            # since we're downloading the entire video
             all_track_numbers = list(range(1, len(release_info.tracks) + 1))
-            expected_duration = self._calculate_expected_album_duration(
-                release_info.tracks, all_track_numbers
-            )
+            expected_duration = self._calculate_expected_album_duration(release_info.tracks, all_track_numbers)
             
             if expected_duration:
-                # If video is significantly longer, it might be a live version
-                # Live versions are often 1.5x to 2x longer due to extended solos, audience interaction, etc.
                 if video_duration > expected_duration * 1.4:
                     reason = f"Video duration ({video_duration/60:.1f} min) is significantly longer than expected ({expected_duration/60:.1f} min) - likely live version"
                     if not silent and console:
                         console.print(f"[yellow]⚠[/yellow] {reason}")
                     return False, reason
                 
-                # If video is significantly shorter, it might be incomplete
                 if video_duration < expected_duration * 0.7:
                     reason = f"Video duration ({video_duration/60:.1f} min) is significantly shorter than expected ({expected_duration/60:.1f} min) - might be incomplete"
                     if not silent and console:
@@ -495,93 +267,55 @@ class VideoValidator:
         Returns:
             Tuple of (is_valid, reason_if_invalid)
         """
-        # Check 1: Duration validation (most reliable - check this first)
-        # Get video info to check duration
+        # Duration validation (most reliable - check this first)
         video_info = self.download_service.get_video_info(video.youtube_url)
         duration_matches = False
         
         if video_info:
             video_duration = self._get_video_duration_seconds(video_info)
             if video_duration and track.duration:
-                # Calculate expected track duration
                 expected_duration = self._parse_duration_to_seconds(track.duration)
                 
                 if expected_duration:
-                    # Asymmetric validation thresholds (from config):
-                    # - Longer videos: strict threshold (likely live versions with extended sections)
-                    # - Shorter videos: lenient threshold (could be different versions/remixes, less risky)
                     duration_diff = video_duration - expected_duration
                     diff_ratio = abs(duration_diff) / expected_duration
                     
-                    if duration_diff > 0:
-                        # Video is longer than expected - strict threshold (likely live version)
-                        threshold = DURATION_VALIDATION_THRESHOLDS["LONGER_THRESHOLD"]
-                        if diff_ratio > threshold:
-                            from ..utils.file_duration_reader import format_duration
-                            video_duration_str = format_duration(video_duration)
-                            reason = f"Video duration ({video_duration_str}) differs by {diff_ratio*100:.1f}% from expected ({track.duration}) - exceeds {threshold*100:.0f}% threshold for longer videos"
-                            if not silent and console:
-                                from ..ui.styling import Styling
-                                styling = Styling(console)
-                                styling.log_warning(f"Skipping video: {reason}")
-                                console.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
-                            return False, reason
-                        else:
-                            # Duration matches well - accept it even if title suggests live/review
-                            duration_matches = True
-                    else:
-                        # Video is shorter than expected - lenient threshold (could be different version)
-                        threshold = DURATION_VALIDATION_THRESHOLDS["SHORTER_THRESHOLD"]
-                        if diff_ratio > threshold:
-                            from ..utils.file_duration_reader import format_duration
-                            video_duration_str = format_duration(video_duration)
-                            reason = f"Video duration ({video_duration_str}) differs by {diff_ratio*100:.1f}% from expected ({track.duration}) - exceeds {threshold*100:.0f}% threshold for shorter videos"
-                            if not silent and console:
-                                from ..ui.styling import Styling
-                                styling = Styling(console)
-                                styling.log_warning(f"Skipping video: {reason}")
-                                console.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
-                            return False, reason
-                        else:
-                            # Duration matches well - accept it even if title suggests live/review
-                            duration_matches = True
+                    threshold_key = "LONGER_THRESHOLD" if duration_diff > 0 else "SHORTER_THRESHOLD"
+                    threshold = DURATION_VALIDATION_THRESHOLDS[threshold_key]
+                    
+                    if diff_ratio > threshold:
+                        from ..utils.file_duration_reader import format_duration
+                        video_duration_str = format_duration(video_duration)
+                        threshold_type = "longer" if duration_diff > 0 else "shorter"
+                        reason = f"Video duration ({video_duration_str}) differs by {diff_ratio*100:.1f}% from expected ({track.duration}) - exceeds {threshold*100:.0f}% threshold for {threshold_type} videos"
+                        if not silent and console:
+                            from ..ui.styling import Styling
+                            Styling(console).log_warning(f"Skipping video: {reason}")
+                            console.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
+                        return False, reason
+                    
+                    duration_matches = True
         
-        # Check 2 & 3: Title-based validation (only if duration doesn't match or isn't available)
-        # If duration matches well, we trust it over title keywords (which can be misleading)
+        # Title-based validation (only if duration doesn't match)
         if not duration_matches:
-            # Check for live versions - pass track title to avoid false positives
             if self.is_live_version(video.title, track.title if track else None):
                 reason = f"Video appears to be a live version (title: {video.title})"
-                if not silent and console:
-                    console.print(f"[yellow]⚠[/yellow] Skipping live version: {video.title}")
-                    console.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
+                self._log_rejection(f"Skipping live version: {video.title}", video, console, silent)
                 return False, reason
             
-            # Filter out reaction videos, reviews, and other non-album content
             if self.is_reaction_or_review_video(video.title):
                 reason = f"Video appears to be a reaction/review/non-album content (title: {video.title})"
-                if not silent and console:
-                    console.print(f"[yellow]⚠[/yellow] Skipping non-album content: {video.title}")
-                    console.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
+                self._log_rejection(f"Skipping non-album content: {video.title}", video, console, silent)
                 return False, reason
-        else:
-            # Duration matches - log a note if title suggests live/review (but don't reject)
-            if not silent and console:
-                is_live = self.is_live_version(video.title, track.title if track else None)
-                is_review = self.is_reaction_or_review_video(video.title)
-                if is_live or is_review:
-                    from ..ui.styling import Styling
-                    styling = Styling(console)
-                    note = "Duration matches well, accepting despite title suggesting "
-                    if is_live and is_review:
-                        note += "live/review content"
-                    elif is_live:
-                        note += "live version"
-                    else:
-                        note += "review content"
-                    styling.log_info(note)
+        elif not silent and console:
+            # Duration matches - log note if title suggests live/review
+            is_live = self.is_live_version(video.title, track.title if track else None)
+            is_review = self.is_reaction_or_review_video(video.title)
+            if is_live or is_review:
+                content_type = "live/review content" if (is_live and is_review) else ("live version" if is_live else "review content")
+                from ..ui.styling import Styling
+                Styling(console).log_info(f"Duration matches well, accepting despite title suggesting {content_type}")
         
-        # If we couldn't get video info, warn but allow it
         if not video_info and not silent and console:
             console.print(f"[yellow]⚠[/yellow] Could not get video info for validation: {video.title}")
         
@@ -589,17 +323,8 @@ class VideoValidator:
     
     def _calculate_expected_album_duration(self, tracks: list, track_numbers: list) -> Optional[float]:
         """Calculate expected total duration of selected tracks from MusicBrainz."""
-        total_seconds = 0.0
-        has_durations = False
-        
-        selected_tracks = [t for t in tracks if t.position in track_numbers]
-        selected_tracks.sort(key=lambda x: x.position)
-        
-        for track in selected_tracks:
-            duration_seconds = self._parse_duration_to_seconds(track.duration)
-            if duration_seconds:
-                total_seconds += duration_seconds
-                has_durations = True
-        
-        return total_seconds if has_durations else None
+        selected_tracks = sorted([t for t in tracks if t.position in track_numbers], key=lambda x: x.position)
+        durations = [self._parse_duration_to_seconds(t.duration) for t in selected_tracks]
+        durations = [d for d in durations if d is not None]
+        return sum(durations) if durations else None
 

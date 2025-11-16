@@ -62,7 +62,14 @@ class OdysseusCLI:
         """Create the argument parser."""
         parser = argparse.ArgumentParser(
             prog=PROJECT_NAME,
-            description=f"{PROJECT_NAME} - Music Discovery Tool v{PROJECT_VERSION}",
+            description=f"""{PROJECT_NAME} - Music Discovery Tool v{PROJECT_VERSION}
+
+Available modes:
+  recording    - Search and download a specific recording/song
+  release      - Search and download tracks from a release/album
+  discography  - Browse artist discography and download selected releases
+  spotify      - Parse Spotify playlist/album URL and download selected tracks
+  metadata     - Apply metadata and cover art to existing audio files""",
             formatter_class=argparse.RawDescriptionHelpFormatter,
             epilog=            """
 Examples:

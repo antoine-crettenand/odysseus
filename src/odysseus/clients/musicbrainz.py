@@ -6,6 +6,7 @@ A client for searching the MusicBrainz database for music information.
 import requests
 import json
 import time
+import sys
 from typing import Dict, List, Optional, Any
 from ..models.song import SongData
 from ..models.search_results import MusicBrainzSong
@@ -13,8 +14,13 @@ from ..models.releases import Track, ReleaseInfo
 from ..core.config import MUSICBRAINZ_CONFIG, ERROR_MESSAGES
 from ..utils.string_utils import normalize_string
 
-# Note: SSL verification is enabled by default for security
-# If you encounter SSL issues, check your system's certificate store
+# Constants
+BASE_MAX_RETRIES = 3
+RETRY_DELAY_BASE = 2
+MAX_RETRIES_TRANSIENT_SSL = 5
+PAGINATION_LIMIT = 100
+COMPILATION_TYPES = {'Compilation'}
+JOIN_PHRASES = {'&', 'and', 'And', 'AND'}
 
 
 class MusicBrainzClient:
@@ -40,6 +46,31 @@ class MusicBrainzClient:
         # Track if we should try HTTP fallback (only as last resort)
         self.use_http_fallback = False
     
+    def _log(self, message: str, batch_progress: Optional[tuple[int, int]] = None, dim: bool = False):
+        """Log message with optional batch progress prefix and dimming."""
+        prefix = f"[{batch_progress[0]}/{batch_progress[1]}] " if batch_progress else ""
+        if sys.stdout.isatty() and dim:
+            print(f"{prefix}\033[2m{message}\033[0m", flush=True)
+        else:
+            print(f"{prefix}{message}", flush=True)
+    
+    def _build_query(self, **kwargs) -> str:
+        """Build MusicBrainz query string from keyword arguments."""
+        query_parts = []
+        if kwargs.get('title'):
+            query_parts.append(f'title:"{kwargs["title"]}"')
+        if kwargs.get('artist'):
+            query_parts.append(f'artist:"{kwargs["artist"]}"')
+        if kwargs.get('album'):
+            query_parts.append(f'release:"{kwargs["album"]}"')
+        if kwargs.get('release'):
+            query_parts.append(f'title:"{kwargs["release"]}"')
+        if kwargs.get('date'):
+            query_parts.append(f'date:{kwargs["date"]}')
+        if kwargs.get('release_type'):
+            query_parts.append(f'type:"{kwargs["release_type"]}"')
+        return ' AND '.join(query_parts)
+    
     def _make_request(self, url: str, params: Dict[str, Any], batch_progress: Optional[tuple[int, int]] = None) -> Optional[Dict[str, Any]]:
         """
         Make a request with SSL error handling and retries.
@@ -49,129 +80,68 @@ class MusicBrainzClient:
             params: Request parameters
             batch_progress: Optional tuple (current, total) for batch operations (e.g., (1, 5))
         """
-        base_max_retries = 3
-        retry_delay = 2
-        # Track if we've seen transient SSL errors (will use more retries)
+        retry_delay = RETRY_DELAY_BASE
         seen_transient_ssl_error = False
-        max_retries = base_max_retries
+        max_retries = BASE_MAX_RETRIES
         
-        # Build progress prefix if batch progress is provided
-        progress_prefix = ""
-        if batch_progress:
-            current, total = batch_progress
-            progress_prefix = f"[{current}/{total}] "
-        
-        # Calculate page number from offset and limit if available
+        # Calculate page info
         page_info = ""
         if 'offset' in params and 'limit' in params:
-            offset = params.get('offset', 0)
-            limit = params.get('limit', 100)
+            offset, limit = params.get('offset', 0), params.get('limit', PAGINATION_LIMIT)
             if limit > 0:
-                page = (offset // limit) + 1
-                page_info = f" (page {page})"
+                page_info = f" (page {(offset // limit) + 1})"
         
-        # Try HTTPS first
         attempt = 0
         while attempt < max_retries:
             try:
-                # Dimmed text for technical/log message
-                import sys
-                if sys.stdout.isatty():
-                    if batch_progress:
-                        print(f"{progress_prefix}\033[2mMaking request to MusicBrainz{page_info} (attempt {attempt + 1}/{max_retries})\033[0m", flush=True)
-                    else:
-                        print(f"\033[2mMaking request to MusicBrainz{page_info} (attempt {attempt + 1}/{max_retries})\033[0m", flush=True)
-                else:
-                    if batch_progress:
-                        print(f"{progress_prefix}Making request to MusicBrainz{page_info} (attempt {attempt + 1}/{max_retries})")
-                    else:
-                        print(f"Making request to MusicBrainz{page_info} (attempt {attempt + 1}/{max_retries})")
+                self._log(f"Making request to MusicBrainz{page_info} (attempt {attempt + 1}/{max_retries})", batch_progress, dim=True)
                 response = self.session.get(url, params=params, timeout=self.timeout)
                 response.raise_for_status()
-                
-                # Rate limiting
                 time.sleep(self.request_delay)
-                
                 return response.json()
                 
             except requests.exceptions.SSLError as e:
-                # Check if this is a transient SSL error (SSLEOFError) vs certificate error
                 error_str = str(e).lower()
-                is_transient = 'eof' in error_str or 'unexpected_eof' in error_str or 'connection' in error_str
+                is_transient = any(x in error_str for x in ['eof', 'unexpected_eof', 'connection'])
                 
-                # For transient errors, allow more retries (increase max_retries for future attempts)
                 if is_transient and not seen_transient_ssl_error:
                     seen_transient_ssl_error = True
-                    max_retries = 5  # Increase retries for transient SSL errors
-                    # Continue the loop with the new max_retries
+                    max_retries = MAX_RETRIES_TRANSIENT_SSL
                 
-                if batch_progress:
-                    if is_transient:
-                        print(f"{progress_prefix}SSL Connection Error (attempt {attempt + 1}/{max_retries}): {e}")
-                        print(f"{progress_prefix}This appears to be a transient network issue. Retrying...")
-                    else:
-                        print(f"{progress_prefix}SSL Error (attempt {attempt + 1}/{max_retries}): {e}")
-                        print(f"{progress_prefix}Note: SSL verification is required for security. Please check your system's certificate store.")
+                error_msg = "SSL Connection Error" if is_transient else "SSL Error"
+                self._log(f"{error_msg} (attempt {attempt + 1}/{max_retries}): {e}", batch_progress)
+                if is_transient:
+                    self._log("This appears to be a transient network issue. Retrying...", batch_progress)
                 else:
-                    if is_transient:
-                        print(f"SSL Connection Error (attempt {attempt + 1}/{max_retries}): {e}")
-                        print("This appears to be a transient network issue. Retrying...")
-                    else:
-                        print(f"SSL Error (attempt {attempt + 1}/{max_retries}): {e}")
-                        print("Note: SSL verification is required for security. Please check your system's certificate store.")
+                    self._log("Note: SSL verification is required for security. Please check your system's certificate store.", batch_progress)
                 
                 if attempt < max_retries - 1:
-                    # For transient errors, use longer delays (network issues need more time)
-                    # For certificate errors, use shorter delays (won't help but faster failure)
                     delay = retry_delay * 2 if is_transient else retry_delay
-                    if batch_progress:
-                        print(f"{progress_prefix}Retrying in {delay} seconds...")
-                    else:
-                        print(f"Retrying in {delay} seconds...")
+                    self._log(f"Retrying in {delay} seconds...", batch_progress)
                     time.sleep(delay)
-                    retry_delay *= 2  # Exponential backoff
+                    retry_delay *= 2
                     attempt += 1
-                    continue  # Continue to next iteration
+                    continue
                 else:
-                    # SSL errors should not fall back to HTTP for security reasons
-                    if batch_progress:
-                        if is_transient:
-                            print(f"{progress_prefix}SSL connection failed after {max_retries} attempts. This may be a network issue.")
-                        else:
-                            print(f"{progress_prefix}SSL verification failed. Please check your system's SSL certificates.")
-                    else:
-                        if is_transient:
-                            print(f"SSL connection failed after {max_retries} attempts. This may be a network issue.")
-                        else:
-                            print("SSL verification failed. Please check your system's SSL certificates.")
+                    final_msg = (f"SSL connection failed after {max_retries} attempts. This may be a network issue." 
+                               if is_transient else "SSL verification failed. Please check your system's SSL certificates.")
+                    self._log(final_msg, batch_progress)
                     return None
                     
             except requests.exceptions.ConnectionError as e:
-                if batch_progress:
-                    print(f"{progress_prefix}Connection Error (attempt {attempt + 1}): {e}")
-                else:
-                    print(f"Connection Error (attempt {attempt + 1}): {e}")
+                self._log(f"Connection Error (attempt {attempt + 1}): {e}", batch_progress)
                 if attempt < max_retries - 1:
-                    if batch_progress:
-                        print(f"{progress_prefix}Retrying in {retry_delay} seconds...")
-                    else:
-                        print(f"Retrying in {retry_delay} seconds...")
+                    self._log(f"Retrying in {retry_delay} seconds...", batch_progress)
                     time.sleep(retry_delay)
                     retry_delay *= 2
                     attempt += 1
-                    continue  # Continue to next iteration
+                    continue
                 else:
-                    if batch_progress:
-                        print(f"{progress_prefix}All connection retry attempts failed, trying HTTP fallback...")
-                    else:
-                        print("All connection retry attempts failed, trying HTTP fallback...")
+                    self._log("All connection retry attempts failed, trying HTTP fallback...", batch_progress)
                     return self._try_http_fallback(url, params, batch_progress)
                     
             except requests.exceptions.RequestException as e:
-                if batch_progress:
-                    print(f"{progress_prefix}Request Error: {e}")
-                else:
-                    print(f"Request Error: {e}")
+                self._log(f"Request Error: {e}", batch_progress)
                 return None
                 
         return None
@@ -184,38 +154,21 @@ class MusicBrainzClient:
         This method is kept for backward compatibility but should rarely be needed.
         """
         if self.use_http_fallback:
-            return None  # Already tried HTTP
-            
-        # Build progress prefix if batch progress is provided
-        progress_prefix = ""
-        if batch_progress:
-            current, total = batch_progress
-            progress_prefix = f"[{current}/{total}] "
+            return None
             
         try:
-            # Convert HTTPS URL to HTTP
             http_url = url.replace('https://', 'http://')
-            if batch_progress:
-                print(f"{progress_prefix}Warning: Trying insecure HTTP fallback: {http_url}")
-                print(f"{progress_prefix}Note: HTTP is not secure. This should only be used if HTTPS is unavailable.")
-            else:
-                print(f"Warning: Trying insecure HTTP fallback: {http_url}")
-                print("Note: HTTP is not secure. This should only be used if HTTPS is unavailable.")
+            self._log(f"Warning: Trying insecure HTTP fallback: {http_url}", batch_progress)
+            self._log("Note: HTTP is not secure. This should only be used if HTTPS is unavailable.", batch_progress)
             
             response = self.session.get(http_url, params=params, timeout=self.timeout, verify=False)
             response.raise_for_status()
-            
-            # Rate limiting
             time.sleep(self.request_delay)
-            
             self.use_http_fallback = True
             return response.json()
             
         except Exception as e:
-            if batch_progress:
-                print(f"{progress_prefix}HTTP fallback also failed: {e}")
-            else:
-                print(f"HTTP fallback also failed: {e}")
+            self._log(f"HTTP fallback also failed: {e}", batch_progress)
             return None
     
     def search_recording(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None) -> List[MusicBrainzSong]:
@@ -230,43 +183,26 @@ class MusicBrainzClient:
         Returns:
             List of MusicBrainz results
         """
-        # Build query string
-        query_parts = []
+        query = self._build_query(
+            title=song_data.title,
+            artist=song_data.artist,
+            album=song_data.album,
+            date=song_data.release_year
+        )
         
-        if song_data.title:
-            query_parts.append(f'title:"{song_data.title}"')
-        
-        if song_data.artist:
-            query_parts.append(f'artist:"{song_data.artist}"')
-        
-        if song_data.album:
-            query_parts.append(f'release:"{song_data.album}"')
-        
-        if song_data.release_year:
-            query_parts.append(f'date:{song_data.release_year}')
-        
-        query = ' AND '.join(query_parts)
-        
-        # Make request
         url = f"{self.base_url}/recording"
         params = {
             'query': query,
             'fmt': 'json',
             'limit': limit or self.max_results,
             'offset': offset,
-            'inc': 'releases+release-groups'  # Include release and release-group info for better date enrichment
+            'inc': 'releases+release-groups'
         }
         
         try:
             print(f"Searching MusicBrainz recordings with query: {query}")
             data = self._make_request(url, params)
-            
-            if data:
-                return self._parse_recording_results(data)
-            else:
-                print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: Failed to get data from MusicBrainz")
-                return []
-            
+            return self._parse_recording_results(data) if data else []
         except Exception as e:
             print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
             return []
@@ -284,22 +220,12 @@ class MusicBrainzClient:
         Returns:
             List of MusicBrainz results
         """
-        query_parts = []
-        
-        if song_data.album:
-            query_parts.append(f'title:"{song_data.album}"')
-        
-        if song_data.artist:
-            query_parts.append(f'artist:"{song_data.artist}"')
-        
-        if song_data.release_year:
-            query_parts.append(f'date:{song_data.release_year}')
-        
-        # Add release type filter if specified
-        if release_type:
-            query_parts.append(f'type:"{release_type}"')
-        
-        query = ' AND '.join(query_parts)
+        query = self._build_query(
+            release=song_data.album,
+            artist=song_data.artist,
+            date=song_data.release_year,
+            release_type=release_type
+        )
         
         url = f"{self.base_url}/release"
         params = {
@@ -307,19 +233,13 @@ class MusicBrainzClient:
             'fmt': 'json',
             'limit': limit or self.max_results,
             'offset': offset,
-            'inc': 'release-groups'  # Include release-group info to get release type and first-release-date
+            'inc': 'release-groups'
         }
         
         try:
             print(f"Searching MusicBrainz releases with query: {query}")
             data = self._make_request(url, params)
-            
-            if data:
-                return self._parse_release_results(data)
-            else:
-                print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: Failed to get data from MusicBrainz")
-                return []
-            
+            return self._parse_release_results(data) if data else []
         except Exception as e:
             print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
             return []
@@ -345,13 +265,7 @@ class MusicBrainzClient:
             if not batch_progress:
                 print(f"Fetching release details for MBID: {release_mbid}")
             data = self._make_request(url, params, batch_progress=batch_progress)
-            
-            if data:
-                return self._parse_release_info(data)
-            else:
-                print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: Failed to get data from MusicBrainz")
-                return None
-            
+            return self._parse_release_info(data) if data else None
         except Exception as e:
             print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
             return None
@@ -370,39 +284,22 @@ class MusicBrainzClient:
         Returns:
             List of releases by the artist
         """
-        query_parts = [f'artist:"{artist}"']
-        
-        if year:
-            query_parts.append(f'date:{year}')
-        
-        # Add release type filter if specified
-        if release_type:
-            query_parts.append(f'type:"{release_type}"')
-        
-        query = ' AND '.join(query_parts)
-        
+        query = self._build_query(artist=artist, date=year, release_type=release_type)
         url = f"{self.base_url}/release"
         all_results = []
         offset = 0
-        limit = 100  # MusicBrainz allows up to 100 results per request
         
         try:
-            # Don't print here - let the UI handle it with loading spinner
-            # print(f"Searching releases by artist: {artist}")
-            # if year:
-            #     print(f"Filtering by year: {year}")
-            
             while True:
                 params = {
                     'query': query,
                     'fmt': 'json',
-                    'limit': limit,
+                    'limit': PAGINATION_LIMIT,
                     'offset': offset,
-                    'inc': 'release-groups'  # Include release-group info to get release type
+                    'inc': 'release-groups'
                 }
                 
                 data = self._make_request(url, params)
-                
                 if not data:
                     break
                 
@@ -410,32 +307,20 @@ class MusicBrainzClient:
                 if not releases:
                     break
                 
-                parsed_results = self._parse_release_results(data)
-                all_results.extend(parsed_results)
+                all_results.extend(self._parse_release_results(data))
                 
-                # Check if we've fetched all results
                 count = data.get('count', 0)
                 if offset + len(releases) >= count:
                     break
                 
-                # Check if we've reached max_results limit
                 if max_results and len(all_results) >= max_results:
                     all_results = all_results[:max_results]
                     break
                 
-                offset += limit
-                
-                # Rate limiting between requests
+                offset += PAGINATION_LIMIT
                 time.sleep(self.request_delay)
             
-            # Don't print here - let the UI handle it
-            # if all_results:
-            #     print(f"Found {len(all_results)} release{'s' if len(all_results) != 1 else ''}")
-            # else:
-            #     print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: Failed to get data from MusicBrainz")
-            
             return all_results
-            
         except Exception as e:
             print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
             return all_results if all_results else []
@@ -453,32 +338,23 @@ class MusicBrainzClient:
         Returns:
             List of compilation releases where the artist appears
         """
-        # Search for recordings by the artist
-        query_parts = [f'artist:"{artist}"']
-        
-        if year:
-            query_parts.append(f'date:{year}')
-        
-        query = ' AND '.join(query_parts)
-        
+        query = self._build_query(artist=artist, date=year)
         url = f"{self.base_url}/recording"
         all_results = []
         seen_release_mbids = set()
         offset = 0
-        limit = 100  # MusicBrainz allows up to 100 results per request
         
         try:
             while True:
                 params = {
                     'query': query,
                     'fmt': 'json',
-                    'limit': limit,
+                    'limit': PAGINATION_LIMIT,
                     'offset': offset,
-                    'inc': 'releases+release-groups'  # Include releases to get compilation info
+                    'inc': 'releases+release-groups'
                 }
                 
                 data = self._make_request(url, params)
-                
                 if not data:
                     break
                 
@@ -486,81 +362,53 @@ class MusicBrainzClient:
                 if not recordings:
                     break
                 
-                # Process each recording to find compilations
                 for recording in recordings:
-                    # Get the recording artist
                     artist_credits = recording.get('artist-credit', [])
-                    recording_artist = ''
-                    if artist_credits:
-                        recording_artist = artist_credits[0].get('name', '')
+                    recording_artist = artist_credits[0].get('name', '') if artist_credits else ''
                     
-                    # Get releases this recording appears on
-                    releases = recording.get('releases', [])
-                    for release in releases:
+                    for release in recording.get('releases', []):
                         release_mbid = release.get('id', '')
                         if not release_mbid or release_mbid in seen_release_mbids:
                             continue
                         
-                        # Get release artist
                         release_artist_credits = release.get('artist-credit', [])
-                        release_artist = ''
-                        if release_artist_credits:
-                            release_artist = release_artist_credits[0].get('name', '')
+                        release_artist = release_artist_credits[0].get('name', '') if release_artist_credits else ''
                         
-                        # Get release type from release-group
                         release_group = release.get('release-group', {})
                         release_type = release_group.get('primary-type')
                         secondary_types = release_group.get('secondary-types', [])
                         
-                        # Check if this is a compilation or has compilation as secondary type
                         is_compilation = (
-                            release_type == 'Compilation' or 
-                            'Compilation' in secondary_types or
-                            # Also include soundtracks and other multi-artist releases
-                            release_type == 'Soundtrack' or
-                            'Soundtrack' in secondary_types
+                            release_type in COMPILATION_TYPES or
+                            any(t in COMPILATION_TYPES for t in secondary_types)
                         )
                         
-                        # Only include if:
-                        # 1. It's a compilation/soundtrack type
-                        # 2. The release artist is different from the recording artist (or normalized differently)
-                        # 3. The recording artist matches our search artist (normalized)
-                        normalized_recording_artist = normalize_string(recording_artist)
-                        normalized_release_artist = normalize_string(release_artist)
-                        normalized_search_artist = normalize_string(artist)
+                        normalized_recording = normalize_string(recording_artist)
+                        normalized_release = normalize_string(release_artist)
+                        normalized_search = normalize_string(artist)
                         
                         if (is_compilation and 
-                            normalized_recording_artist == normalized_search_artist and
-                            normalized_release_artist != normalized_recording_artist):
+                            normalized_recording == normalized_search and
+                            normalized_release != normalized_recording):
                             
-                            # Create a MusicBrainzSong result for this compilation
                             album = release.get('title', '')
                             release_date = release.get('date', '')
+                            original_release_date = release_group.get('first-release-date')
                             
-                            # Get original release date from release-group
-                            original_release_date = None
-                            if release_group:
-                                original_release_date = release_group.get('first-release-date')
-                                # If release date is missing, use original release date as fallback
-                                if not release_date and original_release_date:
-                                    release_date = original_release_date
+                            if not release_date and original_release_date:
+                                release_date = original_release_date
                             
-                            # Apply year filter if specified
                             if year:
-                                release_year = None
-                                if release_date and len(release_date) >= 4:
-                                    try:
-                                        release_year = int(release_date[:4])
-                                    except ValueError:
-                                        pass
-                                if release_year != year:
-                                    continue
+                                try:
+                                    release_year = int(release_date[:4]) if release_date and len(release_date) >= 4 else None
+                                    if release_year != year:
+                                        continue
+                                except ValueError:
+                                    pass
                             
-                            # Use release artist as the main artist (since it's a compilation)
-                            # but we know our artist appears on it
                             result = MusicBrainzSong(
-                                title='',  # Releases don't have individual track titles
-                                artist=release_artist,  # Compilation artist
+                                title='',
+                                artist=release_artist,
                                 album=album,
                                 release_date=release_date,
                                 original_release_date=original_release_date,
@@ -574,26 +422,17 @@ class MusicBrainzClient:
                             all_results.append(result)
                             seen_release_mbids.add(release_mbid)
                             
-                            # Check if we've reached max_results limit
                             if max_results and len(all_results) >= max_results:
                                 return all_results[:max_results]
                 
-                # Check if we've fetched all results
                 count = data.get('count', 0)
-                if offset + len(recordings) >= count:
+                if offset + len(recordings) >= count or (max_results and len(all_results) >= max_results):
                     break
                 
-                # If we've reached max_results, stop
-                if max_results and len(all_results) >= max_results:
-                    break
-                
-                offset += limit
-                
-                # Rate limiting between requests
+                offset += PAGINATION_LIMIT
                 time.sleep(self.request_delay)
             
             return all_results
-            
         except Exception as e:
             print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
             return all_results if all_results else []
@@ -602,44 +441,35 @@ class MusicBrainzClient:
         """Parse recording search results."""
         results = []
         
-        recordings = data.get('recordings', [])
-        for recording in recordings:
+        for recording in data.get('recordings', []):
             title = recording.get('title', '')
             mbid = recording.get('id', '')
             score = recording.get('score', 0)
             
-            # Get artist information
             artist_credits = recording.get('artist-credit', [])
-            artist = ''
-            if artist_credits:
-                artist = artist_credits[0].get('name', '')
+            artist = artist_credits[0].get('name', '') if artist_credits else ''
             
-            # Get release information
-            releases = recording.get('releases', [])
             album = None
             release_date = None
             original_release_date = None
             genre = None
             
+            releases = recording.get('releases', [])
             if releases:
-                release = releases[0]  # Take first release
+                release = releases[0]
                 album = release.get('title', '')
                 release_date = release.get('date', '')
                 
-                # Get original release date from release-group
                 release_group = release.get('release-group')
                 if release_group:
                     original_release_date = release_group.get('first-release-date')
-                    # If release date is missing, use original release date as fallback
                     if not release_date and original_release_date:
                         release_date = original_release_date
                 
-                genre = release.get('genres', [])
-                if genre:
-                    genre = genre[0]
-            url = f"https://musicbrainz.org/recording/{mbid}"
+                genres = release.get('genres', [])
+                genre = genres[0] if genres else None
             
-            result = MusicBrainzSong(
+            results.append(MusicBrainzSong(
                 title=title,
                 artist=artist,
                 album=album,
@@ -648,9 +478,8 @@ class MusicBrainzClient:
                 genre=genre,
                 mbid=mbid,
                 score=score,
-                url=url
-            )
-            results.append(result)
+                url=f"https://musicbrainz.org/recording/{mbid}"
+            ))
         
         return results
     
@@ -658,52 +487,38 @@ class MusicBrainzClient:
         """Parse release search results."""
         results = []
         
-        releases = data.get('releases', [])
-        for release in releases:
+        for release in data.get('releases', []):
             album = release.get('title', '')
             mbid = release.get('id', '')
             score = release.get('score', 0)
             release_date = release.get('date', '')
             
-            # Get artist information (properly handle collaborative artists)
-            artist_credits = release.get('artist-credit', [])
-            artist = self._parse_artist_credit(artist_credits)
+            artist = self._parse_artist_credit(release.get('artist-credit', []))
             
-            # Get release type from release-group
             release_type = None
             original_release_date = None
             release_group = release.get('release-group')
             if release_group:
                 release_type = release_group.get('primary-type')
-                # Also check for secondary types (e.g., "Live" can be a secondary type)
                 secondary_types = release_group.get('secondary-types', [])
                 if secondary_types:
-                    # If there are secondary types, prefer them (e.g., "Live" over "Album")
-                    release_type = secondary_types[0] if secondary_types else release_type
-                
-                # Always capture the original release date from release-group (first-release-date)
-                # This helps identify original releases vs re-releases
+                    release_type = secondary_types[0]
                 original_release_date = release_group.get('first-release-date')
-                
-                # If release date is missing, use original release date as fallback
                 if not release_date and original_release_date:
                     release_date = original_release_date
             
-            url = f"https://musicbrainz.org/release/{mbid}"
-            
-            result = MusicBrainzSong(
-                title='',  # Releases don't have individual track titles
+            results.append(MusicBrainzSong(
+                title='',
                 artist=artist,
                 album=album,
                 release_date=release_date,
                 original_release_date=original_release_date,
-                genre=None,  # Releases don't have genre in basic search
+                genre=None,
                 release_type=release_type,
                 mbid=mbid,
                 score=score,
-                url=url
-            )
-            results.append(result)
+                url=f"https://musicbrainz.org/release/{mbid}"
+            ))
         
         return results
     
@@ -712,12 +527,6 @@ class MusicBrainzClient:
         Parse MusicBrainz artist-credit array to build full artist name.
         
         Handles collaborative artists with join phrases (e.g., "Artist A & Artist B").
-        Format: [
-            {"artist": {"name": "Artist A"}},
-            {"name": " & "},  // join phrase
-            {"artist": {"name": "Artist B"}}
-        ]
-        Or simplified: [{"name": "Artist A"}, {"name": " & "}, {"name": "Artist B"}]
         """
         if not artist_credits:
             return ''
@@ -726,143 +535,84 @@ class MusicBrainzClient:
         join_phrases = []
         artist_parts = []
         
-        for i, credit in enumerate(artist_credits):
-            # If it has an "artist" key, it's an artist entry
+        for credit in artist_credits:
             if 'artist' in credit:
                 artist_obj = credit['artist']
-                if isinstance(artist_obj, dict) and 'name' in artist_obj:
-                    artist_name = artist_obj['name']
-                    artist_names.append(artist_name)
-                    artist_parts.append(artist_name)
-                elif isinstance(artist_obj, str):
-                    artist_names.append(artist_obj)
-                    artist_parts.append(artist_obj)
-            # If it only has a "name" key, it could be either:
-            # 1. A join phrase (like " & " or " and ")
-            # 2. A simplified artist name (legacy format)
+                name = artist_obj.get('name') if isinstance(artist_obj, dict) else artist_obj
+                if name:
+                    artist_names.append(name)
+                    artist_parts.append(name)
             elif 'name' in credit:
                 name = credit['name']
-                # Check if this looks like a join phrase (contains &, and, or is mostly spaces/punctuation)
                 name_stripped = name.strip()
                 is_join_phrase = (
-                    not name_stripped or  # Empty or just whitespace
-                    name_stripped in ['&', 'and', 'And', 'AND'] or
+                    not name_stripped or
+                    name_stripped in JOIN_PHRASES or
                     '&' in name_stripped or
-                    (len(name_stripped) <= 5 and not any(c.isalnum() for c in name_stripped))  # Just punctuation/spaces
+                    (len(name_stripped) <= 5 and not any(c.isalnum() for c in name_stripped))
                 )
                 
                 if is_join_phrase:
-                    # Normalize join phrase to " & " if it's just "&" or similar
-                    if name_stripped in ['&', 'and', 'And', 'AND']:
-                        join_phrases.append(' & ')
-                        artist_parts.append(' & ')
-                    else:
-                        join_phrases.append(name)
-                        artist_parts.append(name)
+                    normalized = ' & ' if name_stripped in JOIN_PHRASES else name
+                    join_phrases.append(normalized)
+                    artist_parts.append(normalized)
                 else:
-                    # This is an artist name (legacy format)
                     artist_names.append(name)
                     artist_parts.append(name)
         
-        # If we have multiple artists but no join phrases, add " & " between them
-        if len(artist_names) > 1 and not join_phrases:
-            # Rebuild with " & " separators
-            return ' & '.join(artist_names)
-        
-        return ''.join(artist_parts) if artist_parts else ''
+        return ' & '.join(artist_names) if len(artist_names) > 1 and not join_phrases else ''.join(artist_parts)
     
     def _parse_release_info(self, data: Dict[str, Any]) -> Optional[ReleaseInfo]:
         """Parse detailed release information."""
         try:
-            # Basic release info
             title = data.get('title', '')
             mbid = data.get('id', '')
             release_date = data.get('date', '')
             
-            # Get artist information (properly handle collaborative artists)
-            artist_credits = data.get('artist-credit', [])
-            artist = self._parse_artist_credit(artist_credits)
+            artist = self._parse_artist_credit(data.get('artist-credit', []))
             
-            # Get genre information
             genres = data.get('genres', [])
-            genre = None
-            if genres:
-                genre = genres[0].get('name', '')
+            genre = genres[0].get('name', '') if genres else None
             
-            # Get release type from release-group
             release_type = None
             original_release_date = None
             release_group = data.get('release-group')
             if release_group:
                 release_type = release_group.get('primary-type')
-                # Also check for secondary types (e.g., "Live" can be a secondary type)
                 secondary_types = release_group.get('secondary-types', [])
                 if secondary_types:
-                    # If there are secondary types, prefer them (e.g., "Live" over "Album")
-                    release_type = secondary_types[0] if secondary_types else release_type
-                
-                # Always capture the original release date from release-group (first-release-date)
-                # This helps identify original releases vs re-releases
+                    release_type = secondary_types[0]
                 original_release_date = release_group.get('first-release-date')
-                
-                # If release date is missing, use original release date as fallback
                 if not release_date and original_release_date:
                     release_date = original_release_date
             
-            url = f"https://musicbrainz.org/release/{mbid}"
-            
             # Parse tracks
             tracks = []
-            media = data.get('media', [])
-            if media:
-                # Get tracks from all media (discs) and assign sequential positions
-                current_position = 1
-                
-                for medium in media:
-                    track_list = medium.get('tracks', [])
+            current_position = 1
+            
+            for medium in data.get('media', []):
+                for track_data in medium.get('tracks', []):
+                    recording = track_data.get('recording', {})
+                    track_title = recording.get('title', '')
+                    track_mbid = recording.get('id', '')
                     
-                    for track_data in track_list:
-                        # Position might be a string or int from API - convert to int
-                        # But we'll use sequential position across all discs instead
-                        position_raw = track_data.get('position', 0)
-                        try:
-                            disc_position = int(position_raw) if position_raw else 0
-                        except (ValueError, TypeError):
-                            disc_position = 0
-                        
-                        recording = track_data.get('recording', {})
-                        track_title = recording.get('title', '')
-                        track_mbid = recording.get('id', '')
-                        
-                        # Get track artist (properly handle collaborative artists)
-                        track_artist_credits = recording.get('artist-credit', [])
-                        track_artist = artist  # Default to release artist
-                        if track_artist_credits:
-                            track_artist = self._parse_artist_credit(track_artist_credits) or artist
-                        
-                        # Get duration - check track-level length first, then recording-level
-                        duration = None
-                        # Track-level length (if available) - this is the actual length on this release
-                        # Note: MusicBrainz 'length' field in track/recording objects is in milliseconds
-                        if 'length' in track_data and track_data['length']:
-                            duration_value = track_data['length']
-                            duration = self._format_duration(duration_value)
-                        # Fall back to recording-level length if track-level not available
-                        elif 'length' in recording and recording['length']:
-                            duration_value = recording['length']
-                            duration = self._format_duration(duration_value)
-                        
-                        # Use sequential position across all discs (1, 2, 3, ..., N)
-                        # instead of per-disc positions (1, 2, 3, 1, 2, 3, ...)
-                        track = Track(
-                            position=current_position,
-                            title=track_title,
-                            artist=track_artist,
-                            duration=duration,
-                            mbid=track_mbid
-                        )
-                        tracks.append(track)
-                        current_position += 1
+                    track_artist_credits = recording.get('artist-credit', [])
+                    track_artist = self._parse_artist_credit(track_artist_credits) or artist
+                    
+                    duration = None
+                    for source in [track_data, recording]:
+                        if 'length' in source and source['length']:
+                            duration = self._format_duration(source['length'])
+                            break
+                    
+                    tracks.append(Track(
+                        position=current_position,
+                        title=track_title,
+                        artist=track_artist,
+                        duration=duration,
+                        mbid=track_mbid
+                    ))
+                    current_position += 1
             
             return ReleaseInfo(
                 title=title,
@@ -872,7 +622,7 @@ class MusicBrainzClient:
                 genre=genre,
                 release_type=release_type,
                 mbid=mbid,
-                url=url,
+                url=f"https://musicbrainz.org/release/{mbid}",
                 tracks=tracks
             )
             

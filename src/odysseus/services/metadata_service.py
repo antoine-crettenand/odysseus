@@ -123,12 +123,19 @@ class MetadataService:
             # Use provided cover art, or fetch it if not provided
             cover_art_fetched = False
             if cover_art_data:
-                metadata.cover_art_data = cover_art_data
-                cover_art_fetched = True
+                # Verify cover art data is valid (not empty)
+                if len(cover_art_data) > 0:
+                    metadata.cover_art_data = cover_art_data
+                    cover_art_fetched = True
+                    if console:
+                        console.print(f"[dim blue]ℹ[/dim blue] [dim]Using provided cover art ({len(cover_art_data)} bytes)[/dim]")
+                else:
+                    if console:
+                        console.print(f"[yellow]⚠[/yellow] Provided cover art data is empty, will try to fetch")
             else:
                 # Fallback: fetch cover art (this will use cache if available)
                 cover_art_data = self.fetch_cover_art_for_release(release_info, console)
-                if cover_art_data:
+                if cover_art_data and len(cover_art_data) > 0:
                     metadata.cover_art_data = cover_art_data
                     cover_art_fetched = True
             
@@ -142,9 +149,9 @@ class MetadataService:
             if success:
                 if console:
                     if cover_art_fetched:
-                        console.print(f"[dim blue]ℹ[/dim blue] [dim]✓ Applied metadata and cover art to {track.title}[/dim]")
+                        console.print(f"[dim blue]ℹ[/dim blue] ✓ Applied metadata and cover art to {track.title}")
                     else:
-                        console.print(f"[dim blue]ℹ[/dim blue] [dim]✓ Applied metadata to {track.title}[/dim]")
+                        console.print(f"[dim blue]ℹ[/dim blue] ✓ Applied metadata to {track.title}")
             else:
                 if console:
                     console.print(f"[yellow]⚠[/yellow] Failed to apply metadata to {track.title}")
@@ -154,10 +161,10 @@ class MetadataService:
                         if file_path.exists():
                             file_path.unlink()
                             if console:
-                                console.print(f"[dim]Removed file due to metadata application failure[/dim]")
+                                console.print(f"Removed file due to metadata application failure")
                     except Exception as delete_error:
                         if console:
-                            console.print(f"[dim yellow]⚠[/dim yellow] [dim]Could not remove file: {delete_error}[/dim]")
+                            console.print(f"[dim yellow]⚠[/dim yellow] Could not remove file: {delete_error}")
                 raise Exception("Metadata application returned False")
             
         except Exception as e:
@@ -169,7 +176,7 @@ class MetadataService:
                     if file_path.exists():
                         file_path.unlink()
                         if console:
-                            console.print(f"[dim]Removed file due to error[/dim]")
+                            console.print(f"Removed file due to error")
                 except Exception:
                     pass  # Ignore deletion errors
             raise  # Re-raise to allow caller to handle

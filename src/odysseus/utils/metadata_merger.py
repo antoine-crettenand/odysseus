@@ -453,13 +453,24 @@ class MetadataMerger:
                             # Remove all existing APIC frames to avoid duplicates
                             # APIC can appear multiple times, so we need to remove all instances
                             if audio_file.tags is not None:
-                                # Get all APIC frame keys
+                                # Get all APIC frame keys (APIC frames can have different keys like 'APIC:', 'APIC:cover', etc.)
                                 apic_keys = [key for key in audio_file.tags.keys() if key.startswith('APIC')]
-                                for key in apic_keys:
-                                    try:
-                                        del audio_file.tags[key]
-                                    except:
-                                        pass
+                                # Also check for any picture-related tags
+                                picture_keys = [key for key in audio_file.tags.keys() if 'PIC' in key or 'picture' in key.lower()]
+                                all_keys_to_remove = list(set(apic_keys + picture_keys))
+                                
+                                # Remove all cover art frames - iterate multiple times to catch all variations
+                                removed_any = True
+                                while removed_any:
+                                    removed_any = False
+                                    current_keys = list(audio_file.tags.keys())
+                                    for key in current_keys:
+                                        if key.startswith('APIC') or 'PIC' in key or 'picture' in key.lower():
+                                            try:
+                                                del audio_file.tags[key]
+                                                removed_any = True
+                                            except:
+                                                pass
                                 
                                 # Add the cover art with encoding 0 (ISO-8859-1) for better iTunes compatibility
                                 # iTunes prefers ID3v2.3, and encoding 0 is more compatible
@@ -471,6 +482,18 @@ class MetadataMerger:
                                     data=self.final_metadata.cover_art_data
                                 )
                                 audio_file.tags.add(apic)
+                                
+                                # Verify the cover art was added
+                                apic_added = False
+                                for key in audio_file.tags.keys():
+                                    if key.startswith('APIC'):
+                                        apic_added = True
+                                        break
+                                
+                                if not apic_added:
+                                    logger.warning(f"Cover art APIC frame was not added to {file_path}")
+                                    if not quiet:
+                                        print(f"⚠ Warning: Cover art may not have been added to {file_path.name}")
                                 
                                 message = f"✓ Added cover art to {file_path.name} ({len(self.final_metadata.cover_art_data)} bytes, {mime_type})"
                                 if not quiet:

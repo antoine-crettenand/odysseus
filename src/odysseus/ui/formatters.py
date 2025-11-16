@@ -13,6 +13,7 @@ from rich import box
 
 from ..models.search_results import SearchResult, MusicBrainzSong, YouTubeVideo
 from ..models.releases import ReleaseInfo
+from ..services.duration_recovery import DurationRecoveryService
 from .styling import Styling
 
 
@@ -22,6 +23,7 @@ class DisplayFormatters:
     def __init__(self, console: Console):
         self.console = console
         self.styling = Styling(console)
+        self.duration_recovery = DurationRecoveryService()
     
     def create_header_panel(self, title: str, subtitle: Optional[str] = None) -> Panel:
         """Create a styled header panel."""
@@ -160,6 +162,12 @@ class DisplayFormatters:
     
     def display_track_listing(self, release_info: ReleaseInfo):
         """Display the track listing for a release in a beautiful format."""
+        # Try to recover missing durations before displaying
+        tracks_without_duration = [t for t in release_info.tracks if not t.duration]
+        if tracks_without_duration:
+            self.console.print("[dim]Recovering missing track durations...[/dim]")
+            self.duration_recovery.recover_release_durations(release_info)
+        
         # Create header panel
         header_content = f"[bold yellow]{release_info.title}[/bold yellow]"
         header_content += f"\n[green]by {release_info.artist}[/green]"
