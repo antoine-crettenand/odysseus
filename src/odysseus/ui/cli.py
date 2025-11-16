@@ -73,9 +73,9 @@ Available modes:
             formatter_class=argparse.RawDescriptionHelpFormatter,
             epilog=            """
 Examples:
-  %(prog)s recording --title "Bohemian Rhapsody" --artist "Queen"
-  %(prog)s release --album "Dark Side of the Moon" --artist "Pink Floyd"
-  %(prog)s discography --artist "The Beatles" --year 1965
+  %(prog)s recording --title "Song Title" --artist "Artist Name"
+  %(prog)s release --album "Album Name" --artist "Artist Name"
+  %(prog)s discography --artist "Artist Name" --year 1970
   %(prog)s spotify --url "https://open.spotify.com/playlist/..."
   %(prog)s metadata /path/to/file.mp3 --album "Album Name" --artist "Artist Name"
   %(prog)s metadata /path/to/directory --album "Album Name" --artist "Artist Name"
