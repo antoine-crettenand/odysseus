@@ -296,11 +296,14 @@ class PlaylistStrategy(BaseDownloadStrategy):
                             date_to_use = release_info.original_release_date or release_info.release_date
                             year = int(date_to_use[:4]) if date_to_use and len(date_to_use) >= 4 else None
                             
+                            # Use track artist if different from release artist, otherwise fall back to release artist
+                            track_artist = track.artist if (track.artist and track.artist != release_info.artist) else (release_info.artist or "Unknown Artist")
+                            
                             if is_playlist:
                                 # For playlists, use playlist folder structure
                                 metadata_dict = {
                                     'title': track.title,
-                                    'artist': track.artist,  # Keep actual track artist in metadata
+                                    'artist': track_artist,  # Keep actual track artist in metadata, or fall back to release artist
                                     'album': release_info.title,
                                     'is_playlist': True,
                                     'playlist_name': release_info.title,
@@ -311,7 +314,7 @@ class PlaylistStrategy(BaseDownloadStrategy):
                             else:
                                 metadata_dict = {
                                     'title': track.title,
-                                    'artist': track.artist,
+                                    'artist': track_artist,
                                     'album': release_info.title,
                                     'year': year,
                                     'track_number': track.position,

@@ -172,9 +172,12 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
                         date_to_use = release_info.original_release_date or release_info.release_date
                         year = int(date_to_use[:4]) if date_to_use and len(date_to_use) >= 4 else None
                         
+                        # Use track artist if different from release artist, otherwise fall back to release artist
+                        track_artist = track.artist if (track.artist and track.artist != release_info.artist) else (release_info.artist or "Unknown Artist")
+                        
                         metadata_dict = {
                             'title': track.title,
-                            'artist': track.artist,  # Keep actual track artist in metadata
+                            'artist': track_artist,  # Keep actual track artist in metadata, or fall back to release artist
                             'album': release_info.title,
                             'is_playlist': True,
                             'playlist_name': release_info.title,
@@ -186,7 +189,9 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
                         # Use "Various Artists" for folder structure if this is a compilation
                         # but keep the actual track artist in metadata
                         is_compilation = self.path_manager.is_compilation(release_info)
-                        folder_artist = "Various Artists" if is_compilation else track.artist
+                        # Use track artist if different from release artist, otherwise fall back to release artist
+                        track_artist = track.artist if (track.artist and track.artist != release_info.artist) else (release_info.artist or "Unknown Artist")
+                        folder_artist = "Various Artists" if is_compilation else track_artist
                         
                         # Use original_release_date for year if available (prefer original year over re-release year)
                         date_to_use = release_info.original_release_date or release_info.release_date

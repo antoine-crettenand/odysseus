@@ -108,9 +108,12 @@ class MetadataService:
             album_name = release_info.title.strip() if release_info.title else "Unknown Album"
             
             # Create metadata
+            # Use track artist if different from release artist, otherwise fall back to release artist
+            track_artist = track.artist if (track.artist and track.artist != release_info.artist) else (release_info.artist or "Unknown Artist")
+            
             metadata = AudioMetadata(
                 title=track.title,
-                artist=track.artist,  # Track artist (individual artist for each track)
+                artist=track_artist,  # Track artist (individual artist for each track, or release artist as fallback)
                 album=album_name,  # Normalized album name for consistency
                 album_artist="Various Artists" if is_compilation else (release_info.artist.strip() if release_info.artist else "Unknown Artist"),  # Album artist for iTunes grouping
                 year=int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None,

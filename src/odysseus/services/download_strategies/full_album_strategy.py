@@ -399,9 +399,11 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                 metadata_list = []
                 for timestamp_info in track_timestamps:
                     track = timestamp_info['track']
+                    # Use track artist if different from release artist, otherwise fall back to release artist
+                    track_artist = track.artist if (track.artist and track.artist != release_info.artist) else (release_info.artist or "Unknown Artist")
                     metadata_list.append({
                         'title': track.title,
-                        'artist': track.artist,
+                        'artist': track_artist,
                         'album': release_info.title,
                         'year': year,
                         'track_number': track.position,

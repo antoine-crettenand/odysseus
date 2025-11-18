@@ -204,12 +204,12 @@ class DisplayFormatters:
         
         for track in release_info.tracks:
             duration = track.duration or "—"
+            # Use track artist if different from release artist, otherwise use release artist as fallback
             if track.artist and track.artist != release_info.artist:
                 artist = track.artist
-            elif track.artist:
-                artist = track.artist
             else:
-                artist = ""
+                # Fall back to release artist if track artist is empty or same as release artist
+                artist = release_info.artist or ""
             
             table.add_row(
                 str(track.position),
@@ -293,8 +293,11 @@ class DisplayFormatters:
             table.add_column("Score", style="bold", width=8, justify="center")
             
             for release in year_releases:
-                if release.release_date and len(release.release_date) >= 4:
-                    release_date = release.release_date
+                # Display original_release_date to match the grouping logic
+                # This ensures re-releases show their original release year, not the re-release year
+                date_to_display = release.original_release_date or release.release_date
+                if date_to_display and len(date_to_display) >= 4:
+                    release_date = date_to_display
                 else:
                     release_date = "—"
                 release_type = Text(release.release_type, style="bold magenta") if release.release_type else Text("—", style="dim")

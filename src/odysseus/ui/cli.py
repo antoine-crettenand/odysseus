@@ -5,7 +5,9 @@ A comprehensive command-line interface for music discovery and downloading.
 
 import argparse
 import sys
-from typing import List
+import csv
+from pathlib import Path
+from typing import List, Tuple, Optional
 
 from rich.prompt import Confirm
 
@@ -75,6 +77,7 @@ Available modes:
 Examples:
   %(prog)s recording --title "Song Title" --artist "Artist Name"
   %(prog)s release --album "Album Name" --artist "Artist Name"
+  %(prog)s release --batch playlist_artists_albums.txt
   %(prog)s discography --artist "Artist Name" --year 1970
   %(prog)s spotify --url "https://open.spotify.com/playlist/..."
   %(prog)s metadata /path/to/file.mp3 --album "Album Name" --artist "Artist Name"
@@ -102,7 +105,7 @@ Examples:
         
         release_parser = subparsers.add_parser(
             'release',
-            help='Search and download tracks from a release/album'
+            help='Search and download tracks from a release/album (supports batch processing with --batch)'
         )
         self._add_release_args(release_parser)
         
@@ -163,18 +166,20 @@ Examples:
         """Add arguments for release mode."""
         parser.add_argument(
             '--album', '-l',
-            required=True,
-            help='Album/release name to search for'
+            help='Album/release name to search for (required unless --batch is used)'
         )
         parser.add_argument(
             '--artist', '-a',
-            required=True,
-            help='Artist name'
+            help='Artist name (required unless --batch is used)'
+        )
+        parser.add_argument(
+            '--batch', '-b',
+            help='Path to TSV/TXT file with Artist, Album, and optional Year columns for batch processing'
         )
         parser.add_argument(
             '--year', '-y',
             type=int,
-            help='Release year (optional)'
+            help='Release year (optional, ignored when using --batch)'
         )
         parser.add_argument(
             '--type', '-t',
@@ -195,6 +200,12 @@ Examples:
             '--no-download',
             action='store_true',
             help='Search only, do not download'
+        )
+        parser.add_argument(
+            '--auto', '--yes',
+            dest='auto',
+            action='store_true',
+            help='Automatically process without user interaction (select first result and all tracks). Useful for batch processing.'
         )
     
     def _add_discography_args(self, parser: argparse.ArgumentParser):
@@ -296,15 +307,31 @@ Examples:
                 # Exit after recording - no search info for another recording
                 sys.exit(0)
             elif parsed_args.mode == 'release':
-                self.release_handler.handle(
-                    album=parsed_args.album,
-                    artist=parsed_args.artist,
-                    year=parsed_args.year,
-                    release_type=parsed_args.type,
-                    quality=parsed_args.quality,
-                    tracks=parsed_args.tracks,
-                    no_download=parsed_args.no_download
-                )
+                # Handle batch processing
+                if parsed_args.batch:
+                    self._handle_batch_release(
+                        batch_file=parsed_args.batch,
+                        release_type=parsed_args.type,
+                        quality=parsed_args.quality,
+                        tracks=parsed_args.tracks,
+                        no_download=parsed_args.no_download,
+                        auto=getattr(parsed_args, 'auto', False)
+                    )
+                else:
+                    # Validate required arguments for single release
+                    if not parsed_args.album or not parsed_args.artist:
+                        parser.error("--album and --artist are required unless --batch is used")
+                    
+                    self.release_handler.handle(
+                        album=parsed_args.album,
+                        artist=parsed_args.artist,
+                        year=parsed_args.year,
+                        release_type=parsed_args.type,
+                        quality=parsed_args.quality,
+                        tracks=parsed_args.tracks,
+                        no_download=parsed_args.no_download,
+                        auto=getattr(parsed_args, 'auto', False)
+                    )
                 # Exit after release - no search info for another release
                 sys.exit(0)
             elif parsed_args.mode == 'discography':
@@ -358,3 +385,162 @@ Examples:
         except Exception as e:
             self.display_manager.console.print(f"[bold red]✗[/bold red] An error occurred: {e}")
             sys.exit(1)
+    
+    def _parse_batch_file(self, batch_file: str) -> List[Tuple[str, str, Optional[int]]]:
+        """
+        Parse a TSV/TXT file containing Artist, Album, and optional Year columns.
+        
+        Supports:
+        - TSV format: Artist\tAlbum\tYear (with or without header)
+        - CSV format: Artist,Album,Year (with or without header)
+        - Human-readable format: Artist - Album (Year) or Artist - Album
+        
+        Returns:
+            List of tuples (artist, album, year)
+        """
+        batch_path = Path(batch_file)
+        if not batch_path.exists():
+            raise FileNotFoundError(f"Batch file not found: {batch_file}")
+        
+        entries = []
+        
+        with open(batch_path, 'r', encoding='utf-8') as f:
+            # Try to detect format by reading first line
+            first_line = f.readline().strip()
+            f.seek(0)  # Reset to beginning
+            
+            # Check if it's TSV (tab-separated)
+            if '\t' in first_line:
+                reader = csv.reader(f, delimiter='\t')
+                for row_num, row in enumerate(reader, start=1):
+                    # Skip header row if it exists
+                    if row_num == 1 and row[0].lower() in ['artist', 'artists']:
+                        continue
+                    
+                    if len(row) < 2:
+                        continue
+                    
+                    artist = row[0].strip()
+                    album = row[1].strip()
+                    year = None
+                    
+                    # Try to parse year from third column if present
+                    if len(row) >= 3 and row[2].strip():
+                        try:
+                            year = int(row[2].strip())
+                        except ValueError:
+                            pass
+                    
+                    if artist and album:
+                        entries.append((artist, album, year))
+            
+            # Check if it's CSV (comma-separated)
+            elif ',' in first_line and '\t' not in first_line:
+                reader = csv.reader(f)
+                for row_num, row in enumerate(reader, start=1):
+                    # Skip header row if it exists
+                    if row_num == 1 and row[0].lower() in ['artist', 'artists']:
+                        continue
+                    
+                    if len(row) < 2:
+                        continue
+                    
+                    artist = row[0].strip()
+                    album = row[1].strip()
+                    year = None
+                    
+                    # Try to parse year from third column if present
+                    if len(row) >= 3 and row[2].strip():
+                        try:
+                            year = int(row[2].strip())
+                        except ValueError:
+                            pass
+                    
+                    if artist and album:
+                        entries.append((artist, album, year))
+            
+            # Otherwise, try human-readable format: "Artist - Album (Year)" or "Artist - Album"
+            else:
+                import re
+                for line_num, line in enumerate(f, start=1):
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    
+                    # Pattern: "Artist - Album (Year)" or "Artist - Album"
+                    match = re.match(r'^(.+?)\s*-\s*(.+?)(?:\s*\((\d{4})\))?\s*$', line)
+                    if match:
+                        artist = match.group(1).strip()
+                        album = match.group(2).strip()
+                        year_str = match.group(3)
+                        year = int(year_str) if year_str else None
+                        
+                        if artist and album:
+                            entries.append((artist, album, year))
+        
+        if not entries:
+            raise ValueError(f"No valid entries found in batch file: {batch_file}")
+        
+        return entries
+    
+    def _handle_batch_release(
+        self,
+        batch_file: str,
+        release_type: Optional[str],
+        quality: str,
+        tracks: Optional[str],
+        no_download: bool,
+        auto: bool = False
+    ):
+        """Handle batch processing of releases from a file."""
+        console = self.display_manager.console
+        
+        try:
+            entries = self._parse_batch_file(batch_file)
+        except Exception as e:
+            console.print(f"[bold red]✗[/bold red] Failed to parse batch file: {e}")
+            return
+        
+        console.print()
+        console.print(self.display_manager._create_header_panel(
+            f"📦 {PROJECT_NAME} - Batch Release Processing",
+            f"Found {len(entries)} releases to process"
+        ))
+        console.print()
+        
+        successful = 0
+        failed = 0
+        
+        for idx, (artist, album, year) in enumerate(entries, start=1):
+            console.print()
+            console.print(f"[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
+            console.print(f"[bold]Processing [{idx}/{len(entries)}]:[/bold] [yellow]{album}[/yellow] by [green]{artist}[/green]" + (f" ({year})" if year else ""))
+            console.print(f"[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
+            
+            try:
+                self.release_handler.handle(
+                    album=album,
+                    artist=artist,
+                    year=year,
+                    release_type=release_type,
+                    quality=quality,
+                    tracks=tracks,
+                    no_download=no_download,
+                    auto=auto
+                )
+                successful += 1
+            except KeyboardInterrupt:
+                console.print("\n[yellow]⚠[/yellow] Batch processing cancelled by user.")
+                console.print(f"\n[blue]ℹ[/blue] Processed: {successful} successful, {failed} failed")
+                raise
+            except Exception as e:
+                console.print(f"[bold red]✗[/bold red] Failed to process {album} by {artist}: {e}")
+                failed += 1
+                # Continue with next entry
+                continue
+        
+        console.print()
+        console.print(f"[bold green]✓[/bold green] Batch processing complete!")
+        console.print(f"  Successful: [green]{successful}[/green]")
+        if failed > 0:
+            console.print(f"  Failed: [red]{failed}[/red]")

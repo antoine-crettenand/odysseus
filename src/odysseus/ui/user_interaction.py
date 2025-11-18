@@ -19,7 +19,8 @@ class UserInteraction:
     def parse_track_selection(
         self,
         tracks_arg: Optional[str],
-        total_tracks: int
+        total_tracks: int,
+        auto: bool = False
     ) -> List[int]:
         """Parse track selection from command line argument or user input."""
         if tracks_arg:
@@ -37,6 +38,14 @@ class UserInteraction:
             except ValueError:
                 self.console.print("[bold red]✗[/bold red] Invalid track selection format. Use comma-separated numbers (e.g., 1,3,5)")
                 return []
+        elif auto:
+            # Auto mode: select all tracks
+            all_tracks = list(range(1, total_tracks + 1))
+            if total_tracks <= 10:
+                self.console.print(f"[blue]ℹ[/blue] Auto-selected all tracks: [cyan]{', '.join(map(str, all_tracks))}[/cyan]")
+            else:
+                self.console.print(f"[blue]ℹ[/blue] Auto-selected all [cyan]{total_tracks}[/cyan] tracks")
+            return all_tracks
         else:
             # Interactive track selection
             self.console.print("[bold]Select tracks to download:[/bold]")
