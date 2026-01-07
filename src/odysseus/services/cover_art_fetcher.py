@@ -3,9 +3,11 @@ Cover art fetching service for retrieving cover art from various sources.
 """
 
 import requests
+import time
 from typing import Optional, Dict
 from pathlib import Path
 from ..models.releases import ReleaseInfo
+from ..clients.network_agent import NetworkAgent
 
 
 class CoverArtFetcher:
@@ -18,6 +20,8 @@ class CoverArtFetcher:
         # Cache for Discogs search results to avoid repeated searches
         # Key: (artist, album), Value: cover_art_url (str) or None
         self._discogs_search_cache: Dict[tuple, Optional[str]] = {}
+        # Initialize network agent for adaptive header management
+        self.network_agent = NetworkAgent('Odysseus/1.0 (https://github.com/antoinecrettenand/odysseus)')
     
     def fetch_cover_art_from_url(self, url: str, console=None, use_cache: bool = True) -> Optional[bytes]:
         """
@@ -42,10 +46,16 @@ class CoverArtFetcher:
             return cached_data
         
         try:
-            headers = {
-                'User-Agent': 'Odysseus/1.0'
-            }
-            response = requests.get(url, headers=headers, timeout=10)
+            # Use network agent for adaptive header management
+            response = self._make_request_with_retry(url, timeout=10)
+            
+            if response is None:
+                # Request failed after retries
+                if console:
+                    console.print(f"[yellow]⚠[/yellow] Failed to fetch cover art from URL after retries")
+                if use_cache:
+                    self._cover_art_cache[url] = None
+                return None
             
             if response.status_code == 200:
                 if console:
@@ -97,10 +107,13 @@ class CoverArtFetcher:
         try:
             # Use HTTPS and add User-Agent header
             cover_art_url = f"https://coverartarchive.org/release/{mbid}"
-            headers = {
-                'User-Agent': 'Odysseus/1.0 (https://github.com/antoinecrettenand/odysseus)'
-            }
-            response = requests.get(cover_art_url, headers=headers, timeout=10)
+            # Use network agent for adaptive header management
+            response = self._make_request_with_retry(cover_art_url, timeout=10)
+            if response is None:
+                # Request failed after retries
+                if use_cache:
+                    self._cover_art_cache[cache_key] = None
+                return None
             
             if response.status_code == 200:
                 data = response.json()
@@ -119,8 +132,8 @@ class CoverArtFetcher:
                     if image.get('front', False):
                         image_url = image.get('image')
                         if image_url:
-                            img_response = requests.get(image_url, headers=headers, timeout=10)
-                            if img_response.status_code == 200:
+                            img_response = self._make_request_with_retry(image_url, timeout=10)
+                            if img_response is not None and img_response.status_code == 200:
                                 if console:
                                     console.print(f"[dim blue]ℹ[/dim blue] [dim]Fetched front cover art ({len(img_response.content)} bytes)[/dim]")
                                 # Cache the result
@@ -132,8 +145,8 @@ class CoverArtFetcher:
                 if images:
                     image_url = images[0].get('image')
                     if image_url:
-                        img_response = requests.get(image_url, headers=headers, timeout=10)
-                        if img_response.status_code == 200:
+                        img_response = self._make_request_with_retry(image_url, timeout=10)
+                        if img_response is not None and img_response.status_code == 200:
                             if console:
                                 console.print(f"[dim blue]ℹ[/dim blue] [dim]Fetched cover art (first available, {len(img_response.content)} bytes)[/dim]")
                             # Cache the result
@@ -154,7 +167,7 @@ class CoverArtFetcher:
                     self._cover_art_cache[cache_key] = None
         except requests.exceptions.RequestException as e:
             if console:
-                console.print(f"[yellow]⚠[/yellow] Network error fetching cover art: {e}")
+                console.print(f"[yellow]⚠[/yellow] [dim]Network error fetching cover art: {e}[/dim]")
             # Cache the failure
             if use_cache:
                 self._cover_art_cache[cache_key] = None
@@ -164,6 +177,138 @@ class CoverArtFetcher:
             # Cache the failure
             if use_cache:
                 self._cover_art_cache[cache_key] = None
+        return None
+    
+    def _make_request_with_retry(self, url: str, timeout: int = 10, max_retries: int = 3) -> Optional[requests.Response]:
+        """
+        Make a request with retry logic and adaptive header management using network agent.
+        
+        Args:
+            url: URL to request
+            timeout: Request timeout in seconds
+            max_retries: Maximum number of retry attempts
+            
+        Returns:
+            Response object if successful, None if all retries failed
+        """
+        retry_delay = 2
+        attempt = 0
+        
+        while attempt < max_retries:
+            try:
+                # Get current headers from network agent
+                headers = self.network_agent.get_current_headers()
+                response = requests.get(url, headers=headers, timeout=timeout)
+                
+                if response.status_code == 200:
+                    return response
+                elif response.status_code == 404:
+                    # Don't retry on 404
+                    return response
+                else:
+                    # For other status codes, retry
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                        attempt += 1
+                        continue
+                    return response
+                    
+            except requests.exceptions.SSLError as e:
+                error_str = str(e).lower()
+                is_transient = any(x in error_str for x in ['eof', 'unexpected_eof', 'connection'])
+                
+                if is_transient and attempt >= 1:
+                    # Try switching strategy after first attempt
+                    current_strategy = self.network_agent.get_current_strategy_name()
+                    switched = self.network_agent.switch_to_next_strategy(e)
+                    if switched:
+                        new_strategy = self.network_agent.get_current_strategy_name()
+                        # Strategy switched, reset retry delay
+                        retry_delay = 2
+                    else:
+                        # All strategies exhausted, reset to default
+                        self.network_agent.reset_to_default()
+                        retry_delay = 2
+                
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    attempt += 1
+                    continue
+                else:
+                    return None
+                    
+            except requests.exceptions.ConnectionError as e:
+                # Check if this is the ProtocolError with Invalid argument
+                if self.network_agent.should_switch_strategy(e):
+                    switched = self.network_agent.switch_to_next_strategy(e)
+                    if not switched:
+                        self.network_agent.reset_to_default()
+                    retry_delay = 2
+                
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    attempt += 1
+                    continue
+                else:
+                    return None
+                    
+            except requests.exceptions.RequestException:
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    attempt += 1
+                    continue
+                else:
+                    return None
+        
+        return None
+    
+    def _find_musicbrainz_mbid(self, release_info: ReleaseInfo, console=None) -> Optional[str]:
+        """
+        Search MusicBrainz for a matching release to get MBID.
+        
+        Args:
+            release_info: ReleaseInfo object with artist and title
+            console: Optional console for output
+            
+        Returns:
+            MusicBrainz MBID if found, None otherwise
+        """
+        if not release_info.artist or not release_info.title:
+            return None
+        
+        try:
+            from ..models.song import SongData
+            from ..clients.musicbrainz import MusicBrainzClient
+            
+            # Extract year from release date if available
+            release_year = None
+            if release_info.release_date and len(release_info.release_date) >= 4:
+                try:
+                    release_year = int(release_info.release_date[:4])
+                except ValueError:
+                    pass
+            
+            song_data = SongData(
+                title="",  # Not needed for release search
+                artist=release_info.artist,
+                album=release_info.title,
+                release_year=release_year
+            )
+            
+            musicbrainz_client = MusicBrainzClient()
+            results = musicbrainz_client.search_release(song_data, limit=3)
+            
+            if results:
+                # Return the first result's MBID (best match)
+                return results[0].mbid
+        except Exception as e:
+            if console:
+                console.print(f"[dim yellow]⚠[/dim yellow] [dim]Error searching MusicBrainz for MBID: {e}[/dim]")
+        
         return None
     
     def _fetch_cover_art_from_discogs(self, release_info: ReleaseInfo, console=None) -> Optional[bytes]:
@@ -503,10 +648,22 @@ class CoverArtFetcher:
                 return cover_art_data
             elif console:
                 console.print(f"[yellow]⚠[/yellow] Cover art not available from MusicBrainz")
-        elif mbid and not is_musicbrainz_mbid:
-            # This is likely a Discogs ID, not a MusicBrainz MBID
+        
+        # If MBID is a Discogs ID or we don't have a valid MusicBrainz MBID,
+        # try searching MusicBrainz by artist/album to find a matching release
+        if not mbid or not is_musicbrainz_mbid:
             if console:
-                console.print(f"[yellow]⚠[/yellow] MBID appears to be from Discogs (not MusicBrainz). Cover art requires MusicBrainz MBID.")
+                if mbid and not is_musicbrainz_mbid:
+                    console.print(f"[dim blue]ℹ[/dim blue] [dim]MBID appears to be from Discogs. Searching MusicBrainz for matching release...[/dim]")
+                else:
+                    console.print(f"[dim blue]ℹ[/dim blue] [dim]Trying to find MusicBrainz release for cover art...[/dim]")
+            musicbrainz_mbid = self._find_musicbrainz_mbid(release_info, console)
+            if musicbrainz_mbid:
+                if console:
+                    console.print(f"[dim blue]ℹ[/dim blue] [dim]Found MusicBrainz release. Fetching cover art...[/dim]")
+                cover_art_data = self.fetch_cover_art(musicbrainz_mbid, console)
+                if cover_art_data:
+                    return cover_art_data
         
         # Priority 3: Try to extract cover art from existing tracks in the folder
         if folder_path and folder_path.exists():

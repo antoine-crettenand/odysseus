@@ -121,11 +121,21 @@ def validate_configuration() -> Tuple[bool, List[str]]:
 
 def validate_and_raise():
     """
-    Validate configuration and raise ConfigurationError if invalid.
+    Validate configuration and raise if invalid.
+    
+    This function is called at application startup to ensure
+    configuration is valid before proceeding.
     """
-    is_valid, errors = validate_configuration()
-    if not is_valid:
-        error_msg = "Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
+    # Import here to avoid circular imports
+    from .config_validator import validate_config
+    
+    try:
+        validate_config()
+    except ConfigurationError as e:
+        error_msg = f"Configuration error: {e.message}"
+        if e.details.get("errors"):
+            error_msg += "\n" + "\n".join(f"  - {err}" for err in e.details["errors"])
+        
         raise ConfigurationError(error_msg)
 
 

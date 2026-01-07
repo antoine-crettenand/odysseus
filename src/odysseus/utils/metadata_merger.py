@@ -325,281 +325,24 @@ class MetadataMerger:
             return False
         
         try:
-            # Try to import mutagen for metadata writing
-            from mutagen import File as MutagenFile
-            from mutagen.id3 import APIC, TIT2, TPE1, TPE2, TALB, TYER, TCON, TRCK, TCMP, ID3NoHeaderError
-            
-            # Convert to Path if it's a string
-            if isinstance(file_path, str):
-                file_path = Path(file_path)
-            
-            audio_file = MutagenFile(str(file_path))
+            # Load audio file
+            audio_file, file_path, file_ext = self._load_audio_file(file_path)
             if audio_file is None:
-                logger.error(f"Could not load audio file: {file_path}")
                 return False
             
-            file_ext = file_path.suffix.lower()
-            
-            # Handle MP3 files with ID3 tags differently
+            # Apply metadata tags
             if file_ext == '.mp3':
-                try:
-                    # Ensure ID3 tags exist
-                    try:
-                        audio_file.add_tags()
-                    except:
-                        pass  # Tags already exist
-                    
-                    # Use proper ID3 frames for MP3
-                    if self.final_metadata.title:
-                        audio_file.tags['TIT2'] = TIT2(encoding=3, text=self.final_metadata.title)
-                    if self.final_metadata.artist:
-                        audio_file.tags['TPE1'] = TPE1(encoding=3, text=self.final_metadata.artist)
-                    if self.final_metadata.album_artist:
-                        audio_file.tags['TPE2'] = TPE2(encoding=3, text=self.final_metadata.album_artist)
-                    if self.final_metadata.album:
-                        audio_file.tags['TALB'] = TALB(encoding=3, text=self.final_metadata.album)
-                    if self.final_metadata.year:
-                        audio_file.tags['TYER'] = TYER(encoding=3, text=str(self.final_metadata.year))
-                    if self.final_metadata.genre:
-                        audio_file.tags['TCON'] = TCON(encoding=3, text=self.final_metadata.genre)
-                    # Track number: format as "1/10" if total_tracks available, else just "1"
-                    if self.final_metadata.track_number:
-                        if self.final_metadata.total_tracks:
-                            track_str = f"{self.final_metadata.track_number}/{self.final_metadata.total_tracks}"
-                        else:
-                            track_str = str(self.final_metadata.track_number)
-                        audio_file.tags['TRCK'] = TRCK(encoding=3, text=track_str)
-                    # Compilation flag for iTunes (TCMP tag)
-                    if self.final_metadata.compilation is not None:
-                        # TCMP should be "1" for compilations, "0" or absent for non-compilations
-                        audio_file.tags['TCMP'] = TCMP(encoding=3, text="1" if self.final_metadata.compilation else "0")
-                except Exception as e:
-                    logger.warning(f"Error setting ID3 tags: {e}")
-                    # Fallback to simple assignment
-                    if self.final_metadata.title:
-                        audio_file['title'] = self.final_metadata.title
-                    if self.final_metadata.artist:
-                        audio_file['artist'] = self.final_metadata.artist
-                    if self.final_metadata.album_artist:
-                        audio_file['albumartist'] = self.final_metadata.album_artist
-                        audio_file['TPE2'] = self.final_metadata.album_artist
-                    if self.final_metadata.album:
-                        audio_file['album'] = self.final_metadata.album
-                    if self.final_metadata.year:
-                        audio_file['date'] = str(self.final_metadata.year)
-                    if self.final_metadata.genre:
-                        audio_file['genre'] = self.final_metadata.genre
-                    # Track number: format as "1/10" if total_tracks available, else just "1"
-                    if self.final_metadata.track_number:
-                        if self.final_metadata.total_tracks:
-                            track_str = f"{self.final_metadata.track_number}/{self.final_metadata.total_tracks}"
-                        else:
-                            track_str = str(self.final_metadata.track_number)
-                        audio_file['TRCK'] = track_str
-                    # Compilation flag for iTunes (TCMP tag)
-                    if self.final_metadata.compilation is not None:
-                        audio_file['TCMP'] = "1" if self.final_metadata.compilation else "0"
+                self._apply_id3_tags(audio_file)
             else:
-                # For other formats, use simple assignment
-                if self.final_metadata.title:
-                    audio_file['title'] = self.final_metadata.title
-                if self.final_metadata.artist:
-                    audio_file['artist'] = self.final_metadata.artist
-                if self.final_metadata.album_artist:
-                    audio_file['albumartist'] = self.final_metadata.album_artist
-                if self.final_metadata.album:
-                    audio_file['album'] = self.final_metadata.album
-                if self.final_metadata.year:
-                    audio_file['date'] = str(self.final_metadata.year)
-                if self.final_metadata.genre:
-                    audio_file['genre'] = self.final_metadata.genre
-                # Track number: format as "1/10" if total_tracks available, else just "1"
-                if self.final_metadata.track_number:
-                    if self.final_metadata.total_tracks:
-                        track_str = f"{self.final_metadata.track_number}/{self.final_metadata.total_tracks}"
-                    else:
-                        track_str = str(self.final_metadata.track_number)
-                    # Try common tag names for track number
-                    audio_file['tracknumber'] = track_str
-                    audio_file['TRCK'] = track_str
-                # Compilation flag for iTunes (for non-MP3 formats)
-                if self.final_metadata.compilation is not None:
-                    audio_file['compilation'] = "1" if self.final_metadata.compilation else "0"
-                    audio_file['TCMP'] = "1" if self.final_metadata.compilation else "0"
+                self._apply_generic_tags(audio_file)
             
             # Apply cover art if available
             if self.final_metadata.cover_art_data:
-                try:
-                    # Determine MIME type from cover art data
-                    mime_type = "image/jpeg"  # Default to JPEG
-                    if self.final_metadata.cover_art_data.startswith(b'\xff\xd8\xff'):
-                        mime_type = "image/jpeg"
-                    elif self.final_metadata.cover_art_data.startswith(b'\x89PNG'):
-                        mime_type = "image/png"
-                    elif self.final_metadata.cover_art_data.startswith(b'GIF'):
-                        mime_type = "image/gif"
-                    elif self.final_metadata.cover_art_data.startswith(b'RIFF'):
-                        mime_type = "image/webp"
-                    
-                    # Handle MP3 files with ID3 tags
-                    if file_ext == '.mp3':
-                        try:
-                            # Ensure ID3 tags exist
-                            try:
-                                audio_file.add_tags()
-                            except:
-                                pass  # Tags already exist
-                            
-                            # Remove all existing APIC frames to avoid duplicates
-                            # APIC can appear multiple times, so we need to remove all instances
-                            if audio_file.tags is not None:
-                                # Get all APIC frame keys (APIC frames can have different keys like 'APIC:', 'APIC:cover', etc.)
-                                apic_keys = [key for key in audio_file.tags.keys() if key.startswith('APIC')]
-                                # Also check for any picture-related tags
-                                picture_keys = [key for key in audio_file.tags.keys() if 'PIC' in key or 'picture' in key.lower()]
-                                all_keys_to_remove = list(set(apic_keys + picture_keys))
-                                
-                                # Remove all cover art frames - iterate multiple times to catch all variations
-                                removed_any = True
-                                while removed_any:
-                                    removed_any = False
-                                    current_keys = list(audio_file.tags.keys())
-                                    for key in current_keys:
-                                        if key.startswith('APIC') or 'PIC' in key or 'picture' in key.lower():
-                                            try:
-                                                del audio_file.tags[key]
-                                                removed_any = True
-                                            except:
-                                                pass
-                                
-                                # Add the cover art with encoding 0 (ISO-8859-1) for better iTunes compatibility
-                                # iTunes prefers ID3v2.3, and encoding 0 is more compatible
-                                apic = APIC(
-                                    encoding=0,  # ISO-8859-1 (better iTunes compatibility than UTF-8)
-                                    mime=mime_type,
-                                    type=3,  # Cover (front)
-                                    desc='Cover',
-                                    data=self.final_metadata.cover_art_data
-                                )
-                                audio_file.tags.add(apic)
-                                
-                                # Verify the cover art was added
-                                apic_added = False
-                                for key in audio_file.tags.keys():
-                                    if key.startswith('APIC'):
-                                        apic_added = True
-                                        break
-                                
-                                if not apic_added:
-                                    logger.warning(f"Cover art APIC frame was not added to {file_path}")
-                                    if not quiet:
-                                        print(f"⚠ Warning: Cover art may not have been added to {file_path.name}")
-                                
-                                message = f"✓ Added cover art to {file_path.name} ({len(self.final_metadata.cover_art_data)} bytes, {mime_type})"
-                                if not quiet:
-                                    print(message)
-                                logger.debug(f"Added cover art to {file_path} ({len(self.final_metadata.cover_art_data)} bytes, {mime_type})")
-                            
-                        except Exception as e:
-                            message = f"⚠ Could not add cover art to MP3 file {file_path.name}: {e}"
-                            if not quiet:
-                                print(message)
-                            logger.warning(f"Could not add cover art to MP3 file {file_path}: {e}", exc_info=True)
-                    
-                    # Handle other formats (M4A, OGG, FLAC, etc.)
-                    else:
-                        # For formats that support embedded pictures
-                        if hasattr(audio_file, 'tags') and audio_file.tags is not None:
-                            # Handle M4A/MP4 files
-                            if file_ext in ['.m4a', '.mp4', '.m4p']:
-                                try:
-                                    from mutagen.mp4 import MP4Cover
-                                    image_format = MP4Cover.FORMAT_JPEG if mime_type == 'image/jpeg' else MP4Cover.FORMAT_PNG
-                                    cover = MP4Cover(self.final_metadata.cover_art_data, imageformat=image_format)
-                                    audio_file.tags['covr'] = [cover]
-                                    message = f"✓ Added cover art to {file_path.name} ({len(self.final_metadata.cover_art_data)} bytes)"
-                                    print(message)
-                                    logger.debug(f"Added cover art to {file_path} ({len(self.final_metadata.cover_art_data)} bytes)")
-                                except Exception as e:
-                                    message = f"⚠ Could not add cover art to M4A file {file_path.name}: {e}"
-                                    print(message)
-                                    logger.warning(f"Could not add cover art to M4A file {file_path}: {e}")
-                            
-                            # Handle FLAC files
-                            elif file_ext == '.flac':
-                                try:
-                                    from mutagen.flac import FLAC, Picture
-                                    flac_file = FLAC(str(file_path))
-                                    picture = Picture()
-                                    picture.data = self.final_metadata.cover_art_data
-                                    picture.type = 3  # Cover (front)
-                                    picture.mime = mime_type
-                                    flac_file.add_picture(picture)
-                                    flac_file.save()
-                                    message = f"✓ Added cover art to {file_path.name} ({len(self.final_metadata.cover_art_data)} bytes)"
-                                    print(message)
-                                    logger.debug(f"Added cover art to {file_path} ({len(self.final_metadata.cover_art_data)} bytes)")
-                                except Exception as e:
-                                    message = f"⚠ Could not add cover art to FLAC file {file_path.name}: {e}"
-                                    print(message)
-                                    logger.warning(f"Could not add cover art to FLAC file {file_path}: {e}")
-                            
-                            # Handle OGG files
-                            elif file_ext in ['.ogg', '.oga']:
-                                try:
-                                    from mutagen.flac import Picture
-                                    picture = Picture()
-                                    picture.data = self.final_metadata.cover_art_data
-                                    picture.type = 3  # Cover (front)
-                                    picture.mime = mime_type
-                                    if hasattr(audio_file.tags, 'add_picture'):
-                                        audio_file.tags.add_picture(picture)
-                                    else:
-                                        # Alternative method for OGG
-                                        import base64
-                                        picture_data = base64.b64encode(self.final_metadata.cover_art_data).decode('ascii')
-                                        audio_file.tags['metadata_block_picture'] = [picture_data]
-                                    message = f"✓ Added cover art to {file_path.name} ({len(self.final_metadata.cover_art_data)} bytes)"
-                                    print(message)
-                                    logger.debug(f"Added cover art to {file_path} ({len(self.final_metadata.cover_art_data)} bytes)")
-                                except Exception as e:
-                                    message = f"⚠ Could not add cover art to OGG file {file_path.name}: {e}"
-                                    print(message)
-                                    logger.warning(f"Could not add cover art to OGG file {file_path}: {e}")
-                            
-                            # Fallback: try generic picture tag
-                            else:
-                                try:
-                                    audio_file['picture'] = self.final_metadata.cover_art_data
-                                    message = f"✓ Added cover art to {file_path.name} ({len(self.final_metadata.cover_art_data)} bytes)"
-                                    print(message)
-                                    logger.debug(f"Added cover art to {file_path} ({len(self.final_metadata.cover_art_data)} bytes)")
-                                except Exception as e:
-                                    message = f"⚠ Could not add cover art using generic method for {file_ext}: {e}"
-                                    print(message)
-                                    logger.warning(f"Could not add cover art using generic method for {file_ext}: {e}")
-                        else:
-                            message = f"⚠ Audio file {file_path.name} does not support tags"
-                            print(message)
-                            logger.warning(f"Audio file {file_path} does not support tags")
-                        
-                except Exception as e:
-                    message = f"⚠ Could not add cover art to {file_path.name}: {e}"
-                    print(message)
-                    logger.warning(f"Could not add cover art to {file_path}: {e}")
+                self._apply_cover_art(audio_file, file_path, file_ext, quiet)
             
-            # Save the file (this will save metadata changes)
-            # For MP3 files, ensure we save with ID3v2.3 for iTunes compatibility
-            if file_ext == '.mp3' and hasattr(audio_file, 'tags') and audio_file.tags is not None:
-                try:
-                    from mutagen.id3 import ID3
-                    # Save with ID3v2.3 for better iTunes compatibility
-                    audio_file.tags.save(str(file_path), v2_version=3)
-                except:
-                    # Fallback to default save if explicit version fails
-                    audio_file.save()
-            else:
-                audio_file.save()
+            # Save the file
+            self._save_audio_file(audio_file, file_path, file_ext)
+            
             message = f"✓ Applied metadata to {file_path.name}"
             if not quiet:
                 print(message)
@@ -612,3 +355,296 @@ class MetadataMerger:
         except Exception as e:
             logger.error(f"Error applying metadata to {file_path}: {e}")
             return False
+    
+    def _load_audio_file(self, file_path):
+        """Load audio file and return file object, path, and extension."""
+        from mutagen import File as MutagenFile
+        
+        if isinstance(file_path, str):
+            file_path = Path(file_path)
+        
+        audio_file = MutagenFile(str(file_path))
+        if audio_file is None:
+            logger.error(f"Could not load audio file: {file_path}")
+            return None, file_path, None
+        
+        file_ext = file_path.suffix.lower()
+        return audio_file, file_path, file_ext
+    
+    def _apply_id3_tags(self, audio_file) -> None:
+        """Apply ID3 tags to MP3 files."""
+        from mutagen.id3 import APIC, TIT2, TPE1, TPE2, TALB, TYER, TCON, TRCK, TCMP
+        
+        try:
+            # Ensure ID3 tags exist
+            try:
+                audio_file.add_tags()
+            except:
+                pass  # Tags already exist
+            
+            # Use proper ID3 frames for MP3
+            if self.final_metadata.title:
+                audio_file.tags['TIT2'] = TIT2(encoding=3, text=self.final_metadata.title)
+            if self.final_metadata.artist:
+                audio_file.tags['TPE1'] = TPE1(encoding=3, text=self.final_metadata.artist)
+            if self.final_metadata.album_artist:
+                audio_file.tags['TPE2'] = TPE2(encoding=3, text=self.final_metadata.album_artist)
+            if self.final_metadata.album:
+                audio_file.tags['TALB'] = TALB(encoding=3, text=self.final_metadata.album)
+            if self.final_metadata.year:
+                audio_file.tags['TYER'] = TYER(encoding=3, text=str(self.final_metadata.year))
+            if self.final_metadata.genre:
+                audio_file.tags['TCON'] = TCON(encoding=3, text=self.final_metadata.genre)
+            
+            # Track number
+            if self.final_metadata.track_number:
+                track_str = self._format_track_number()
+                audio_file.tags['TRCK'] = TRCK(encoding=3, text=track_str)
+            
+            # Compilation flag
+            if self.final_metadata.compilation is not None:
+                audio_file.tags['TCMP'] = TCMP(encoding=3, text="1" if self.final_metadata.compilation else "0")
+        except Exception as e:
+            logger.warning(f"Error setting ID3 tags: {e}")
+            # Fallback to simple assignment
+            self._apply_id3_tags_fallback(audio_file)
+    
+    def _apply_id3_tags_fallback(self, audio_file) -> None:
+        """Fallback method for applying ID3 tags using simple assignment."""
+        if self.final_metadata.title:
+            audio_file['title'] = self.final_metadata.title
+        if self.final_metadata.artist:
+            audio_file['artist'] = self.final_metadata.artist
+        if self.final_metadata.album_artist:
+            audio_file['albumartist'] = self.final_metadata.album_artist
+            audio_file['TPE2'] = self.final_metadata.album_artist
+        if self.final_metadata.album:
+            audio_file['album'] = self.final_metadata.album
+        if self.final_metadata.year:
+            audio_file['date'] = str(self.final_metadata.year)
+        if self.final_metadata.genre:
+            audio_file['genre'] = self.final_metadata.genre
+        
+        if self.final_metadata.track_number:
+            track_str = self._format_track_number()
+            audio_file['TRCK'] = track_str
+        
+        if self.final_metadata.compilation is not None:
+            audio_file['TCMP'] = "1" if self.final_metadata.compilation else "0"
+    
+    def _apply_generic_tags(self, audio_file) -> None:
+        """Apply generic tags to non-MP3 files."""
+        if self.final_metadata.title:
+            audio_file['title'] = self.final_metadata.title
+        if self.final_metadata.artist:
+            audio_file['artist'] = self.final_metadata.artist
+        if self.final_metadata.album_artist:
+            audio_file['albumartist'] = self.final_metadata.album_artist
+        if self.final_metadata.album:
+            audio_file['album'] = self.final_metadata.album
+        if self.final_metadata.year:
+            audio_file['date'] = str(self.final_metadata.year)
+        if self.final_metadata.genre:
+            audio_file['genre'] = self.final_metadata.genre
+        
+        if self.final_metadata.track_number:
+            track_str = self._format_track_number()
+            audio_file['tracknumber'] = track_str
+            audio_file['TRCK'] = track_str
+        
+        if self.final_metadata.compilation is not None:
+            audio_file['compilation'] = "1" if self.final_metadata.compilation else "0"
+            audio_file['TCMP'] = "1" if self.final_metadata.compilation else "0"
+    
+    def _format_track_number(self) -> str:
+        """Format track number as '1/10' or '1'."""
+        if self.final_metadata.track_number:
+            if self.final_metadata.total_tracks:
+                return f"{self.final_metadata.track_number}/{self.final_metadata.total_tracks}"
+            return str(self.final_metadata.track_number)
+        return ""
+    
+    def _apply_cover_art(self, audio_file, file_path: Path, file_ext: str, quiet: bool) -> None:
+        """Apply cover art to audio file."""
+        mime_type = self._detect_mime_type(self.final_metadata.cover_art_data)
+        
+        if file_ext == '.mp3':
+            self._apply_cover_art_mp3(audio_file, file_path, mime_type, quiet)
+        else:
+            self._apply_cover_art_other(audio_file, file_path, file_ext, mime_type, quiet)
+    
+    def _detect_mime_type(self, cover_art_data: bytes) -> str:
+        """Detect MIME type from cover art data."""
+        if cover_art_data.startswith(b'\xff\xd8\xff'):
+            return "image/jpeg"
+        elif cover_art_data.startswith(b'\x89PNG'):
+            return "image/png"
+        elif cover_art_data.startswith(b'GIF'):
+            return "image/gif"
+        elif cover_art_data.startswith(b'RIFF'):
+            return "image/webp"
+        return "image/jpeg"  # Default
+    
+    def _apply_cover_art_mp3(self, audio_file, file_path: Path, mime_type: str, quiet: bool) -> None:
+        """Apply cover art to MP3 files."""
+        from mutagen.id3 import APIC
+        
+        try:
+            # Ensure ID3 tags exist
+            try:
+                audio_file.add_tags()
+            except:
+                pass
+            
+            # Remove all existing APIC frames
+            if audio_file.tags is not None:
+                removed_any = True
+                while removed_any:
+                    removed_any = False
+                    current_keys = list(audio_file.tags.keys())
+                    for key in current_keys:
+                        if key.startswith('APIC') or 'PIC' in key or 'picture' in key.lower():
+                            try:
+                                del audio_file.tags[key]
+                                removed_any = True
+                            except:
+                                pass
+                
+                # Add cover art
+                apic = APIC(
+                    encoding=0,  # ISO-8859-1 for better iTunes compatibility
+                    mime=mime_type,
+                    type=3,  # Cover (front)
+                    desc='Cover',
+                    data=self.final_metadata.cover_art_data
+                )
+                audio_file.tags.add(apic)
+                
+                # Verify cover art was added
+                apic_added = any(key.startswith('APIC') for key in audio_file.tags.keys())
+                if not apic_added:
+                    logger.warning(f"Cover art APIC frame was not added to {file_path}")
+                    if not quiet:
+                        print(f"⚠ Warning: Cover art may not have been added to {file_path.name}")
+                
+                message = f"✓ Added cover art to {file_path.name} ({len(self.final_metadata.cover_art_data)} bytes, {mime_type})"
+                if not quiet:
+                    print(message)
+                logger.debug(f"Added cover art to {file_path} ({len(self.final_metadata.cover_art_data)} bytes, {mime_type})")
+        except Exception as e:
+            message = f"⚠ Could not add cover art to MP3 file {file_path.name}: {e}"
+            if not quiet:
+                print(message)
+            logger.warning(f"Could not add cover art to MP3 file {file_path}: {e}", exc_info=True)
+    
+    def _apply_cover_art_other(self, audio_file, file_path: Path, file_ext: str, mime_type: str, quiet: bool) -> None:
+        """Apply cover art to non-MP3 files."""
+        if not hasattr(audio_file, 'tags') or audio_file.tags is None:
+            message = f"⚠ Audio file {file_path.name} does not support tags"
+            if not quiet:
+                print(message)
+            logger.warning(f"Audio file {file_path} does not support tags")
+            return
+        
+        # Handle M4A/MP4 files
+        if file_ext in ['.m4a', '.mp4', '.m4p']:
+            self._apply_cover_art_m4a(audio_file, file_path, mime_type, quiet)
+        # Handle FLAC files
+        elif file_ext == '.flac':
+            self._apply_cover_art_flac(file_path, mime_type, quiet)
+        # Handle OGG files
+        elif file_ext in ['.ogg', '.oga']:
+            self._apply_cover_art_ogg(audio_file, file_path, mime_type, quiet)
+        # Fallback: try generic picture tag
+        else:
+            self._apply_cover_art_generic(audio_file, file_path, file_ext, quiet)
+    
+    def _apply_cover_art_m4a(self, audio_file, file_path: Path, mime_type: str, quiet: bool) -> None:
+        """Apply cover art to M4A/MP4 files."""
+        try:
+            from mutagen.mp4 import MP4Cover
+            image_format = MP4Cover.FORMAT_JPEG if mime_type == 'image/jpeg' else MP4Cover.FORMAT_PNG
+            cover = MP4Cover(self.final_metadata.cover_art_data, imageformat=image_format)
+            audio_file.tags['covr'] = [cover]
+            message = f"✓ Added cover art to {file_path.name} ({len(self.final_metadata.cover_art_data)} bytes)"
+            if not quiet:
+                print(message)
+            logger.debug(f"Added cover art to {file_path} ({len(self.final_metadata.cover_art_data)} bytes)")
+        except Exception as e:
+            message = f"⚠ Could not add cover art to M4A file {file_path.name}: {e}"
+            if not quiet:
+                print(message)
+            logger.warning(f"Could not add cover art to M4A file {file_path}: {e}")
+    
+    def _apply_cover_art_flac(self, file_path: Path, mime_type: str, quiet: bool) -> None:
+        """Apply cover art to FLAC files."""
+        try:
+            from mutagen.flac import FLAC, Picture
+            flac_file = FLAC(str(file_path))
+            picture = Picture()
+            picture.data = self.final_metadata.cover_art_data
+            picture.type = 3  # Cover (front)
+            picture.mime = mime_type
+            flac_file.add_picture(picture)
+            flac_file.save()
+            message = f"✓ Added cover art to {file_path.name} ({len(self.final_metadata.cover_art_data)} bytes)"
+            if not quiet:
+                print(message)
+            logger.debug(f"Added cover art to {file_path} ({len(self.final_metadata.cover_art_data)} bytes)")
+        except Exception as e:
+            message = f"⚠ Could not add cover art to FLAC file {file_path.name}: {e}"
+            if not quiet:
+                print(message)
+            logger.warning(f"Could not add cover art to FLAC file {file_path}: {e}")
+    
+    def _apply_cover_art_ogg(self, audio_file, file_path: Path, mime_type: str, quiet: bool) -> None:
+        """Apply cover art to OGG files."""
+        try:
+            from mutagen.flac import Picture
+            picture = Picture()
+            picture.data = self.final_metadata.cover_art_data
+            picture.type = 3  # Cover (front)
+            picture.mime = mime_type
+            if hasattr(audio_file.tags, 'add_picture'):
+                audio_file.tags.add_picture(picture)
+            else:
+                # Alternative method for OGG
+                import base64
+                picture_data = base64.b64encode(self.final_metadata.cover_art_data).decode('ascii')
+                audio_file.tags['metadata_block_picture'] = [picture_data]
+            message = f"✓ Added cover art to {file_path.name} ({len(self.final_metadata.cover_art_data)} bytes)"
+            if not quiet:
+                print(message)
+            logger.debug(f"Added cover art to {file_path} ({len(self.final_metadata.cover_art_data)} bytes)")
+        except Exception as e:
+            message = f"⚠ Could not add cover art to OGG file {file_path.name}: {e}"
+            if not quiet:
+                print(message)
+            logger.warning(f"Could not add cover art to OGG file {file_path}: {e}")
+    
+    def _apply_cover_art_generic(self, audio_file, file_path: Path, file_ext: str, quiet: bool) -> None:
+        """Apply cover art using generic method."""
+        try:
+            audio_file['picture'] = self.final_metadata.cover_art_data
+            message = f"✓ Added cover art to {file_path.name} ({len(self.final_metadata.cover_art_data)} bytes)"
+            if not quiet:
+                print(message)
+            logger.debug(f"Added cover art to {file_path} ({len(self.final_metadata.cover_art_data)} bytes)")
+        except Exception as e:
+            message = f"⚠ Could not add cover art using generic method for {file_ext}: {e}"
+            if not quiet:
+                print(message)
+            logger.warning(f"Could not add cover art using generic method for {file_ext}: {e}")
+    
+    def _save_audio_file(self, audio_file, file_path: Path, file_ext: str) -> None:
+        """Save audio file with metadata."""
+        # For MP3 files, ensure we save with ID3v2.3 for iTunes compatibility
+        if file_ext == '.mp3' and hasattr(audio_file, 'tags') and audio_file.tags is not None:
+            try:
+                # Save with ID3v2.3 for better iTunes compatibility
+                audio_file.tags.save(str(file_path), v2_version=3)
+            except:
+                # Fallback to default save if explicit version fails
+                audio_file.save()
+        else:
+            audio_file.save()

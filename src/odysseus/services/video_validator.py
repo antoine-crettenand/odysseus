@@ -255,8 +255,10 @@ class VideoValidator:
         """
         Validate if a video is suitable for a track (not live, duration matches).
         
-        Priority: Duration matching is checked first as it's more objective and reliable.
-        Title-based checks (live/review) are only used if duration doesn't match or isn't available.
+        Priority: 
+        - Reaction/review/documentary videos are always rejected (regardless of duration)
+        - Duration matching is checked as it's more objective and reliable
+        - Live version checks are conditional on duration mismatch
         
         Args:
             video: YouTube video to validate
@@ -267,6 +269,13 @@ class VideoValidator:
         Returns:
             Tuple of (is_valid, reason_if_invalid)
         """
+        # Always reject reaction/review/documentary videos (regardless of duration)
+        # These should never be downloaded even if duration matches
+        if self.is_reaction_or_review_video(video.title):
+            reason = f"Video appears to be a reaction/review/documentary/non-album content (title: {video.title})"
+            self._log_rejection(f"Skipping non-album content: {video.title}", video, console, silent)
+            return False, reason
+        
         # Duration validation (most reliable - check this first)
         video_info = self.download_service.get_video_info(video.youtube_url)
         duration_matches = False
@@ -296,25 +305,18 @@ class VideoValidator:
                     
                     duration_matches = True
         
-        # Title-based validation (only if duration doesn't match)
+        # Title-based validation for live versions (only if duration doesn't match)
         if not duration_matches:
             if self.is_live_version(video.title, track.title if track else None):
                 reason = f"Video appears to be a live version (title: {video.title})"
                 self._log_rejection(f"Skipping live version: {video.title}", video, console, silent)
                 return False, reason
-            
-            if self.is_reaction_or_review_video(video.title):
-                reason = f"Video appears to be a reaction/review/non-album content (title: {video.title})"
-                self._log_rejection(f"Skipping non-album content: {video.title}", video, console, silent)
-                return False, reason
         elif not silent and console:
-            # Duration matches - log note if title suggests live/review
+            # Duration matches - log note if title suggests live version
             is_live = self.is_live_version(video.title, track.title if track else None)
-            is_review = self.is_reaction_or_review_video(video.title)
-            if is_live or is_review:
-                content_type = "live/review content" if (is_live and is_review) else ("live version" if is_live else "review content")
+            if is_live:
                 from ..ui.styling import Styling
-                Styling(console).log_info(f"Duration matches well, accepting despite title suggesting {content_type}")
+                Styling(console).log_info(f"Duration matches well, accepting despite title suggesting live version")
         
         if not video_info and not silent and console:
             console.print(f"[yellow]⚠[/yellow] Could not get video info for validation: {video.title}")

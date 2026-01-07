@@ -80,8 +80,7 @@ class SearchService:
         return self.deduplicator.deduplicate_results(results, release_type=None)
     
     def search_releases(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None, release_type: Optional[str] = None) -> List[MusicBrainzSong]:
-        """Search for releases in MusicBrainz and Discogs in parallel.
-        MusicBrainz results are prioritized; Discogs only fills gaps.
+        """Search for releases, prioritizing Spotify if API key is available, then MusicBrainz and Discogs.
         
         Args:
             song_data: Song information to search for
@@ -92,9 +91,29 @@ class SearchService:
         # Fetch more results than needed to ensure we get all duplicates for proper deduplication
         # This ensures we can find the earliest release even if it's not in the first page
         # We need to fetch enough to get all duplicates, then deduplicate, then paginate
-        fetch_limit = (limit or self.max_results) * 5 if limit else 50  # Fetch 5x the limit to ensure we get all duplicates
+        default_max = self.musicbrainz_client.max_results if hasattr(self.musicbrainz_client, 'max_results') else 3
+        fetch_limit = (limit or default_max) * 5 if limit else 50  # Fetch 5x the limit to ensure we get all duplicates
         
-        # Search both sources in parallel - always start from 0 to get all results for proper deduplication
+        # Check if Spotify is available and search it first
+        spotify_client = self._get_spotify_client()
+        spotify_results = []
+        
+        if spotify_client and spotify_client.is_authenticated():
+            try:
+                print(f"Searching Spotify releases: {song_data.album} by {song_data.artist}")
+                spotify_data = spotify_client.search_release(
+                    album=song_data.album or "",
+                    artist=song_data.artist or "",
+                    release_year=song_data.release_year,
+                    limit=fetch_limit
+                )
+                # Convert Spotify results to MusicBrainzSong format
+                spotify_results = self._convert_spotify_to_mb_format(spotify_data)
+            except Exception as e:
+                # If Spotify search fails, continue with other sources
+                print(f"Spotify search failed: {e}")
+        
+        # Search MusicBrainz and Discogs in parallel - always start from 0 to get all results for proper deduplication
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             mb_future = executor.submit(
                 self.musicbrainz_client.search_release,
@@ -111,9 +130,15 @@ class SearchService:
         # Convert Discogs to MusicBrainz format
         discogs_formatted = self._convert_discogs_to_mb_format(discogs_results)
         
-        # Use priority-based deduplication: MusicBrainz first, Discogs only fills gaps
+        # Use priority-based deduplication: Spotify first (if available), then MusicBrainz, then Discogs
         # This deduplicates ALL results to find the best (earliest) release
-        all_results = self._deduplicate_with_priority(mb_results, discogs_formatted)
+        if spotify_results:
+            # Spotify results first, then MusicBrainz, then Discogs
+            all_results = self._deduplicate_with_priority(spotify_results, mb_results)
+            all_results = self._deduplicate_with_priority(all_results, discogs_formatted)
+        else:
+            # No Spotify, use MusicBrainz and Discogs
+            all_results = self._deduplicate_with_priority(mb_results, discogs_formatted)
         
         if release_type:
             filtered_results = []
@@ -203,17 +228,38 @@ class SearchService:
         return all_results
     
     def get_release_info(self, release_mbid: str, batch_progress: Optional[tuple[int, int]] = None, source: str = "musicbrainz") -> Optional[Any]:
-        """Get detailed release information from MusicBrainz or Discogs.
+        """Get detailed release information from MusicBrainz, Discogs, or Spotify.
         
         Args:
-            release_mbid: Release ID (MBID for MusicBrainz, Discogs ID for Discogs)
+            release_mbid: Release ID (MBID for MusicBrainz, Discogs ID for Discogs, Spotify ID for Spotify)
             batch_progress: Optional tuple (current, total) for batch operations
-            source: Source to query ("musicbrainz" or "discogs")
+            source: Source to query ("musicbrainz", "discogs", or "spotify")
         """
+        # Handle Spotify source
+        if source == "spotify":
+            spotify_client = self._get_spotify_client()
+            if spotify_client and spotify_client.is_authenticated():
+                try:
+                    return spotify_client.get_album_tracks(release_mbid)
+                except Exception as e:
+                    if batch_progress:
+                        print(f"[{batch_progress[0]}/{batch_progress[1]}] Spotify release fetch failed: {e}")
+                    else:
+                        print(f"Spotify release fetch failed: {e}")
+                    return None
+            else:
+                if batch_progress:
+                    print(f"[{batch_progress[0]}/{batch_progress[1]}] Spotify API not authenticated")
+                else:
+                    print("Spotify API not authenticated")
+                return None
+        
+        # Handle Discogs source
         if source == "discogs":
             return self.discogs_client.get_release_info(release_mbid, batch_progress=batch_progress)
-        else:
-            return self.musicbrainz_client.get_release_info(release_mbid, batch_progress=batch_progress)
+        
+        # Handle MusicBrainz source (default)
+        return self.musicbrainz_client.get_release_info(release_mbid, batch_progress=batch_progress)
     
     def _convert_discogs_to_mb_format(self, discogs_results: List[DiscogsRelease]) -> List[MusicBrainzSong]:
         """Convert DiscogsRelease results to MusicBrainzSong format for consistency."""
@@ -236,6 +282,29 @@ class SearchService:
             mb_results.append(mb_result)
         return mb_results
     
+    def _convert_spotify_to_mb_format(self, spotify_data: List[Dict[str, Any]]) -> List[MusicBrainzSong]:
+        """Convert Spotify search results to MusicBrainzSong format for consistency."""
+        mb_results = []
+        for spotify_item in spotify_data:
+            release_date = spotify_item.get("release_date")
+            release_year = spotify_item.get("release_year")
+            
+            mb_result = MusicBrainzSong(
+                title="",  # No title for releases
+                artist=spotify_item.get("artist", ""),
+                album=spotify_item.get("album", ""),
+                release_date=release_date,
+                original_release_date=release_date,  # Spotify doesn't distinguish original vs re-release
+                genre=None,
+                release_type="Album",  # Spotify search returns albums
+                mbid=spotify_item.get("spotify_id", ""),
+                score=spotify_item.get("popularity", 0),  # Use popularity as score
+                url=spotify_item.get("url", ""),
+                source="spotify"
+            )
+            mb_results.append(mb_result)
+        return mb_results
+    
     def search_youtube(self, query: str, max_results: int = 3, offset: int = 0) -> List[YouTubeVideo]:
         """Search YouTube for videos."""
         self.youtube_client = YouTubeClient(query, max_results)
@@ -251,9 +320,41 @@ class SearchService:
             max_results: Maximum number of results to return
             release_year: Optional release year to improve search accuracy
         """
-        # Build queries with year if available (helps distinguish between albums with similar names)
+        queries = self._build_full_album_queries(artist, album, release_year)
+        all_results = []
+        seen_ids = set()
+        
+        for query in queries:
+            client = YouTubeClient(query, max_results)
+            for video in client.videos:
+                if video.video_id and video.video_id not in seen_ids:
+                    if not self._has_full_album_keyword(video.title):
+                        continue
+                    
+                    if self._is_live_or_non_album_video(video.title):
+                        continue
+                    
+                    all_results.append(video)
+                    seen_ids.add(video.video_id)
+                    if len(all_results) >= max_results:
+                        return all_results[:max_results]
+        
+        return all_results[:max_results]
+    
+    def _build_full_album_queries(self, artist: str, album: str, release_year: Optional[str] = None) -> List[str]:
+        """
+        Build search queries for full album videos.
+        
+        Args:
+            artist: Artist name
+            album: Album title
+            release_year: Optional release year
+            
+        Returns:
+            List of search query strings
+        """
         if release_year:
-            queries = [
+            return [
                 f'"{artist}" "{album}" {release_year} full album',
                 f"{artist} {album} {release_year} full album",
                 f"{artist} {album} full album {release_year}",
@@ -261,17 +362,68 @@ class SearchService:
                 f"{artist} {album} complete album",
             ]
         else:
-            queries = [
+            return [
                 f'"{artist}" "{album}" full album',  # Use quotes for exact phrase matching
                 f"{artist} {album} full album",
                 f"{artist} {album} complete album",
                 f"{artist} {album} album full",
                 f"{artist} {album} full",
             ]
+    
+    def _has_full_album_keyword(self, title: str) -> bool:
+        """
+        Check if video title contains full album keywords.
         
-        all_results = []
-        seen_ids = set()
+        Args:
+            title: Video title
+            
+        Returns:
+            True if title contains full album keywords
+        """
+        title_lower = title.lower()
+        return any(
+            keyword in title_lower 
+            for keyword in ['full album', 'complete album', 'album full', 'full lp']
+        )
+    
+    def _is_live_or_non_album_video(self, title: str) -> bool:
+        """
+        Check if video is a live performance or non-album content.
         
+        Args:
+            title: Video title
+            
+        Returns:
+            True if video appears to be live or non-album content
+        """
+        title_lower = title.lower()
+        
+        # Check for live keywords using word boundaries
+        if self._matches_live_patterns(title_lower):
+            return True
+        
+        # Check for non-album keywords
+        non_album_keywords = [
+            'reaction', 'react', 'reacting', 'reacts', 'first reaction', 'first time listening',
+            'review', 'album review', 'unboxing', 'reaction to', 'reacting to', 'my reaction',
+            'listening to', 'listening session', 'rate', 'rating', 'ranking', 'breakdown',
+            'analysis', 'explained', 'discussion', 'podcast', 'interview', 'trailer', 'teaser',
+            'preview', 'snippet', 'clip', 'mashup', 'remix', 'cover', 'covers', 'tribute',
+            'parody', 'meme', 'tier list', 'top 10', 'top 5'
+        ]
+        
+        return any(keyword in title_lower for keyword in non_album_keywords)
+    
+    def _matches_live_patterns(self, title_lower: str) -> bool:
+        """
+        Check if title matches live performance patterns.
+        
+        Args:
+            title_lower: Lowercase video title
+            
+        Returns:
+            True if title matches live patterns
+        """
         # Use word boundaries to avoid matching "live" in words like "lives", "alive", "deliver", etc.
         live_keyword_patterns = [
             r'\blive\s+concert\b',
@@ -290,115 +442,50 @@ class SearchService:
             r'\blive\s+bootleg\b',
             r'\blive\s+broadcast\b',
         ]
-        # Keywords that don't need word boundaries
-        live_keywords_simple = [
-            'unplugged',
-            'mtv unplugged',
-            'kexp',
-            'npr tiny desk',
-            'audience',
-            'applause',
-            'encore'
-        ]
         
-        # Known concert venues (these are strong indicators of live performances)
+        # Check patterns
+        for pattern in live_keyword_patterns:
+            if re.search(pattern, title_lower):
+                return True
+        
+        # Check for "at [venue]" pattern
+        if re.search(r'\bat\s+[a-z\s]+(?:rocks|garden|hall|theater|theatre|bowl|arena|festival|acoustic)', title_lower):
+            return True
+        
+        # Check for known concert venues
         concert_venues = [
-            'red rocks',
-            'madison square garden',
-            'msg',
-            'royal albert hall',
-            'apollo theater',
-            'apollo theatre',
-            'fillmore',
-            'hollywood bowl',
-            'coachella',
-            'glastonbury',
-            'woodstock',
-            'monterey pop',
-            'newport folk',
-            'newport jazz',
-            'montreux jazz',
-            'blue note',
-            'village vanguard',
-            'ronnie scott\'s',
-            'ronnie scotts',
-            'troubadour',
-            'whisky a go go',
-            'cbgb',
-            'palladium',
-            'hammersmith',
-            'brixton academy',
-            'o2 arena',
-            'wembley',
-            'festival',
-            'festival de',
-            'rock in rio',
-            'lollapalooza',
-            'bonnaroo',
-            'sxsw',
-            'austin city limits',
-            'acoustic',
-            'acoustic session'
-        ]
-        non_album_keywords = [
-            'reaction', 'react', 'reacting', 'reacts', 'first reaction', 'first time listening',
-            'review', 'album review', 'unboxing', 'reaction to', 'reacting to', 'my reaction',
-            'listening to', 'listening session', 'rate', 'rating', 'ranking', 'breakdown',
-            'analysis', 'explained', 'discussion', 'podcast', 'interview', 'trailer', 'teaser',
-            'preview', 'snippet', 'clip', 'mashup', 'remix', 'cover', 'covers', 'tribute',
-            'parody', 'meme', 'tier list', 'top 10', 'top 5'
+            'red rocks', 'madison square garden', 'msg', 'royal albert hall',
+            'apollo theater', 'apollo theatre', 'fillmore', 'hollywood bowl',
+            'coachella', 'glastonbury', 'woodstock', 'monterey pop',
+            'newport folk', 'newport jazz', 'montreux jazz', 'blue note',
+            'village vanguard', 'ronnie scott\'s', 'ronnie scotts',
+            'troubadour', 'whisky a go go', 'cbgb', 'palladium',
+            'hammersmith', 'brixton academy', 'o2 arena', 'wembley',
+            'festival', 'festival de', 'rock in rio', 'lollapalooza',
+            'bonnaroo', 'sxsw', 'austin city limits', 'acoustic', 'acoustic session'
         ]
         
-        for query in queries:
-            client = YouTubeClient(query, max_results)
-            for video in client.videos:
-                if video.video_id and video.video_id not in seen_ids:
-                    title_lower = video.title.lower()
-                    
-                    has_full_album_keyword = any(
-                        keyword in title_lower 
-                        for keyword in ['full album', 'complete album', 'album full', 'full lp']
-                    )
-                    
-                    if not has_full_album_keyword:
-                        continue
-                    
-                    # Check for live keywords using word boundaries to avoid false positives
-                    is_live = False
-                    for pattern in live_keyword_patterns:
-                        if re.search(pattern, title_lower):
-                            is_live = True
-                            break
-                    if not is_live:
-                        # Check for "at [venue]" pattern (e.g., "at Red Rocks", "at Madison Square Garden")
-                        # This catches live performances at venues even without the word "live"
-                        if re.search(r'\bat\s+[a-z\s]+(?:rocks|garden|hall|theater|theatre|bowl|arena|festival|acoustic)', title_lower):
-                            is_live = True
-                    if not is_live:
-                        # Check for known concert venues
-                        is_live = any(venue in title_lower for venue in concert_venues)
-                    if not is_live:
-                        # Check for standalone "live" word (e.g., "PHANTOM ISLAND LIVE")
-                        if re.search(r'\blive\b', title_lower):
-                            is_live = True
-                    if not is_live:
-                        is_live = any(keyword in title_lower for keyword in live_keywords_simple)
-                    if not is_live:
-                        # Check for year patterns that suggest live recordings (e.g., "at Red Rocks 2024")
-                        # Pattern: "at [venue] [year]" where year is 4 digits
-                        if re.search(r'\bat\s+[a-z\s]+\s+\d{4}\b', title_lower):
-                            is_live = True
-                    
-                    is_non_album = any(keyword in title_lower for keyword in non_album_keywords)
-                    if is_live or is_non_album:
-                        continue
-                    
-                    all_results.append(video)
-                    seen_ids.add(video.video_id)
-                    if len(all_results) >= max_results:
-                        return all_results[:max_results]
+        if any(venue in title_lower for venue in concert_venues):
+            return True
         
-        return all_results[:max_results]
+        # Check for standalone "live" word
+        if re.search(r'\blive\b', title_lower):
+            return True
+        
+        # Check for simple live keywords
+        live_keywords_simple = [
+            'unplugged', 'mtv unplugged', 'kexp', 'npr tiny desk',
+            'audience', 'applause', 'encore'
+        ]
+        
+        if any(keyword in title_lower for keyword in live_keywords_simple):
+            return True
+        
+        # Check for year patterns that suggest live recordings (e.g., "at Red Rocks 2024")
+        if re.search(r'\bat\s+[a-z\s]+\s+\d{4}\b', title_lower):
+            return True
+        
+        return False
     
     def search_playlist(self, artist: str, album: str, max_results: int = 5, track_titles: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """

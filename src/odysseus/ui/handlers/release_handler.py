@@ -7,9 +7,14 @@ from .base_handler import BaseHandler
 from ...models.song import SongData
 from ...models.search_results import MusicBrainzSong
 from ...services.download_orchestrator import DownloadOrchestrator
+from ...services.search_flow_manager import SearchFlowManager
+from ...services.release_info_fetcher import ReleaseInfoFetcher
+from ...services.release_validator import ReleaseValidator
 from ...ui.user_interaction import UserInteraction
 from ...core.config import PROJECT_NAME, ERROR_MESSAGES
 from ...utils.string_utils import normalize_string
+from ...utils.validation import validate_year, validate_required_fields
+from ...core.exceptions import ValidationError
 
 
 class ReleaseHandler(BaseHandler):
@@ -24,6 +29,9 @@ class ReleaseHandler(BaseHandler):
             self.display_manager
         )
         self.user_interaction = UserInteraction(self.display_manager)
+        self.search_flow_manager = SearchFlowManager(self.display_manager)
+        self.release_info_fetcher = ReleaseInfoFetcher(self.search_service, self.display_manager)
+        self.release_validator = ReleaseValidator(self.display_manager)
     
     def handle(
         self,
@@ -37,6 +45,19 @@ class ReleaseHandler(BaseHandler):
         auto: bool = False
     ):
         """Handle release search and download."""
+        # Validate input parameters
+        try:
+            validate_required_fields(album=album, artist=artist)
+            if year is not None:
+                validate_year(year)
+        except ValidationError as e:
+            self._handle_validation_error(e)
+            return
+        
+        # Validate search params using base handler method
+        if not self._validate_search_params(artist=artist):
+            return
+        
         console = self.display_manager.console
         console.print()
         console.print(self.display_manager._create_header_panel(
@@ -52,64 +73,42 @@ class ReleaseHandler(BaseHandler):
             release_year=year
         )
         
-        offset = 0
-        while True:
-            if offset > 0:
-                console.print(f"[blue]ℹ[/blue] Showing results starting from position {offset + 1}")
-            
-            results = self.display_manager.show_loading_spinner(
-                f"Searching MusicBrainz releases: {song_data.album} by {song_data.artist}",
-                self.search_service.search_releases,
-                song_data,
-                offset=offset,
-                release_type=release_type
-            )
+        # Use unified search flow manager with auto-selection support
+        auto_select_func = self._find_best_match if auto else None
+        auto_select_args = {
+            'expected_album': album,
+            'expected_artist': artist,
+            'expected_year': year,
+            'expected_type': release_type
+        } if auto else None
         
-            if not results:
-                if offset == 0:
-                    console.print(f"[bold red]✗[/bold red] {ERROR_MESSAGES['NO_RESULTS']}")
-                    return
-                else:
-                    console.print("[yellow]⚠[/yellow] No more results available. Starting from beginning...")
-                    offset = 0
-                    continue
-            
-            self.display_manager.display_search_results(results, "RELEASES")
-            
+        selected_release = self.search_flow_manager.search_with_pagination(
+            self.search_service.search_releases,
+            f"Searching MusicBrainz releases: {song_data.album} by {song_data.artist}",
+            "RELEASES",
+            auto_select_func,
+            auto_select_args,
+            song_data,
+            auto=auto,
+            release_type=release_type
+        )
+        
+        if not selected_release:
             if auto:
-                # Automatically select the best matching result
-                selected_release = self._find_best_match(results, album, artist, year, release_type)
-                if selected_release:
-                    console.print(f"[bold green]✓[/bold green] Auto-selected: [white]{selected_release.get_display_name()}[/white] by [green]{selected_release.artist}[/green]")
-                    if year and selected_release.release_date:
-                        release_year = selected_release.release_date[:4] if len(selected_release.release_date) >= 4 else None
-                        if release_year and str(year) != release_year:
-                            console.print(f"[yellow]⚠[/yellow] Year mismatch: requested {year}, found {release_year}")
-                else:
-                    # Fallback to first result if no good match found
-                    selected_release = results[0] if results else None
-                    if selected_release:
-                        console.print(f"[yellow]⚠[/yellow] No perfect match found, using first result: [white]{selected_release.get_display_name()}[/white]")
-            else:
-                selected_release = self.display_manager.get_user_selection(results)
-            
-            if not auto and selected_release == 'RESHUFFLE':
-                offset += len(results)
-                console.print()
-                continue
-            elif not selected_release:
-                if auto:
-                    console.print("[bold red]✗[/bold red] No results found.")
-                else:
-                    console.print("[yellow]⚠[/yellow] No selection made. Exiting.")
-                return
-            
-            if no_download:
-                console.print("[blue]ℹ[/blue] Search completed. Use without --no-download to download.")
-                return
-            
-            self._search_and_download_release(selected_release, quality, tracks, auto)
-            break
+                console.print("[bold red]✗[/bold red] No results found.")
+            return
+        
+        # Check for year mismatch in auto mode
+        if auto and year and selected_release.release_date:
+            release_year = self.release_validator.extract_release_year(selected_release.release_date)
+            if release_year and release_year != year:
+                console.print(f"[yellow]⚠[/yellow] Year mismatch: requested {year}, found {release_year}")
+        
+        if no_download:
+            console.print("[blue]ℹ[/blue] Search completed. Use without --no-download to download.")
+            return
+        
+        self._search_and_download_release(selected_release, quality, tracks, auto)
     
     def _search_and_download_release(
         self,
@@ -127,38 +126,24 @@ class ReleaseHandler(BaseHandler):
         ))
         console.print()
         
+        # Use unified release info fetcher
         source = getattr(selected_release, 'source', 'musicbrainz')
-        release_info = self.display_manager.show_loading_spinner(
-            f"Fetching release details for: {selected_release.album}",
-            self.search_service.get_release_info,
-            selected_release.mbid,
-            source=source
+        release_info = self.release_info_fetcher.fetch_release_info(
+            selected_release,
+            batch_progress=None,
+            fallback_to_spotify=True
         )
         
         if not release_info:
-            console.print("[bold red]✗[/bold red] Failed to get release details.")
             return
         
-        # Fallback: If release_info.artist is empty, use the artist from selected_release
-        # This handles cases where the API response doesn't include artist-credit data
-        if not release_info.artist and selected_release.artist:
-            release_info.artist = selected_release.artist
-        
-        # Validate that the fetched release matches what we expected
-        # Normalize strings for comparison (case-insensitive, ignore whitespace)
-        from ...utils.string_utils import normalize_string
-        expected_album = normalize_string(selected_release.album or "")
-        expected_artist = normalize_string(selected_release.artist or "")
-        fetched_album = normalize_string(release_info.title or "")
-        fetched_artist = normalize_string(release_info.artist or "")
-        
-        # Check if the fetched release matches the expected one
-        if expected_album and fetched_album and expected_album != fetched_album:
-            console.print(f"[bold yellow]⚠[/bold yellow] Warning: Fetched release doesn't match expected release!")
-            console.print(f"  Expected: [yellow]{selected_release.album}[/yellow] by [green]{selected_release.artist}[/green]")
-            console.print(f"  Fetched:  [yellow]{release_info.title}[/yellow] by [green]{release_info.artist}[/green]")
-            console.print(f"  Release ID used: [cyan]{selected_release.mbid}[/cyan] (source: {source})")
-            console.print(f"[bold red]✗[/bold red] Cannot proceed with download due to release mismatch.")
+        # Validate release match using unified validator
+        if not self.release_validator.validate_release_match(
+            selected_release,
+            release_info,
+            source=source,
+            skip_on_mismatch=False
+        ):
             return
         
         self.display_manager.display_track_listing(release_info)

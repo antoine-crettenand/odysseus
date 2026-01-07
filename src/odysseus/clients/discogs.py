@@ -10,6 +10,7 @@ from ..models.song import SongData
 from ..models.search_results import DiscogsRelease
 from ..models.releases import Track, ReleaseInfo
 from ..core.config import DISCOGS_CONFIG, ERROR_MESSAGES
+from ..utils.cache import get_search_cache, get_release_info_cache, cache_key
 
 
 class DiscogsClient:
@@ -33,6 +34,28 @@ class DiscogsClient:
             headers['Authorization'] = f'Discogs token={self.user_token}'
         
         self.session.headers.update(headers)
+        
+        # Configure session with retry strategy and connection pooling
+        try:
+            from requests.adapters import HTTPAdapter
+            from urllib3.util.retry import Retry
+            
+            retry_strategy = Retry(
+                total=3,
+                backoff_factor=1,
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["GET", "HEAD"]
+            )
+            adapter = HTTPAdapter(
+                max_retries=retry_strategy,
+                pool_connections=10,
+                pool_maxsize=10
+            )
+            self.session.mount("http://", adapter)
+            self.session.mount("https://", adapter)
+        except ImportError:
+            # urllib3 might not be available, continue without retry strategy
+            pass
     
     def _make_request(self, url: str, params: Dict[str, Any], batch_progress: Optional[tuple[int, int]] = None) -> Optional[Dict[str, Any]]:
         """
@@ -140,7 +163,7 @@ class DiscogsClient:
     
     def search_release(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None, release_type: Optional[str] = None) -> List[DiscogsRelease]:
         """
-        Search for releases in Discogs.
+        Search for releases in Discogs with caching.
         
         Args:
             song_data: Song information to search for
@@ -151,6 +174,25 @@ class DiscogsClient:
         Returns:
             List of Discogs results
         """
+        # Generate cache key from search parameters
+        cache = get_search_cache()
+        key = cache_key(
+            "discogs_search_release",
+            song_data.title,
+            song_data.album,
+            song_data.artist,
+            song_data.release_year,
+            offset,
+            limit or self.max_results,
+            release_type
+        )
+        
+        # Check cache first
+        cached_result = cache.get(key)
+        if cached_result is not None:
+            print(f"Using cached Discogs result for: {song_data.album} by {song_data.artist}")
+            return cached_result
+        
         # Build query string
         query_parts = []
         
@@ -187,13 +229,12 @@ class DiscogsClient:
             else:
                 print(f"Searching Discogs releases with query: {query}")
             data = self._make_request(url, params)
+            results = self._parse_release_results(data) if data else []
             
-            if data:
-                return self._parse_release_results(data)
-            else:
-                print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: Failed to get data from Discogs")
-                return []
+            # Cache the results
+            cache.set(key, results)
             
+            return results
         except Exception as e:
             print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
             return []
@@ -380,7 +421,7 @@ class DiscogsClient:
     
     def get_release_info(self, release_id: str, batch_progress: Optional[tuple[int, int]] = None) -> Optional[ReleaseInfo]:
         """
-        Get detailed release information including track listing.
+        Get detailed release information including track listing with caching.
         
         Args:
             release_id: Discogs release ID
@@ -389,6 +430,17 @@ class DiscogsClient:
         Returns:
             ReleaseInfo with tracks or None if failed
         """
+        # Generate cache key
+        cache = get_release_info_cache()
+        key = cache_key("discogs_get_release_info", release_id)
+        
+        # Check cache first (skip cache check for batch operations to show progress)
+        if not batch_progress:
+            cached_result = cache.get(key)
+            if cached_result is not None:
+                print(f"Using cached Discogs release info for ID: {release_id}")
+                return cached_result
+        
         url = f"{self.base_url}/releases/{release_id}"
         
         try:
@@ -397,7 +449,13 @@ class DiscogsClient:
             data = self._make_request(url, {}, batch_progress=batch_progress)
             
             if data:
-                return self._parse_release_info(data)
+                result = self._parse_release_info(data)
+                
+                # Cache the result (even for batch operations, cache after fetching)
+                if result is not None:
+                    cache.set(key, result)
+                
+                return result
             else:
                 print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: Failed to get data from Discogs")
                 return None

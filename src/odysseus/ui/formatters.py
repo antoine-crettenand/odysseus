@@ -46,6 +46,20 @@ class DisplayFormatters:
         else:
             return Text(str(score), style="bold red")
     
+    def format_source(self, source: str) -> Text:
+        """Format source with color based on source type."""
+        source_lower = source.lower() if source else "unknown"
+        if source_lower == "spotify":
+            return Text("Spotify", style="bold green")
+        elif source_lower == "musicbrainz":
+            return Text("MusicBrainz", style="bold blue")
+        elif source_lower == "discogs":
+            return Text("Discogs", style="bold yellow")
+        elif source_lower == "youtube":
+            return Text("YouTube", style="bold red")
+        else:
+            return Text(source.capitalize() if source else "Unknown", style="dim")
+    
     def format_track_number(self, number: int) -> str:
         """Format track number with color."""
         return f"[bold white]{number:2d}.[/bold white]"
@@ -79,6 +93,7 @@ class DisplayFormatters:
         table.add_column("Album", style="yellow", width=25, no_wrap=False)
         table.add_column("Type", style="magenta", width=12, justify="center")
         table.add_column("Release Date", style="cyan", width=12, justify="center")
+        table.add_column("Source", style="bold", width=12, justify="center")
         table.add_column("Score", style="bold", width=8, justify="center")
         
         for i, result in enumerate(results, 1):
@@ -88,6 +103,10 @@ class DisplayFormatters:
             release_date = ""
             release_type = Text("—", style="dim")
             score = Text("—", style="dim")
+            
+            # Get source and style it
+            source = getattr(result, 'source', 'unknown')
+            source_text = self.format_source(source)
             
             if hasattr(result, 'album') and result.album:
                 album = result.album
@@ -105,6 +124,7 @@ class DisplayFormatters:
                 album,
                 release_type,
                 release_date,
+                source_text,
                 score
             )
         

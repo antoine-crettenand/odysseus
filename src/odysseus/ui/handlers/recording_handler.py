@@ -7,7 +7,11 @@ from .base_handler import BaseHandler
 from ...models.song import SongData
 from ...models.search_results import MusicBrainzSong
 from ...services.download_orchestrator import DownloadOrchestrator
+from ...services.search_flow_manager import SearchFlowManager
+from ...services.release_validator import ReleaseValidator
 from ...core.config import PROJECT_NAME, ERROR_MESSAGES, YOUTUBE_CONFIG
+from ...utils.validation import validate_year, validate_required_fields
+from ...core.exceptions import ValidationError
 
 
 class RecordingHandler(BaseHandler):
@@ -21,6 +25,8 @@ class RecordingHandler(BaseHandler):
             self.search_service,
             self.display_manager
         )
+        self.search_flow_manager = SearchFlowManager(self.display_manager)
+        self.release_validator = ReleaseValidator(self.display_manager)
     
     def handle(
         self,
@@ -32,6 +38,19 @@ class RecordingHandler(BaseHandler):
         no_download: bool = False
     ):
         """Handle recording search and download."""
+        # Validate input parameters
+        try:
+            validate_required_fields(title=title, artist=artist)
+            if year is not None:
+                validate_year(year)
+        except ValidationError as e:
+            self._handle_validation_error(e)
+            return
+        
+        # Validate search params using base handler method
+        if not self._validate_search_params(artist=artist):
+            return
+        
         console = self.display_manager.console
         console.print()
         console.print(self.display_manager._create_header_panel(
@@ -47,45 +66,24 @@ class RecordingHandler(BaseHandler):
             release_year=year
         )
         
-        offset = 0
-        while True:
-            if offset > 0:
-                console.print(f"[blue]ℹ[/blue] Showing results starting from position {offset + 1}")
-            
-            results = self.display_manager.show_loading_spinner(
-                f"Searching MusicBrainz for: {song_data.title} by {song_data.artist}",
-                self.search_service.search_recordings,
-                song_data,
-                offset=offset
-            )
+        # Use unified search flow manager
+        selected_song = self.search_flow_manager.search_with_pagination(
+            self.search_service.search_recordings,
+            f"Searching MusicBrainz for: {song_data.title} by {song_data.artist}",
+            "RECORDINGS",
+            None,  # auto_select_func
+            None,  # auto_select_args
+            song_data  # Goes into *search_args
+        )
         
-            if not results:
-                if offset == 0:
-                    console.print(f"[bold red]✗[/bold red] {ERROR_MESSAGES['NO_RESULTS']}")
-                    return
-                else:
-                    console.print("[yellow]⚠[/yellow] No more results available. Starting from beginning...")
-                    offset = 0
-                    continue
-            
-            self.display_manager.display_search_results(results, "RECORDINGS")
-            
-            selected_song = self.display_manager.get_user_selection(results)
-            
-            if selected_song == 'RESHUFFLE':
-                offset += len(results)
-                console.print()
-                continue
-            elif not selected_song:
-                console.print("[yellow]⚠[/yellow] No selection made. Exiting.")
-                return
-            
-            if no_download:
-                console.print("[blue]ℹ[/blue] Search completed. Use without --no-download to download.")
-                return
-            
-            self._search_and_download_recording(selected_song, quality)
-            break
+        if not selected_song:
+            return
+        
+        if no_download:
+            console.print("[blue]ℹ[/blue] Search completed. Use without --no-download to download.")
+            return
+        
+        self._search_and_download_recording(selected_song, quality)
     
     def _search_and_download_recording(self, selected_song: MusicBrainzSong, quality: str):
         """Search YouTube and download a recording."""
@@ -126,20 +124,8 @@ class RecordingHandler(BaseHandler):
                 
                 break
             
-            # Extract year from release_date (which can be a string like "1964" or "2017-06-08")
-            release_year = None
-            if selected_song.release_date:
-                try:
-                    # Try to extract year from date string (e.g., "1964" or "2017-06-08")
-                    if isinstance(selected_song.release_date, str):
-                        # Extract first 4 digits (year)
-                        year_str = selected_song.release_date[:4]
-                        if year_str.isdigit():
-                            release_year = int(year_str)
-                    elif isinstance(selected_song.release_date, int):
-                        release_year = selected_song.release_date
-                except (ValueError, AttributeError):
-                    release_year = None
+            # Extract year from release_date using unified validator
+            release_year = self.release_validator.extract_release_year(selected_song.release_date)
             
             song_data = SongData(
                 title=selected_song.title,

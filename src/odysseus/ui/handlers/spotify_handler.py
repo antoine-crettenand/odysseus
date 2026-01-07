@@ -2,8 +2,11 @@
 Handler for Spotify playlist/album mode (parse Spotify URL and download tracks).
 """
 
-from typing import Optional
+from typing import Optional, List, Tuple
+from rich.table import Table
+from rich.prompt import Prompt
 from .base_handler import BaseHandler
+from .release_handler import ReleaseHandler
 from ...clients.spotify import SpotifyClient
 from ...services.download_orchestrator import DownloadOrchestrator
 from ...ui.user_interaction import UserInteraction
@@ -23,15 +26,35 @@ class SpotifyHandler(BaseHandler):
             self.display_manager
         )
         self.user_interaction = UserInteraction(self.display_manager)
+        self.release_handler = ReleaseHandler(
+            self.search_service,
+            self.download_service,
+            self.metadata_service,
+            self.display_manager
+        )
     
     def handle(
+        self,
+        url: str,
+        mode: str = "recordings",
+        quality: str = "audio",
+        tracks: Optional[str] = None,
+        no_download: bool = False
+    ):
+        """Handle Spotify URL parsing and track download."""
+        if mode == "releases":
+            self._handle_releases_mode(url, quality, tracks, no_download)
+        else:
+            self._handle_recordings_mode(url, quality, tracks, no_download)
+    
+    def _handle_recordings_mode(
         self,
         url: str,
         quality: str = "audio",
         tracks: Optional[str] = None,
         no_download: bool = False
     ):
-        """Handle Spotify URL parsing and track download."""
+        """Handle Spotify URL parsing and track download (recordings mode)."""
         console = self.display_manager.console
         console.print()
         console.print(self.display_manager._create_header_panel(
@@ -103,4 +126,167 @@ class SpotifyHandler(BaseHandler):
         self.download_orchestrator.download_release_tracks(
             release_info, track_numbers, quality, silent=False
         )
+    
+    def _handle_releases_mode(
+        self,
+        url: str,
+        quality: str = "audio",
+        tracks: Optional[str] = None,
+        no_download: bool = False
+    ):
+        """Handle Spotify URL parsing and release selection (releases mode)."""
+        console = self.display_manager.console
+        console.print()
+        console.print(self.display_manager._create_header_panel(
+            f"💿 {PROJECT_NAME} - Spotify Releases",
+            f"Extracting releases from Spotify URL: {url}"
+        ))
+        console.print()
+        
+        # Parse the Spotify URL
+        parsed = self.spotify_client.parse_spotify_url(url)
+        if not parsed:
+            console.print(f"[bold red]✗[/bold red] Invalid Spotify URL: {url}")
+            return
+        
+        # Only playlists are supported in releases mode
+        if parsed["type"] != "playlist":
+            console.print(f"[bold red]✗[/bold red] Releases mode only supports playlist URLs. Got: {parsed['type']}")
+            console.print("[blue]ℹ[/blue] Use recordings mode (default) for album and track URLs.")
+            return
+        
+        playlist_id = parsed["id"]
+        
+        # Extract unique releases from playlist
+        try:
+            releases = self.display_manager.show_loading_spinner(
+                "Extracting unique releases from playlist...",
+                self.spotify_client.get_playlist_releases,
+                playlist_id
+            )
+        except Exception as e:
+            error_msg = str(e)
+            if "authentication required" in error_msg.lower():
+                console.print(f"[bold red]✗[/bold red] Spotify API authentication required.")
+                console.print("[yellow]⚠[/yellow] Please set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET environment variables.")
+                console.print("[blue]ℹ[/blue] You can get these from: https://developer.spotify.com/dashboard")
+                console.print("[blue]ℹ[/blue] Create an app and add the credentials as environment variables.")
+            else:
+                console.print(f"[bold red]✗[/bold red] Failed to extract releases: {error_msg}")
+            return
+        
+        if not releases:
+            console.print("[bold red]✗[/bold red] No releases found in the playlist.")
+            return
+        
+        # Display the releases
+        console.print()
+        console.print(self.display_manager._create_header_panel(
+            "📦 SPOTIFY RELEASES",
+            f"Found {len(releases)} unique release{'s' if len(releases) != 1 else ''} in playlist"
+        ))
+        console.print()
+        
+        self._display_releases(releases)
+        
+        if no_download:
+            console.print("[blue]ℹ[/blue] Release listing completed. Use without --no-download to download.")
+            return
+        
+        # Get release selection from user
+        selected_releases = self._get_release_selection(releases)
+        
+        if not selected_releases:
+            console.print("[yellow]⚠[/yellow] No releases selected for download.")
+            return
+        
+        # Download each selected release
+        for idx, (artist, album, year) in enumerate(selected_releases, start=1):
+            console.print()
+            console.print(f"[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
+            console.print(f"[bold]Processing [{idx}/{len(selected_releases)}]:[/bold] [yellow]{album}[/yellow] by [green]{artist}[/green]" + (f" ({year})" if year else ""))
+            console.print(f"[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
+            
+            try:
+                self.release_handler.handle(
+                    album=album,
+                    artist=artist,
+                    year=year,
+                    release_type=None,
+                    quality=quality,
+                    tracks=tracks,
+                    no_download=no_download
+                )
+            except KeyboardInterrupt:
+                console.print("\n[yellow]⚠[/yellow] Download cancelled by user.")
+                break
+            except Exception as e:
+                console.print(f"[bold red]✗[/bold red] Failed to process {album} by {artist}: {e}")
+                continue
+    
+    def _display_releases(self, releases: List[Tuple[str, str, Optional[int]]]):
+        """Display releases in a table."""
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("#", style="cyan", width=4)
+        table.add_column("Artist", style="green")
+        table.add_column("Album", style="white")
+        table.add_column("Year", style="yellow", width=6)
+        
+        for idx, (artist, album, year) in enumerate(releases, start=1):
+            year_str = str(year) if year else "N/A"
+            table.add_row(str(idx), artist, album, year_str)
+        
+        self.display_manager.console.print(table)
+        self.display_manager.console.print()
+    
+    def _get_release_selection(self, releases: List[Tuple[str, str, Optional[int]]]) -> List[Tuple[str, str, Optional[int]]]:
+        """Get user selection for releases to download."""
+        console = self.display_manager.console
+        
+        while True:
+            try:
+                selection = Prompt.ask(
+                    f"[cyan]Select releases to download (e.g., 1,3,5 or 1-5 or 'all')[/cyan]",
+                    default="all"
+                ).strip().lower()
+                
+                if selection == "all":
+                    return releases
+                
+                selected_indices = self._parse_selection(selection, len(releases))
+                if selected_indices:
+                    return [releases[i - 1] for i in selected_indices]
+                else:
+                    console.print("[yellow]⚠[/yellow] Invalid selection. Please try again.")
+            except KeyboardInterrupt:
+                return []
+    
+    def _parse_selection(self, selection: str, max_num: int) -> List[int]:
+        """Parse user selection string (e.g., '1,3,5' or '1-5')."""
+        indices = set()
+        
+        # Split by comma
+        parts = [p.strip() for p in selection.split(',')]
+        
+        for part in parts:
+            if '-' in part:
+                # Range selection (e.g., '1-5')
+                try:
+                    start, end = part.split('-', 1)
+                    start = int(start.strip())
+                    end = int(end.strip())
+                    if 1 <= start <= max_num and 1 <= end <= max_num:
+                        indices.update(range(start, end + 1))
+                except ValueError:
+                    return []
+            else:
+                # Single number
+                try:
+                    num = int(part)
+                    if 1 <= num <= max_num:
+                        indices.add(num)
+                except ValueError:
+                    return []
+        
+        return sorted(indices)
 

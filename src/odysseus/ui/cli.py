@@ -80,6 +80,7 @@ Examples:
   %(prog)s release --batch playlist_artists_albums.txt
   %(prog)s discography --artist "Artist Name" --year 1970
   %(prog)s spotify --url "https://open.spotify.com/playlist/..."
+  %(prog)s spotify --url "https://open.spotify.com/playlist/..." --mode releases
   %(prog)s metadata /path/to/file.mp3 --album "Album Name" --artist "Artist Name"
   %(prog)s metadata /path/to/directory --album "Album Name" --artist "Artist Name"
             """
@@ -117,7 +118,7 @@ Examples:
         
         spotify_parser = subparsers.add_parser(
             'spotify',
-            help='Parse Spotify playlist/album URL and download selected tracks'
+            help='Parse Spotify playlist/album URL and download selected tracks or releases (use --mode releases to select albums)'
         )
         self._add_spotify_args(spotify_parser)
         
@@ -250,6 +251,13 @@ Examples:
             help='Spotify playlist, album, or track URL'
         )
         parser.add_argument(
+            '--mode', '-m',
+            dest='spotify_mode',
+            choices=['recordings', 'releases'],
+            default='recordings',
+            help='Mode: "recordings" to select individual tracks (default), "releases" to select albums containing the tracks'
+        )
+        parser.add_argument(
             '--quality', '-q',
             choices=['best', 'audio', 'worst'],
             default='audio',
@@ -364,6 +372,7 @@ Examples:
             elif parsed_args.mode == 'spotify':
                 self.spotify_handler.handle(
                     url=parsed_args.url,
+                    mode=getattr(parsed_args, 'spotify_mode', 'recordings'),
                     quality=parsed_args.quality,
                     tracks=parsed_args.tracks,
                     no_download=parsed_args.no_download

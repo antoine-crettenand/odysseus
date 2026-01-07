@@ -381,4 +381,163 @@ class SpotifyClient:
         seconds = total_seconds % 60
         
         return f"{minutes}:{seconds:02d}"
+    
+    def _extract_release_year(self, release_date: Optional[str]) -> Optional[int]:
+        """
+        Extract year from Spotify release_date field.
+        
+        Spotify release_date can be in formats:
+        - "YYYY" (e.g., "1972")
+        - "YYYY-MM" (e.g., "1972-03")
+        - "YYYY-MM-DD" (e.g., "1972-03-15")
+        
+        Returns:
+            Year as integer, or None if not available
+        """
+        if not release_date:
+            return None
+        
+        # Extract year (first 4 digits)
+        match = re.match(r'^(\d{4})', release_date)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return None
+        return None
+    
+    def get_playlist_releases(self, playlist_id: str) -> List[tuple]:
+        """
+        Get unique artist-album-year tuples from a Spotify playlist.
+        
+        Returns:
+            List of tuples (artist, album, year) sorted by artist, then album
+        """
+        if not self.access_token:
+            raise Exception("Spotify API authentication required. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET environment variables.")
+        
+        artist_albums = set()
+        url = f"{self.base_url}/playlists/{playlist_id}/tracks"
+        headers = self._get_headers()
+        offset = 0
+        limit = 100
+        
+        while True:
+            params = {"limit": limit, "offset": offset}
+            response = requests.get(url, headers=headers, params=params, timeout=self.timeout)
+            
+            if response.status_code != 200:
+                break
+            
+            data = response.json()
+            items = data.get("items", [])
+            
+            if not items:
+                break
+            
+            for item in items:
+                track_data = item.get("track")
+                if not track_data or track_data is None:
+                    continue
+                
+                # Get artist name
+                artists = track_data.get("artists", [])
+                artist_name = artists[0].get("name", "Unknown Artist") if artists else "Unknown Artist"
+                
+                # Get album name and release date
+                album_data = track_data.get("album", {})
+                album_name = album_data.get("name", "Unknown Album")
+                release_date = album_data.get("release_date")
+                release_year = self._extract_release_year(release_date)
+                
+                # Add to set (automatically handles duplicates)
+                artist_albums.add((artist_name, album_name, release_year))
+            
+            # Check if there are more tracks
+            if data.get("next"):
+                offset += limit
+            else:
+                break
+        
+        # Sort by artist name, then album name, then year
+        return sorted(artist_albums, key=lambda x: (x[0].lower(), x[1].lower(), x[2] or 0))
+    
+    def is_authenticated(self) -> bool:
+        """Check if Spotify API is authenticated."""
+        return self.access_token is not None
+    
+    def search_release(self, album: str, artist: str, release_year: Optional[int] = None, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Search for albums/releases on Spotify.
+        
+        Args:
+            album: Album name to search for
+            artist: Artist name to search for
+            release_year: Optional release year to filter results
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of album dictionaries with Spotify data, or empty list if not authenticated
+        """
+        if not self.access_token:
+            return []
+        
+        try:
+            # Build search query
+            query_parts = []
+            if artist:
+                query_parts.append(f'artist:"{artist}"')
+            if album:
+                query_parts.append(f'album:"{album}"')
+            
+            query = ' '.join(query_parts) if query_parts else f'{artist} {album}'
+            
+            url = f"{self.base_url}/search"
+            headers = self._get_headers()
+            params = {
+                "q": query,
+                "type": "album",
+                "limit": min(limit, 50)  # Spotify API max is 50
+            }
+            
+            response = requests.get(url, headers=headers, params=params, timeout=self.timeout)
+            if response.status_code != 200:
+                return []
+            
+            data = response.json()
+            albums = data.get("albums", {}).get("items", [])
+            
+            results = []
+            for album_data in albums:
+                album_name = album_data.get("name", "")
+                artists = album_data.get("artists", [])
+                artist_name = artists[0].get("name", "") if artists else ""
+                release_date = album_data.get("release_date", "")
+                release_year_spotify = self._extract_release_year(release_date)
+                
+                # Filter by year if specified
+                if release_year and release_year_spotify and release_year_spotify != release_year:
+                    continue
+                
+                # Extract cover art URL
+                images = album_data.get("images", [])
+                cover_art_url = images[0].get("url") if images else None
+                
+                # Get album ID
+                album_id = album_data.get("id", "")
+                
+                results.append({
+                    "album": album_name,
+                    "artist": artist_name,
+                    "release_date": release_date,
+                    "release_year": release_year_spotify,
+                    "cover_art_url": cover_art_url,
+                    "spotify_id": album_id,
+                    "url": f"https://open.spotify.com/album/{album_id}",
+                    "popularity": album_data.get("popularity", 0)
+                })
+            
+            return results
+        except Exception:
+            return []
 

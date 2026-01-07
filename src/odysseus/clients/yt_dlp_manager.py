@@ -5,6 +5,9 @@ Handles yt-dlp version checking and updates.
 
 import subprocess
 from typing import Optional
+from rich.console import Console
+
+console = Console()
 
 
 class YtDlpManager:
@@ -16,18 +19,18 @@ class YtDlpManager:
     def ensure_updated(self) -> None:
         """Ensure yt-dlp is up to date to avoid 403 errors."""
         try:
-            print("Checking yt-dlp version...")
+            console.print("[dim]Checking yt-dlp version...[/dim]")
             result = subprocess.run(['yt-dlp', '--version'], capture_output=True, text=True, timeout=10)
             if result.returncode == 0:
                 current_version = result.stdout.strip()
-                print(f"Current yt-dlp version: {current_version}")
+                console.print(f"[dim]Current yt-dlp version: {current_version}[/dim]")
                 
                 # Try to update yt-dlp
-                print("Updating yt-dlp to latest version...")
+                console.print("[dim]Updating yt-dlp to latest version...[/dim]")
                 update_result = subprocess.run(['pip3', 'install', '--upgrade', 'yt-dlp'], 
                                              capture_output=True, text=True, timeout=120)
                 if update_result.returncode == 0:
-                    print("✅ yt-dlp updated successfully")
+                    console.print("[dim]✅ yt-dlp updated successfully[/dim]")
                 else:
                     print("⚠️  Could not update yt-dlp, continuing with current version")
             else:

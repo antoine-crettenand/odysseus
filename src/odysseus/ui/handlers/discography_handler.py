@@ -6,6 +6,8 @@ from typing import Optional, List
 from .base_handler import BaseHandler
 from ...models.search_results import MusicBrainzSong
 from ...services.download_orchestrator import DownloadOrchestrator
+from ...services.release_info_fetcher import ReleaseInfoFetcher
+from ...services.release_validator import ReleaseValidator
 from ...ui.user_interaction import UserInteraction
 from ...core.config import PROJECT_NAME, ERROR_MESSAGES
 from rich.prompt import Prompt, Confirm
@@ -23,6 +25,8 @@ class DiscographyHandler(BaseHandler):
             self.display_manager
         )
         self.user_interaction = UserInteraction(self.display_manager)
+        self.release_info_fetcher = ReleaseInfoFetcher(self.search_service, self.display_manager)
+        self.release_validator = ReleaseValidator(self.display_manager)
     
     def handle(
         self,
@@ -117,39 +121,25 @@ class DiscographyHandler(BaseHandler):
             ))
             console.print()
             
-            source = getattr(release, 'source', 'musicbrainz')
-            release_info = self.display_manager.show_loading_spinner(
-                f"Fetching release details for: {release.album}",
-                self.search_service.get_release_info,
-                release.mbid,
+            # Use unified release info fetcher
+            release_info = self.release_info_fetcher.fetch_release_info(
+                release,
                 batch_progress=(i, len(releases)),
-                source=source
+                fallback_to_spotify=True
             )
+            
             if not release_info:
-                console.print(f"[bold red]✗[/bold red] Failed to get release details for: [yellow]{release.album}[/yellow]")
                 total_failed += 1
                 continue
             
-            # Fallback: If release_info.artist is empty, use the artist from release
-            # This handles cases where the API response doesn't include artist-credit data
-            if not release_info.artist and release.artist:
-                release_info.artist = release.artist
-            
-            # Validate that the fetched release matches what we expected
-            # Normalize strings for comparison (case-insensitive, ignore whitespace)
-            from ...utils.string_utils import normalize_string
-            expected_album = normalize_string(release.album or "")
-            expected_artist = normalize_string(release.artist or "")
-            fetched_album = normalize_string(release_info.title or "")
-            fetched_artist = normalize_string(release_info.artist or "")
-            
-            # Check if the fetched release matches the expected one
-            if expected_album and fetched_album and expected_album != fetched_album:
-                console.print(f"[bold yellow]⚠[/bold yellow] Warning: Fetched release doesn't match expected release!")
-                console.print(f"  Expected: [yellow]{release.album}[/yellow] by [green]{release.artist}[/green]")
-                console.print(f"  Fetched:  [yellow]{release_info.title}[/yellow] by [green]{release_info.artist}[/green]")
-                console.print(f"  Release ID used: [cyan]{release.mbid}[/cyan] (source: {source})")
-                console.print(f"[yellow]⚠[/yellow] Skipping this release due to mismatch.")
+            # Validate release match using unified validator
+            source = getattr(release, 'source', 'musicbrainz')
+            if not self.release_validator.validate_release_match(
+                release,
+                release_info,
+                source=source,
+                skip_on_mismatch=True
+            ):
                 total_failed += 1
                 continue
             
