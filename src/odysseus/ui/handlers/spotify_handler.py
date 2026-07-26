@@ -8,7 +8,6 @@ from rich.prompt import Prompt
 from .base_handler import BaseHandler
 from .release_handler import ReleaseHandler
 from ...clients.spotify import SpotifyClient
-from ...services.download_orchestrator import DownloadOrchestrator
 from ...ui.user_interaction import UserInteraction
 from ...core.config import PROJECT_NAME, ERROR_MESSAGES
 
@@ -19,12 +18,6 @@ class SpotifyHandler(BaseHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.spotify_client = SpotifyClient()
-        self.download_orchestrator = DownloadOrchestrator(
-            self.download_service,
-            self.metadata_service,
-            self.search_service,
-            self.display_manager
-        )
         self.user_interaction = UserInteraction(self.display_manager)
         self.release_handler = ReleaseHandler(
             self.search_service,

@@ -21,7 +21,8 @@ class SongData:
     def __post_init__(self):
         """Validate song data after initialization."""
         # Import here to avoid circular imports
-        from ..core.validation import validate_user_input, validate_year, VALIDATION_RULES
+        from ..core.validation import validate_user_input, validate_year
+        from ..core.config import VALIDATION_RULES
         
         # Validate and sanitize string inputs
         if self.title:
@@ -86,7 +87,8 @@ class AudioMetadata:
     def __post_init__(self):
         """Validate metadata after initialization."""
         # Import here to avoid circular imports
-        from ..core.validation import validate_year, validate_user_input, VALIDATION_RULES
+        from ..core.validation import validate_year, validate_user_input
+        from ..core.config import VALIDATION_RULES
         
         # Validate and sanitize string fields
         if self.title:

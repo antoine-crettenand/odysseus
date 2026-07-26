@@ -14,7 +14,7 @@ from ..core.config import YOUTUBE_CONFIG, ERROR_MESSAGES
 
 class YouTubeClient:
     """YouTube search and video information client."""
-    
+
     def __init__(self, search_terms: str, max_results: Optional[int] = None) -> None:
         self.search_terms = search_terms
         self.max_results = max_results or YOUTUBE_CONFIG["MAX_RESULTS"]
@@ -22,9 +22,19 @@ class YouTubeClient:
         self.user_agent = YOUTUBE_CONFIG["USER_AGENT"]
         self.max_retries = YOUTUBE_CONFIG["MAX_RETRIES"]
         self.timeout = YOUTUBE_CONFIG["TIMEOUT"]
-        
+
         self.headers = {"User-Agent": self.user_agent}
         self.videos: List[YouTubeVideo] = self._search()
+
+    def _extract_json_from_html(self, html: str, json_key: str) -> Dict[str, Any]:
+        """Extract JSON object from HTML by key (e.g., 'ytInitialData', 'ytInitialPlayerResponse')."""
+        try:
+            start = html.index(json_key) + len(json_key) + 3
+            end = html.index("};", start) + 1
+            json_str = html[start:end]
+            return json.loads(json_str)
+        except (ValueError, json.JSONDecodeError) as e:
+            raise Exception(f"Error parsing {json_key} from HTML.") from e
 
     def _search(self) -> List[YouTubeVideo]:
         encoded_search = urllib.parse.quote_plus(self.search_terms)
@@ -43,28 +53,19 @@ class YouTubeClient:
                         return results[: self.max_results]
                     return results
                 except Exception:
-                    # Parsing failed, continue to next attempt
                     continue
-        # If we exit the loop, we were not able to parse the page.
         raise Exception(f"{ERROR_MESSAGES['NETWORK_ERROR']}: Failed to retrieve valid YouTube search data.")
 
     def _parse_html(self, html: str) -> List[YouTubeVideo]:
         results: List[YouTubeVideo] = []
         try:
-            # Locate the "ytInitialData" JSON object
-            start = html.index("ytInitialData") + len("ytInitialData") + 3
-            end = html.index("};", start) + 1
-            json_str = html[start:end]
-            data = json.loads(json_str)
-        except (ValueError, json.JSONDecodeError) as e:
-            raise Exception("Error parsing ytInitialData from HTML.") from e
+            data = self._extract_json_from_html(html, "ytInitialData")
 
-        # Traverse the JSON structure to extract video items
-        try:
+            # Traverse the JSON structure to extract video items
             contents = data["contents"]["twoColumnSearchResultsRenderer"][
                 "primaryContents"
             ]["sectionListRenderer"]["contents"]
-        except KeyError as e:
+        except (KeyError, Exception) as e:
             raise Exception("Unexpected data format from YouTube.") from e
 
         for section in contents:
@@ -112,23 +113,15 @@ class YouTubeClient:
         response = requests.get(video_url, headers=self.headers, timeout=self.timeout)
         if response.status_code != 200:
             raise Exception(f"Error fetching video page, status code: {response.status_code}")
-        
+
         html = response.text
-        
-        try:
-            # Look for ytInitialPlayerResponse in the HTML
-            start = html.index("ytInitialPlayerResponse") + len("ytInitialPlayerResponse") + 3
-            end = html.index("};", start) + 1
-            json_str = html[start:end]
-            data = json.loads(json_str)
-        except (ValueError, json.JSONDecodeError) as e:
-            raise Exception("Error parsing ytInitialPlayerResponse from HTML.") from e
 
         try:
+            data = self._extract_json_from_html(html, "ytInitialPlayerResponse")
             video_details = data.get("videoDetails", {})
-        except AttributeError:
-            raise Exception("Unexpected data format from YouTube video page.")
-    
+        except (AttributeError, Exception) as e:
+            raise Exception("Unexpected data format from YouTube video page.") from e
+
         title = video_details.get("title") or "Unknown"
         channel = video_details.get("author") or "Unknown Artist"
         video_info: YouTubeVideo = YouTubeVideo(

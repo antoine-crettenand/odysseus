@@ -3,7 +3,7 @@ Progress Displays Module
 Handles progress bars, spinners, and download progress tracking.
 """
 
-from typing import Optional, Any, Callable
+from typing import Any, Callable, Optional, Tuple
 from rich.console import Console
 from rich.progress import (
     Progress, SpinnerColumn, TextColumn, BarColumn, 
@@ -34,7 +34,7 @@ class ProgressDisplays:
             expand=True
         )
     
-    def create_download_progress_bar(self, description: str = "Downloading", total: Optional[float] = None) -> tuple[Progress, Any]:
+    def create_download_progress_bar(self, description: str = "Downloading", total: Optional[float] = None) -> Tuple[Progress, Any]:
         """
         Create a progress bar specifically for file downloads.
         Returns (Progress instance, task_id).
@@ -53,4 +53,3 @@ class ProgressDisplays:
         # Start with None total, will be updated when we know the file size
         task_id = progress.add_task(description, total=total or 100)
         return progress, task_id
-

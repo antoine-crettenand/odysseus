@@ -5,9 +5,7 @@ Handler for discography mode (artist discography browse and download).
 from typing import Optional, List
 from .base_handler import BaseHandler
 from ...models.search_results import MusicBrainzSong
-from ...services.download_orchestrator import DownloadOrchestrator
-from ...services.release_info_fetcher import ReleaseInfoFetcher
-from ...services.release_validator import ReleaseValidator
+from ...domain.music.search.release_info_fetcher import ReleaseInfoFetcher
 from ...ui.user_interaction import UserInteraction
 from ...core.config import PROJECT_NAME, ERROR_MESSAGES
 from rich.prompt import Prompt, Confirm
@@ -18,15 +16,8 @@ class DiscographyHandler(BaseHandler):
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.download_orchestrator = DownloadOrchestrator(
-            self.download_service,
-            self.metadata_service,
-            self.search_service,
-            self.display_manager
-        )
         self.user_interaction = UserInteraction(self.display_manager)
         self.release_info_fetcher = ReleaseInfoFetcher(self.search_service, self.display_manager)
-        self.release_validator = ReleaseValidator(self.display_manager)
     
     def handle(
         self,

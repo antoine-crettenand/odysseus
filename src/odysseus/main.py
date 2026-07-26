@@ -37,8 +37,20 @@ def main():
         except Exception as e:
             logger.error(f"Configuration validation failed: {e}")
             raise
-        
-        cli = OdysseusCLI()
+
+        # Initialize dependency injection container
+        if _package is None:
+            from odysseus.core.container import get_container
+            from odysseus.core.container.registration import register_all_services
+        else:
+            from .core.container import get_container
+            from .core.container.registration import register_all_services
+
+        container = get_container()
+        register_all_services(container)
+        logger.debug("Dependency injection container initialized")
+
+        cli = OdysseusCLI(container=container)
         cli.run()
     except KeyboardInterrupt:
         logger.debug("Application interrupted by user")

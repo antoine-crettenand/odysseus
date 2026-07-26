@@ -11,55 +11,38 @@ from typing import List, Tuple, Optional
 
 from rich.prompt import Confirm
 
-from ..services.search_service import SearchService
-from ..services.download_service import DownloadService
-from ..services.metadata_service import MetadataService
-from ..ui.display import DisplayManager
-from ..ui.handlers import RecordingHandler, ReleaseHandler, DiscographyHandler, MetadataHandler, SpotifyHandler
 from ..core.config import PROJECT_NAME, PROJECT_VERSION
 
 
 class OdysseusCLI:
     """Main CLI class for Odysseus music discovery tool."""
-    
-    def __init__(self):
-        """Initialize the CLI."""
-        self.search_service = SearchService()
-        self.download_service = DownloadService()
-        self.metadata_service = MetadataService()
-        self.display_manager = DisplayManager()
-        
-        self.recording_handler = RecordingHandler(
-            self.search_service,
-            self.download_service,
-            self.metadata_service,
-            self.display_manager
-        )
-        self.release_handler = ReleaseHandler(
-            self.search_service,
-            self.download_service,
-            self.metadata_service,
-            self.display_manager
-        )
-        self.discography_handler = DiscographyHandler(
-            self.search_service,
-            self.download_service,
-            self.metadata_service,
-            self.display_manager
-        )
-        self.metadata_handler = MetadataHandler(
-            self.search_service,
-            self.download_service,
-            self.metadata_service,
-            self.display_manager
-        )
-        self.spotify_handler = SpotifyHandler(
-            self.search_service,
-            self.download_service,
-            self.metadata_service,
-            self.display_manager
-        )
-    
+
+    def __init__(self, container=None):
+        """
+        Initialize the CLI.
+
+        Args:
+            container: Optional DI container instance (uses global container if None)
+        """
+        if container is None:
+            from ..core.container import get_container
+            container = get_container()
+
+        self.container = container
+
+        # Get services from container
+        self.search_service = container.get("search_service")
+        self.download_service = container.get("download_service")
+        self.metadata_service = container.get("metadata_service")
+        self.display_manager = container.get("display_manager")
+
+        # Get handlers from container
+        self.recording_handler = container.get("recording_handler")
+        self.release_handler = container.get("release_handler")
+        self.discography_handler = container.get("discography_handler")
+        self.metadata_handler = container.get("metadata_handler")
+        self.spotify_handler = container.get("spotify_handler")
+
     def create_parser(self) -> argparse.ArgumentParser:
         """Create the argument parser."""
         parser = argparse.ArgumentParser(
@@ -85,51 +68,51 @@ Examples:
   %(prog)s metadata /path/to/directory --album "Album Name" --artist "Artist Name"
             """
         )
-        
+
         parser.add_argument(
-            '--version', 
-            action='version', 
+            '--version',
+            action='version',
             version=f'{PROJECT_NAME} {PROJECT_VERSION}'
         )
-        
+
         subparsers = parser.add_subparsers(
             dest='mode',
             help='Available modes',
             required=True
         )
-        
+
         recording_parser = subparsers.add_parser(
             'recording',
             help='Search and download a specific recording/song'
         )
         self._add_recording_args(recording_parser)
-        
+
         release_parser = subparsers.add_parser(
             'release',
             help='Search and download tracks from a release/album (supports batch processing with --batch)'
         )
         self._add_release_args(release_parser)
-        
+
         discography_parser = subparsers.add_parser(
             'discography',
             help='Browse artist discography and download selected releases'
         )
         self._add_discography_args(discography_parser)
-        
+
         spotify_parser = subparsers.add_parser(
             'spotify',
             help='Parse Spotify playlist/album URL and download selected tracks or releases (use --mode releases to select albums)'
         )
         self._add_spotify_args(spotify_parser)
-        
+
         metadata_parser = subparsers.add_parser(
             'metadata',
             help='Apply metadata and cover art to existing audio files'
         )
         self._add_metadata_args(metadata_parser)
-        
+
         return parser
-    
+
     def _add_recording_args(self, parser: argparse.ArgumentParser):
         """Add arguments for recording mode."""
         parser.add_argument(
@@ -162,7 +145,7 @@ Examples:
             action='store_true',
             help='Search only, do not download'
         )
-    
+
     def _add_release_args(self, parser: argparse.ArgumentParser):
         """Add arguments for release mode."""
         parser.add_argument(
@@ -208,7 +191,7 @@ Examples:
             action='store_true',
             help='Automatically process without user interaction (select first result and all tracks). Useful for batch processing.'
         )
-    
+
     def _add_discography_args(self, parser: argparse.ArgumentParser):
         """Add arguments for discography mode."""
         parser.add_argument(
@@ -242,7 +225,7 @@ Examples:
             action='store_true',
             help='Browse only, do not download'
         )
-    
+
     def _add_spotify_args(self, parser: argparse.ArgumentParser):
         """Add arguments for Spotify mode."""
         parser.add_argument(
@@ -272,7 +255,7 @@ Examples:
             action='store_true',
             help='Parse URL only, do not download'
         )
-    
+
     def _add_metadata_args(self, parser: argparse.ArgumentParser):
         """Add arguments for metadata mode."""
         parser.add_argument(
@@ -296,12 +279,12 @@ Examples:
             '--mbid', '-m',
             help='MusicBrainz release ID (optional, if provided will skip search)'
         )
-    
+
     def run(self, args: List[str] = None):
         """Run the CLI with given arguments."""
         parser = self.create_parser()
         parsed_args = parser.parse_args(args)
-        
+
         try:
             if parsed_args.mode == 'recording':
                 self.recording_handler.handle(
@@ -329,7 +312,7 @@ Examples:
                     # Validate required arguments for single release
                     if not parsed_args.album or not parsed_args.artist:
                         parser.error("--album and --artist are required unless --batch is used")
-                    
+
                     self.release_handler.handle(
                         album=parsed_args.album,
                         artist=parsed_args.artist,
@@ -355,15 +338,15 @@ Examples:
                         cached_releases=cached_releases,
                         include_compilations=getattr(parsed_args, 'include_compilations', False)
                     )
-                    
+
                     # If user cancelled, exit immediately without prompting
                     if releases is None:
                         break
-                    
+
                     # Cache the releases for next iteration (if search was performed)
                     if cached_releases is None:
                         cached_releases = releases
-                    
+
                     # Ask if user wants to go back to discography display
                     self.display_manager.console.print()
                     if not Confirm.ask("[bold]Go back to discography display?[/bold]", default=False):
@@ -394,30 +377,30 @@ Examples:
         except Exception as e:
             self.display_manager.console.print(f"[bold red]✗[/bold red] An error occurred: {e}")
             sys.exit(1)
-    
+
     def _parse_batch_file(self, batch_file: str) -> List[Tuple[str, str, Optional[int]]]:
         """
         Parse a TSV/TXT file containing Artist, Album, and optional Year columns.
-        
+
         Supports:
         - TSV format: Artist\tAlbum\tYear (with or without header)
         - CSV format: Artist,Album,Year (with or without header)
         - Human-readable format: Artist - Album (Year) or Artist - Album
-        
+
         Returns:
             List of tuples (artist, album, year)
         """
         batch_path = Path(batch_file)
         if not batch_path.exists():
             raise FileNotFoundError(f"Batch file not found: {batch_file}")
-        
+
         entries = []
-        
+
         with open(batch_path, 'r', encoding='utf-8') as f:
             # Try to detect format by reading first line
             first_line = f.readline().strip()
             f.seek(0)  # Reset to beginning
-            
+
             # Check if it's TSV (tab-separated)
             if '\t' in first_line:
                 reader = csv.reader(f, delimiter='\t')
@@ -425,24 +408,24 @@ Examples:
                     # Skip header row if it exists
                     if row_num == 1 and row[0].lower() in ['artist', 'artists']:
                         continue
-                    
+
                     if len(row) < 2:
                         continue
-                    
+
                     artist = row[0].strip()
                     album = row[1].strip()
                     year = None
-                    
+
                     # Try to parse year from third column if present
                     if len(row) >= 3 and row[2].strip():
                         try:
                             year = int(row[2].strip())
                         except ValueError:
                             pass
-                    
+
                     if artist and album:
                         entries.append((artist, album, year))
-            
+
             # Check if it's CSV (comma-separated)
             elif ',' in first_line and '\t' not in first_line:
                 reader = csv.reader(f)
@@ -450,24 +433,24 @@ Examples:
                     # Skip header row if it exists
                     if row_num == 1 and row[0].lower() in ['artist', 'artists']:
                         continue
-                    
+
                     if len(row) < 2:
                         continue
-                    
+
                     artist = row[0].strip()
                     album = row[1].strip()
                     year = None
-                    
+
                     # Try to parse year from third column if present
                     if len(row) >= 3 and row[2].strip():
                         try:
                             year = int(row[2].strip())
                         except ValueError:
                             pass
-                    
+
                     if artist and album:
                         entries.append((artist, album, year))
-            
+
             # Otherwise, try human-readable format: "Artist - Album (Year)" or "Artist - Album"
             else:
                 import re
@@ -475,7 +458,7 @@ Examples:
                     line = line.strip()
                     if not line or line.startswith('#'):
                         continue
-                    
+
                     # Pattern: "Artist - Album (Year)" or "Artist - Album"
                     match = re.match(r'^(.+?)\s*-\s*(.+?)(?:\s*\((\d{4})\))?\s*$', line)
                     if match:
@@ -483,15 +466,15 @@ Examples:
                         album = match.group(2).strip()
                         year_str = match.group(3)
                         year = int(year_str) if year_str else None
-                        
+
                         if artist and album:
                             entries.append((artist, album, year))
-        
+
         if not entries:
             raise ValueError(f"No valid entries found in batch file: {batch_file}")
-        
+
         return entries
-    
+
     def _handle_batch_release(
         self,
         batch_file: str,
@@ -503,29 +486,29 @@ Examples:
     ):
         """Handle batch processing of releases from a file."""
         console = self.display_manager.console
-        
+
         try:
             entries = self._parse_batch_file(batch_file)
         except Exception as e:
             console.print(f"[bold red]✗[/bold red] Failed to parse batch file: {e}")
             return
-        
+
         console.print()
         console.print(self.display_manager._create_header_panel(
             f"📦 {PROJECT_NAME} - Batch Release Processing",
             f"Found {len(entries)} releases to process"
         ))
         console.print()
-        
+
         successful = 0
         failed = 0
-        
+
         for idx, (artist, album, year) in enumerate(entries, start=1):
             console.print()
             console.print(f"[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
             console.print(f"[bold]Processing [{idx}/{len(entries)}]:[/bold] [yellow]{album}[/yellow] by [green]{artist}[/green]" + (f" ({year})" if year else ""))
             console.print(f"[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
-            
+
             try:
                 self.release_handler.handle(
                     album=album,
@@ -547,7 +530,7 @@ Examples:
                 failed += 1
                 # Continue with next entry
                 continue
-        
+
         console.print()
         console.print(f"[bold green]✓[/bold green] Batch processing complete!")
         console.print(f"  Successful: [green]{successful}[/green]")

@@ -13,7 +13,7 @@ from rich import box
 
 from ..models.search_results import SearchResult, MusicBrainzSong, YouTubeVideo
 from ..models.releases import ReleaseInfo
-from ..services.duration_recovery import DurationRecoveryService
+from ..domain.music.metadata.duration_recovery import DurationRecoveryService
 from .styling import Styling
 
 

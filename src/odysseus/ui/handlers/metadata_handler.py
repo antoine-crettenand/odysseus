@@ -7,9 +7,9 @@ from typing import Optional, List
 from rich.prompt import Prompt, Confirm
 from rich.table import Table
 
-from ...services.search_service import SearchService
-from ...services.download_service import DownloadService
-from ...services.metadata_service import MetadataService
+from ...domain.music.search.search_service import SearchService
+from ...domain.music.download.download_service import DownloadService
+from ...domain.music.metadata.metadata_service import MetadataService
 from ...ui.display import DisplayManager
 from ...ui.handlers.base_handler import BaseHandler
 from ...models.song import SongData

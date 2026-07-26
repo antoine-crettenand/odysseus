@@ -6,27 +6,13 @@ from typing import Optional
 from .base_handler import BaseHandler
 from ...models.song import SongData
 from ...models.search_results import MusicBrainzSong
-from ...services.download_orchestrator import DownloadOrchestrator
-from ...services.search_flow_manager import SearchFlowManager
-from ...services.release_validator import ReleaseValidator
 from ...core.config import PROJECT_NAME, ERROR_MESSAGES, YOUTUBE_CONFIG
-from ...utils.validation import validate_year, validate_required_fields
+from ...core.validation import validate_year, validate_required_fields
 from ...core.exceptions import ValidationError
 
 
 class RecordingHandler(BaseHandler):
     """Handler for recording search and download mode."""
-    
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.download_orchestrator = DownloadOrchestrator(
-            self.download_service,
-            self.metadata_service,
-            self.search_service,
-            self.display_manager
-        )
-        self.search_flow_manager = SearchFlowManager(self.display_manager)
-        self.release_validator = ReleaseValidator(self.display_manager)
     
     def handle(
         self,
