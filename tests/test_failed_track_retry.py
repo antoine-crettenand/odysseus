@@ -13,6 +13,7 @@ class StrategyStub:
         self.result = result
         self.failed_track_numbers = list(failed_track_numbers)
         self.calls = []
+        self.jobs = []
 
     def download(
         self,
@@ -21,8 +22,10 @@ class StrategyStub:
         quality,
         silent=False,
         cover_art_data=None,
+        jobs=1,
     ):
         self.calls.append(list(track_numbers))
+        self.jobs.append(jobs)
         return self.result
 
 
@@ -38,8 +41,10 @@ class FinalRetryStub(StrategyStub):
         quality,
         silent=False,
         cover_art_data=None,
+        jobs=1,
     ):
         self.calls.append(list(track_numbers))
+        self.jobs.append(jobs)
         self.failed_track_numbers = list(self.remaining_failures)
         return (
             len(track_numbers) - len(self.remaining_failures),
@@ -123,3 +128,22 @@ def test_silent_mode_retries_without_prompting():
     assert (downloaded, failed) == (2, 1)
     assert orchestrator.individual_tracks_strategy.calls == [[2, 3]]
     confirm.assert_not_called()
+
+
+def test_worker_count_is_forwarded_to_playlist_strategy():
+    orchestrator = _orchestrator()
+    orchestrator.full_album_strategy = StrategyStub(
+        (None, None),
+        [1, 2, 3],
+    )
+    orchestrator.playlist_strategy = StrategyStub((3, 0), [])
+
+    downloaded, failed = orchestrator.download_release_tracks(
+        _release(),
+        [1, 2, 3],
+        "audio",
+        jobs=3,
+    )
+
+    assert (downloaded, failed) == (3, 0)
+    assert orchestrator.playlist_strategy.jobs == [3]

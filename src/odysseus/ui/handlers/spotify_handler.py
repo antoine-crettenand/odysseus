@@ -45,6 +45,7 @@ class SpotifyHandler(BaseHandler):
         export_path: Optional[str] = None,
         export_format: str = "tsv",
         collection_type: str = "tracks",
+        jobs: int = 1,
     ):
         """Handle Spotify URL parsing and track download."""
         if mode == "releases":
@@ -56,9 +57,16 @@ class SpotifyHandler(BaseHandler):
                 export_path,
                 export_format,
                 collection_type,
+                jobs,
             )
         else:
-            self._handle_recordings_mode(url, quality, tracks, no_download)
+            self._handle_recordings_mode(
+                url,
+                quality,
+                tracks,
+                no_download,
+                jobs,
+            )
 
     def _handle_recordings_mode(
         self,
@@ -66,9 +74,7 @@ class SpotifyHandler(BaseHandler):
         quality: str = "audio",
         tracks: Optional[str] = None,
         no_download: bool = False,
-        export_path: Optional[str] = None,
-        export_format: str = "tsv",
-        collection_type: str = "tracks",
+        jobs: int = 1,
     ):
         """Handle Spotify URL parsing and track download (recordings mode)."""
         console = self.display_manager.console
@@ -140,7 +146,11 @@ class SpotifyHandler(BaseHandler):
         console.print()
 
         self.download_orchestrator.download_release_tracks(
-            release_info, track_numbers, quality, silent=False
+            release_info,
+            track_numbers,
+            quality,
+            silent=False,
+            jobs=jobs,
         )
 
     def _handle_releases_mode(
@@ -148,7 +158,11 @@ class SpotifyHandler(BaseHandler):
         url: str,
         quality: str = "audio",
         tracks: Optional[str] = None,
-        no_download: bool = False
+        no_download: bool = False,
+        export_path: Optional[str] = None,
+        export_format: str = "tsv",
+        collection_type: str = "tracks",
+        jobs: int = 1,
     ):
         """Handle Spotify URL parsing and release selection (releases mode)."""
         console = self.display_manager.console
@@ -250,7 +264,8 @@ class SpotifyHandler(BaseHandler):
                     release_type=None,
                     quality=quality,
                     tracks=tracks,
-                    no_download=no_download
+                    no_download=no_download,
+                    jobs=jobs,
                 )
             except KeyboardInterrupt:
                 console.print("\n[yellow]⚠[/yellow] Download cancelled by user.")

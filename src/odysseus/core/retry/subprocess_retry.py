@@ -49,7 +49,8 @@ class SubprocessRetryStrategy(RetryStrategy):
         self.timeout = timeout
         self.progress_parser = progress_parser
         self.no_activity_timeout = no_activity_timeout
-        self.start_time: Optional[float] = None
+        self._active_processes = set()
+        self._active_processes_lock = threading.Lock()
 
     @staticmethod
     def is_retryable_error(error_output: str) -> Tuple[bool, Optional[str]]:
@@ -99,12 +100,6 @@ class SubprocessRetryStrategy(RetryStrategy):
         Returns:
             True if retry should be attempted
         """
-        # Check if we've exceeded max total time
-        if self.start_time:
-            elapsed = time.time() - self.start_time
-            if elapsed > self.max_total_time:
-                return False
-
         # Check if we've exceeded max retries
         if context.attempt >= self.max_retries:
             return False
@@ -159,6 +154,8 @@ class SubprocessRetryStrategy(RetryStrategy):
             text=True,
             bufsize=1,
         )
+        with self._active_processes_lock:
+            self._active_processes.add(process)
         output_queue: Queue = Queue()
 
         def read_stream(name: str, stream) -> None:
@@ -218,6 +215,8 @@ class SubprocessRetryStrategy(RetryStrategy):
             process.wait()
             raise
         finally:
+            with self._active_processes_lock:
+                self._active_processes.discard(process)
             for thread in threads:
                 thread.join(timeout=1)
 
@@ -236,6 +235,28 @@ class SubprocessRetryStrategy(RetryStrategy):
                 stderr=result.stderr,
             )
         return result
+
+    def cancel_active(self) -> None:
+        """Terminate every subprocess currently owned by this strategy."""
+        with self._active_processes_lock:
+            processes = list(self._active_processes)
+
+        for process in processes:
+            if process.poll() is None:
+                try:
+                    process.terminate()
+                except OSError:
+                    pass
+        for process in processes:
+            if process.poll() is not None:
+                continue
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
 
     def _run_attempt(
         self,
@@ -274,9 +295,8 @@ class SubprocessRetryStrategy(RetryStrategy):
         Raises:
             subprocess.CalledProcessError: If all retries fail
         """
-        # The total-time budget applies to one operation, not the lifetime of
-        # this reusable strategy instance.
-        self.start_time = time.time()
+        # Keep operation timing local so one strategy can serve concurrent jobs.
+        operation_started = time.monotonic()
 
         last_exception = None
 
@@ -316,7 +336,11 @@ class SubprocessRetryStrategy(RetryStrategy):
                 )
 
                 # Check if we should retry
-                if attempt == self.max_retries or not self.should_retry(context, e):
+                if (
+                    attempt == self.max_retries
+                    or time.monotonic() - operation_started > self.max_total_time
+                    or not self.should_retry(context, e)
+                ):
                     raise
 
                 # Calculate delay
@@ -335,7 +359,11 @@ class SubprocessRetryStrategy(RetryStrategy):
                     last_exception=e
                 )
 
-                if attempt == self.max_retries or not self.should_retry(context, e):
+                if (
+                    attempt == self.max_retries
+                    or time.monotonic() - operation_started > self.max_total_time
+                    or not self.should_retry(context, e)
+                ):
                     raise
 
                 delay = self.calculate_delay(context)
@@ -352,7 +380,11 @@ class SubprocessRetryStrategy(RetryStrategy):
                     last_exception=e
                 )
 
-                if attempt == self.max_retries or not self.should_retry(context, e):
+                if (
+                    attempt == self.max_retries
+                    or time.monotonic() - operation_started > self.max_total_time
+                    or not self.should_retry(context, e)
+                ):
                     raise
 
                 delay = self.calculate_delay(context)

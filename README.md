@@ -126,6 +126,9 @@ odysseus release --album "album_name" --artist "artist_name"
 # Download specific tracks
 odysseus release --album "album_name" --artist "artist_name" --tracks "1,2,3"
 
+# Download independent tracks concurrently (bounded to 1-4 workers)
+odysseus release --album "album_name" --artist "artist_name" --jobs 3
+
 # With year filter
 odysseus release --album "album_name" --artist "artist_name" --year 1982
 
@@ -160,6 +163,11 @@ odysseus discography --artist "artist_name" --year 1970
 # Browse only (no download)
 odysseus discography --artist "artist_name" --no-download
 ```
+
+`--jobs` is also available for `discography` and `spotify`. It defaults to
+`1` for the existing sequential behavior and accepts at most `4`. Playlist
+and individual-track transfers can run concurrently; full-album download and
+track splitting remain sequential.
 
 #### Download Organization
 

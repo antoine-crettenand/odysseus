@@ -27,7 +27,8 @@ class DiscographyHandler(BaseHandler):
         quality: str = "audio",
         no_download: bool = False,
         cached_releases: Optional[List[MusicBrainzSong]] = None,
-        include_compilations: bool = False
+        include_compilations: bool = False,
+        jobs: int = 1,
     ) -> Optional[List[MusicBrainzSong]]:
         """Handle discography browse and download."""
         console = self.display_manager.console
@@ -79,7 +80,10 @@ class DiscographyHandler(BaseHandler):
             return None
 
         self._download_selected_releases(
-            selected_releases, quality, auto_download_all_tracks=auto_download_all_tracks
+            selected_releases,
+            quality,
+            auto_download_all_tracks=auto_download_all_tracks,
+            jobs=jobs,
         )
 
         # Return releases for caching
@@ -89,7 +93,8 @@ class DiscographyHandler(BaseHandler):
         self,
         releases: List[MusicBrainzSong],
         quality: str,
-        auto_download_all_tracks: bool = False
+        auto_download_all_tracks: bool = False,
+        jobs: int = 1,
     ):
         """
         Download selected releases.
@@ -141,7 +146,11 @@ class DiscographyHandler(BaseHandler):
                 console.print()
                 track_numbers = list(range(1, len(release_info.tracks) + 1))
                 downloaded, failed = self.download_orchestrator.download_release_tracks(
-                    release_info, track_numbers, quality, silent=False
+                    release_info,
+                    track_numbers,
+                    quality,
+                    silent=False,
+                    jobs=jobs,
                 )
                 total_downloaded += downloaded
                 total_failed += failed
@@ -155,7 +164,11 @@ class DiscographyHandler(BaseHandler):
                         console.print()
                         track_numbers = list(range(1, len(release_info.tracks) + 1))
                         downloaded, failed = self.download_orchestrator.download_release_tracks(
-                            release_info, track_numbers, quality, silent=False
+                            release_info,
+                            track_numbers,
+                            quality,
+                            silent=False,
+                            jobs=jobs,
                         )
                         total_downloaded += downloaded
                         total_failed += failed
@@ -167,7 +180,11 @@ class DiscographyHandler(BaseHandler):
                         )
                         if track_numbers:
                             downloaded, failed = self.download_orchestrator.download_release_tracks(
-                                release_info, track_numbers, quality, silent=False
+                                release_info,
+                                track_numbers,
+                                quality,
+                                silent=False,
+                                jobs=jobs,
                             )
                             total_downloaded += downloaded
                             total_failed += failed

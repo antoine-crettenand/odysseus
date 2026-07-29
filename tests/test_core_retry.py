@@ -45,18 +45,17 @@ def test_total_time_budget_is_reset_for_each_operation():
         "odysseus.core.retry.subprocess_retry.subprocess.run",
         return_value=success,
     ), patch(
-        "odysseus.core.retry.subprocess_retry.time.time",
+        "odysseus.core.retry.subprocess_retry.time.monotonic",
         side_effect=[10.0, 20.0],
-    ):
+    ) as monotonic:
         strategy.execute_with_progress(
             ["yt-dlp"],
             progress_callback=progress_callback,
         )
-        first_start = strategy.start_time
         strategy.execute_with_progress(["yt-dlp"])
 
-    assert first_start == 10.0
-    assert strategy.start_time == 20.0
+    assert monotonic.call_count == 2
+    assert not hasattr(strategy, "start_time")
     progress_callback.assert_any_call(
         {
             "percent": 0.0,

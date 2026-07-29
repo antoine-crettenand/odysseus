@@ -11,6 +11,7 @@ from typing import List, Tuple, Optional
 from rich.prompt import Confirm
 
 from ..core.config import PROJECT_NAME, PROJECT_VERSION
+from ..domain.music.download.download_service import MAX_PARALLEL_DOWNLOADS
 from ..models.outcomes import OperationOutcome, OperationStatus
 
 
@@ -195,6 +196,7 @@ Examples:
             action='store_true',
             help='Automatically process without user interaction (select first result and all tracks). Useful for batch processing.'
         )
+        self._add_parallel_download_args(parser)
 
     def _add_discography_args(self, parser: argparse.ArgumentParser):
         """Add arguments for discography mode."""
@@ -229,6 +231,7 @@ Examples:
             action='store_true',
             help='Browse only, do not download'
         )
+        self._add_parallel_download_args(parser)
 
     def _add_spotify_args(self, parser: argparse.ArgumentParser):
         """Add arguments for Spotify mode."""
@@ -275,6 +278,22 @@ Examples:
             choices=['tracks', 'albums', 'both'],
             default='tracks',
             help='Collection content to export/process for collection URLs'
+        )
+        self._add_parallel_download_args(parser)
+
+    @staticmethod
+    def _add_parallel_download_args(parser: argparse.ArgumentParser):
+        """Add the shared bounded-concurrency option to download modes."""
+        parser.add_argument(
+            '--jobs',
+            type=int,
+            choices=range(1, MAX_PARALLEL_DOWNLOADS + 1),
+            default=1,
+            metavar='N',
+            help=(
+                "Simultaneous independent track downloads, "
+                f"1-{MAX_PARALLEL_DOWNLOADS} (default: 1)"
+            ),
         )
 
     def _add_metadata_args(self, parser: argparse.ArgumentParser):
@@ -326,7 +345,8 @@ Examples:
                         quality=parsed_args.quality,
                         tracks=parsed_args.tracks,
                         no_download=parsed_args.no_download,
-                        auto=getattr(parsed_args, 'auto', False)
+                        auto=getattr(parsed_args, 'auto', False),
+                        jobs=parsed_args.jobs,
                     )
                 else:
                     # Validate required arguments for single release
@@ -341,7 +361,8 @@ Examples:
                         quality=parsed_args.quality,
                         tracks=parsed_args.tracks,
                         no_download=parsed_args.no_download,
-                        auto=getattr(parsed_args, 'auto', False)
+                        auto=getattr(parsed_args, 'auto', False),
+                        jobs=parsed_args.jobs,
                     )
                 return 0 if not isinstance(outcome, OperationOutcome) or outcome.succeeded else 1
             elif parsed_args.mode == 'discography':
@@ -355,7 +376,8 @@ Examples:
                         quality=parsed_args.quality,
                         no_download=parsed_args.no_download,
                         cached_releases=cached_releases,
-                        include_compilations=getattr(parsed_args, 'include_compilations', False)
+                        include_compilations=getattr(parsed_args, 'include_compilations', False),
+                        jobs=parsed_args.jobs,
                     )
 
                     # If user cancelled, exit immediately without prompting
@@ -382,6 +404,7 @@ Examples:
                     export_path=parsed_args.export_path,
                     export_format=parsed_args.export_format,
                     collection_type=parsed_args.collection_type,
+                    jobs=parsed_args.jobs,
                 )
                 return 0
             elif parsed_args.mode == 'metadata':
@@ -474,7 +497,8 @@ Examples:
         quality: str,
         tracks: Optional[str],
         no_download: bool,
-        auto: bool = False
+        auto: bool = False,
+        jobs: int = 1,
     ) -> OperationOutcome:
         """Handle batch processing of releases from a file."""
         console = self.display_manager.console
@@ -511,7 +535,8 @@ Examples:
                     quality=quality,
                     tracks=tracks,
                     no_download=no_download,
-                    auto=auto
+                    auto=auto,
+                    jobs=jobs,
                 )
                 if not isinstance(outcome, OperationOutcome):
                     outcome = OperationOutcome.failure(

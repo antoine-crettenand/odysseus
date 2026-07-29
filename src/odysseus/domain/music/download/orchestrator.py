@@ -276,7 +276,8 @@ class DownloadOrchestrator:
         quality: str,
         silent: bool,
         cover_art_data: Optional[bytes],
-        existing_count: int
+        existing_count: int,
+        jobs: int,
     ) -> Tuple[int, int]:
         """Offer one final individual retry and return exact final counts."""
         remembered_failures = set(
@@ -324,7 +325,8 @@ class DownloadOrchestrator:
                 failed_track_numbers,
                 quality,
                 silent=silent,
-                cover_art_data=cover_art_data
+                cover_art_data=cover_art_data,
+                jobs=jobs,
             )
             remembered_failures = set(
                 self.individual_tracks_strategy.failed_track_numbers
@@ -344,10 +346,12 @@ class DownloadOrchestrator:
         release_info: ReleaseInfo,
         track_numbers: List[int],
         quality: str,
-        silent: bool = False
+        silent: bool = False,
+        jobs: int = 1,
     ) -> Tuple[int, int]:
         """Download selected tracks from a release using multi-strategy approach."""
         console = self.display_manager.console
+        jobs = DownloadService.validate_worker_count(jobs)
         self.last_failed_track_numbers = []
 
         # Check which tracks already exist (partial matches allowed)
@@ -512,7 +516,8 @@ class DownloadOrchestrator:
                 quality,
                 silent,
                 cover_art_data,
-                len(existing_tracks)
+                len(existing_tracks),
+                jobs,
             )
             # Success with full album - apply metadata to existing tracks too
             if existing_tracks:
@@ -530,7 +535,12 @@ class DownloadOrchestrator:
 
         # Strategy 2: Try playlist (only for missing tracks)
         downloaded, failed = self.playlist_strategy.download(
-            release_info, missing_track_numbers, quality, silent, cover_art_data=cover_art_data
+            release_info,
+            missing_track_numbers,
+            quality,
+            silent,
+            cover_art_data=cover_art_data,
+            jobs=jobs,
         )
         if downloaded is not None:
             total_downloaded, failed = self._finish_release_attempt(
@@ -540,7 +550,8 @@ class DownloadOrchestrator:
                 quality,
                 silent,
                 cover_art_data,
-                len(existing_tracks)
+                len(existing_tracks),
+                jobs,
             )
             # Success with playlist - apply metadata to existing tracks too
             if existing_tracks:
@@ -558,7 +569,12 @@ class DownloadOrchestrator:
 
         # Strategy 3: Fall back to individual tracks (only for missing tracks)
         downloaded, failed = self.individual_tracks_strategy.download(
-            release_info, missing_track_numbers, quality, silent, cover_art_data=cover_art_data
+            release_info,
+            missing_track_numbers,
+            quality,
+            silent,
+            cover_art_data=cover_art_data,
+            jobs=jobs,
         )
         total_downloaded, failed = self._finish_release_attempt(
             release_info,
@@ -567,7 +583,8 @@ class DownloadOrchestrator:
             quality,
             silent,
             cover_art_data,
-            len(existing_tracks)
+            len(existing_tracks),
+            jobs,
         )
 
         # Apply metadata to existing tracks

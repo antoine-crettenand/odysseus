@@ -50,6 +50,10 @@ class YouTubeDownloader:
             progress_parser=ProgressTracker.parse_progress_line,
         )
 
+    def cancel_active_downloads(self) -> None:
+        """Terminate active yt-dlp subprocesses."""
+        self.retry_strategy.cancel_active()
+
     def _try_get_video_info_with_client(self, url: str, client_type: str, operation_name: str,
                                         extra_args: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
         """Try to get video info with a specific client type."""

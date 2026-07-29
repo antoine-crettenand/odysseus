@@ -32,7 +32,8 @@ class ReleaseHandler(BaseHandler):
         quality: str = "audio",
         tracks: Optional[str] = None,
         no_download: bool = False,
-        auto: bool = False
+        auto: bool = False,
+        jobs: int = 1,
     ) -> OperationOutcome:
         """Handle release search and download."""
         # Validate input parameters
@@ -98,14 +99,21 @@ class ReleaseHandler(BaseHandler):
             console.print("[blue]ℹ[/blue] Search completed. Use without --no-download to download.")
             return OperationOutcome.success("Search completed")
 
-        return self._search_and_download_release(selected_release, quality, tracks, auto)
+        return self._search_and_download_release(
+            selected_release,
+            quality,
+            tracks,
+            auto,
+            jobs,
+        )
 
     def _search_and_download_release(
         self,
         selected_release: MusicBrainzSong,
         quality: str,
         tracks: Optional[str],
-        auto: bool = False
+        auto: bool = False,
+        jobs: int = 1,
     ) -> OperationOutcome:
         """Search and download tracks from a release."""
         console = self.display_manager.console
@@ -150,7 +158,11 @@ class ReleaseHandler(BaseHandler):
             return OperationOutcome.skipped("No tracks selected")
 
         processed, failed = self.download_orchestrator.download_release_tracks(
-            release_info, track_numbers, quality, silent=False
+            release_info,
+            track_numbers,
+            quality,
+            silent=False,
+            jobs=jobs,
         )
         if failed:
             return OperationOutcome.failure(

@@ -2,10 +2,20 @@
 Strategy for downloading tracks from YouTube playlists.
 """
 
-from typing import List, Optional, Dict, Any, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
 from .base_strategy import BaseDownloadStrategy
-from .....models.releases import ReleaseInfo
+from ..download_service import DownloadRequest, DownloadResult
+from .....models.releases import ReleaseInfo, Track
 from .....models.search_results import YouTubeVideo
+
+
+@dataclass(frozen=True)
+class _PreparedPlaylistTrack:
+    track: Track
+    youtube_url: str
+    request: DownloadRequest
 
 
 class PlaylistStrategy(BaseDownloadStrategy):
@@ -17,7 +27,8 @@ class PlaylistStrategy(BaseDownloadStrategy):
         track_numbers: List[int],
         quality: str,
         silent: bool = False,
-        cover_art_data: Optional[bytes] = None
+        cover_art_data: Optional[bytes] = None,
+        jobs: int = 1,
     ) -> Tuple[Optional[int], Optional[int]]:
         """
         Strategy 2: Download from YouTube playlist.
@@ -30,6 +41,7 @@ class PlaylistStrategy(BaseDownloadStrategy):
             quality: Download quality
             silent: Whether to suppress output
             cover_art_data: Optional pre-fetched cover art data (to avoid redundant searches)
+            jobs: Maximum number of simultaneous independent track downloads
         """
         self._start_attempt(track_numbers)
 
@@ -229,224 +241,28 @@ class PlaylistStrategy(BaseDownloadStrategy):
                 if not silent:
                     console.print(f"[green]✓[/green] Matched {matched_count}/{len(selected_tracks)} tracks")
 
-                # Download matched videos
-                downloaded_count = 0
-                failed_count = 0
-
-                # Create progress bar
-                progress = self.display_manager.create_progress_bar(
-                    len(track_to_video),
-                    "Downloading from playlist" if not silent else f"Downloading {release_info.title}"
+                prepared, failed_count = self._prepare_downloads(
+                    release_info,
+                    track_to_video,
+                    quality,
+                    silent,
                 )
-
-                with progress:
-                    task = progress.add_task(
-                        "[cyan]Downloading from playlist..." if not silent else "[cyan]Downloading tracks...",
-                        total=len(track_to_video)
-                    )
-
-                    for track, video_info in track_to_video.items():
-                        progress.update(task, description=f"[cyan]Downloading: {track.title}")
-
-                        try:
-                            # Validate video (check for live versions, duration, etc.)
-                            # Create a YouTubeVideo object for validation
-                            video = YouTubeVideo(
-                                title=video_info['title'],
-                                video_id=video_info['id'],
-                                url_suffix=f"watch?v={video_info['id']}"
-                            )
-
-                            is_valid, reason = self.video_validator.validate_video_for_track(
-                                video, track, silent
-                            )
-
-                            if not is_valid:
-                                if not silent:
-                                    styling = self.display_manager.styling
-                                    styling.log_warning(f"Skipping invalid video for {track.title}: {reason}")
-                                    console.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
-                                failed_count += 1
-                                progress.update(task, advance=1)
-                                continue
-
-                            # Get video URL
-                            # With --flat-playlist, we might not get webpage_url, so construct from ID
-                            video_url = video_info.get('webpage_url')
-                            if not video_url:
-                                # Construct URL from ID (most reliable with --flat-playlist)
-                                video_id = video_info.get('id') or video_info.get('url')
-                                if video_id:
-                                    video_url = f"https://www.youtube.com/watch?v={video_id}"
-                                else:
-                                    if not silent:
-                                        console.print(f"[yellow]⚠[/yellow] Could not determine video URL for {track.title}")
-                                    failed_count += 1
-                                    progress.update(task, advance=1)
-                                    continue
-
-                            # Create metadata for download
-                            # Check if this is a Spotify playlist (only Spotify sets release_type to "Playlist")
-                            # Verify it's a Spotify playlist (extra safeguard)
-                            is_playlist = (
-                                release_info.release_type == "Playlist" and
-                                release_info.url and
-                                "spotify.com" in release_info.url
-                            )
-
-                            # Use original_release_date for year if available (prefer original year over re-release year)
-                            date_to_use = release_info.original_release_date or release_info.release_date
-                            year = int(date_to_use[:4]) if date_to_use and len(date_to_use) >= 4 else None
-
-                            # Use track artist if different from release artist, otherwise fall back to release artist
-                            track_artist = track.artist if (track.artist and track.artist != release_info.artist) else (release_info.artist or "Unknown Artist")
-
-                            if is_playlist:
-                                # For playlists, use playlist folder structure
-                                metadata_dict = {
-                                    'title': track.title,
-                                    'artist': track_artist,  # Keep actual track artist in metadata, or fall back to release artist
-                                    'album': release_info.title,
-                                    'is_playlist': True,
-                                    'playlist_name': release_info.title,
-                                    'year': year,
-                                    'track_number': track.position,
-                                    'total_tracks': len(release_info.tracks)
-                                }
-                            else:
-                                metadata_dict = {
-                                    'title': track.title,
-                                    'artist': track_artist,
-                                    'album': release_info.title,
-                                    'year': year,
-                                    'track_number': track.position,
-                                    'total_tracks': len(release_info.tracks)
-                                }
-
-                            # Create nested progress bar for file download
-                            file_progress, file_task_id = self.display_manager.create_download_progress_bar(
-                                f"Track {track.position}: {track.title[:40]}"
-                            )
-
-                            # Progress callback for file download
-                            def update_file_progress(progress_info: Dict[str, Any]):
-                                """Update file-level progress bar."""
-                                percent = progress_info.get('percent', 0)
-                                file_progress.update(file_task_id, completed=percent)
-                                desc = f"Track {track.position}: {track.title[:35]}"
-                                file_progress.update(file_task_id, description=desc)
-
-                            # Download the track with progress
-                            download_error = None
-                            try:
-                                with file_progress:
-                                    if quality == 'audio':
-                                        result = self.download_service.download_high_quality_audio(
-                                            video_url,
-                                            metadata=metadata_dict,
-                                            quiet=True,
-                                            progress_callback=update_file_progress
-                                        )
-                                    else:
-                                        result = self.download_service.download_video(
-                                            video_url,
-                                            quality=quality,
-                                            audio_only=(quality == 'audio'),
-                                            metadata=metadata_dict,
-                                            quiet=True,
-                                            progress_callback=update_file_progress
-                                        )
-
-                                    # Ensure result is a tuple
-                                    if result is None:
-                                        downloaded_path, file_existed = None, False
-                                        download_error = "Download service returned None (no file was downloaded)"
-                                    else:
-                                        downloaded_path, file_existed = result
-
-                                    file_progress.update(file_task_id, completed=100)
-                            except Exception as e:
-                                downloaded_path, file_existed = None, False
-                                download_error = str(e)
-                                try:
-                                    file_progress.update(file_task_id, completed=100, description=f"[red]Failed: {track.title[:30]}[/red]")
-                                except:
-                                    pass
-
-                            if downloaded_path:
-                                self._mark_track_downloaded(track.position)
-
-                                # Display download confirmation first
-                                if not silent:
-                                    self.display_manager.display_track_download_result(
-                                        track.title, True, str(downloaded_path), file_existed=file_existed
-                                    )
-                                    console.print(f"  [dim]YouTube: {video_url}[/dim]")
-                                # Apply metadata (including cover art) to all downloaded files
-                                # Cover art was already fetched earlier, so we can apply it to all tracks
-                                try:
-                                    self.metadata_service.apply_metadata_with_cover_art(
-                                        downloaded_path, track, release_info, console if not silent else None, cover_art_data=cover_art_data, path_manager=self.path_manager, file_existed_before=file_existed
-                                    )
-                                    downloaded_count += 1
-                                except Exception as e:
-                                    # If metadata application fails, still count as downloaded but log the error
-                                    if not silent and console:
-                                        console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
-                                    downloaded_count += 1
-                            else:
-                                if not silent:
-                                    # Display concise error for failed track
-                                    console.print()
-                                    from rich.panel import Panel
-                                    from rich import box
-
-                                    # Extract actual error message (remove "All download strategies failed. " prefix if present)
-                                    actual_error = download_error or "Download service returned no file"
-                                    if actual_error.startswith("All download strategies failed. "):
-                                        actual_error = actual_error.replace("All download strategies failed. ", "", 1)
-                                    # Truncate long errors
-                                    if len(actual_error) > 150:
-                                        actual_error = actual_error[:147] + "..."
-
-                                    error_details = f"[yellow]{track.title}[/yellow] — [red]{actual_error}[/red]"
-
-                                    # Add tip only for specific errors
-                                    if download_error and ("bot" in download_error.lower() or "sign in" in download_error.lower()):
-                                        error_details += f"\n[yellow]Tip:[/yellow] YouTube may be blocking requests. Try signing in to YouTube."
-
-                                    console.print(Panel(
-                                        error_details,
-                                        title=f"[bold red]✗ Track {track.position}[/bold red]",
-                                        border_style="red",
-                                        box=box.ROUNDED,
-                                        padding=(0, 1)
-                                    ))
-                                else:
-                                    console.print(f"[red]✗[/red] Failed: {track.title}")
-                                failed_count += 1
-
-                        except Exception as e:
-                            failed_count += 1
-                            if not silent:
-                                console.print()
-                                from rich.panel import Panel
-                                from rich import box
-                                error_msg = str(e)
-                                if len(error_msg) > 150:
-                                    error_msg = error_msg[:147] + "..."
-                                error_details = f"[yellow]{track.title}[/yellow] — [red]{error_msg}[/red]"
-                                console.print(Panel(
-                                    error_details,
-                                    title=f"[bold red]✗ Track {track.position}[/bold red]",
-                                    border_style="red",
-                                    box=box.ROUNDED,
-                                    padding=(0, 1)
-                                ))
-                            else:
-                                console.print(f"[red]✗[/red] Error: {track.title} - {str(e)[:50]}")
-
-                        progress.update(task, advance=1)
+                results = self._download_prepared(
+                    prepared,
+                    len(track_to_video),
+                    failed_count,
+                    jobs,
+                    release_info,
+                    silent,
+                )
+                downloaded_count, result_failures = self._apply_results(
+                    prepared,
+                    results,
+                    release_info,
+                    cover_art_data,
+                    silent,
+                )
+                failed_count += result_failures
 
                 # Return results if we downloaded at least some tracks
                 if downloaded_count > 0:
@@ -466,3 +282,241 @@ class PlaylistStrategy(BaseDownloadStrategy):
             styling = self.display_manager.styling
             styling.log_warning("All playlists failed. Trying next strategy...")
         return None, None
+
+    def _prepare_downloads(
+        self,
+        release_info: ReleaseInfo,
+        track_to_video: Dict[Track, Dict],
+        quality: str,
+        silent: bool,
+    ) -> Tuple[List[_PreparedPlaylistTrack], int]:
+        """Validate matches and build immutable worker requests."""
+        prepared = []
+        failed = 0
+        console = self.display_manager.console
+        date = release_info.original_release_date or release_info.release_date
+        year = int(date[:4]) if date and len(date) >= 4 else None
+
+        for track, video_info in track_to_video.items():
+            video = YouTubeVideo(
+                title=video_info["title"],
+                video_id=video_info["id"],
+                url_suffix=f"watch?v={video_info['id']}",
+            )
+            is_valid, reason = self.video_validator.validate_video_for_track(
+                video,
+                track,
+                silent,
+            )
+            if not is_valid:
+                if not silent:
+                    self.display_manager.styling.log_warning(
+                        f"Skipping invalid video for {track.title}: {reason}"
+                    )
+                    console.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
+                failed += 1
+                continue
+
+            video_url = video_info.get("webpage_url")
+            if not video_url:
+                video_id = video_info.get("id") or video_info.get("url")
+                if not video_id:
+                    if not silent:
+                        console.print(
+                            "[yellow]⚠[/yellow] Could not determine video "
+                            f"URL for {track.title}"
+                        )
+                    failed += 1
+                    continue
+                video_url = f"https://www.youtube.com/watch?v={video_id}"
+
+            track_artist = (
+                track.artist
+                if track.artist and track.artist != release_info.artist
+                else release_info.artist or "Unknown Artist"
+            )
+            metadata = {
+                "title": track.title,
+                "artist": track_artist,
+                "album": release_info.title,
+                "year": year,
+                "track_number": track.position,
+                "total_tracks": len(release_info.tracks),
+            }
+            if (
+                release_info.release_type == "Playlist"
+                and release_info.url
+                and "spotify.com" in release_info.url
+            ):
+                metadata.update(
+                    {
+                        "is_playlist": True,
+                        "playlist_name": release_info.title,
+                    }
+                )
+
+            prepared.append(
+                _PreparedPlaylistTrack(
+                    track=track,
+                    youtube_url=video_url,
+                    request=DownloadRequest(
+                        key=track.position,
+                        url=video_url,
+                        quality=quality,
+                        metadata=metadata,
+                    ),
+                )
+            )
+
+        return prepared, failed
+
+    def _download_prepared(
+        self,
+        prepared: List[_PreparedPlaylistTrack],
+        total_matches: int,
+        failed_count: int,
+        jobs: int,
+        release_info: ReleaseInfo,
+        silent: bool,
+    ) -> List[DownloadResult]:
+        """Download validated playlist tracks with caller-thread progress."""
+        if not prepared:
+            return []
+
+        progress = self.display_manager.create_progress_bar(
+            total_matches,
+            "Downloading from playlist"
+            if not silent
+            else f"Downloading {release_info.title}",
+        )
+        percentages = {
+            item.track.position: 0.0
+            for item in prepared
+        }
+        tracks = {
+            item.track.position: item.track
+            for item in prepared
+        }
+        with progress:
+            task = progress.add_task(
+                "[cyan]Downloading from playlist..."
+                if not silent
+                else "[cyan]Downloading tracks...",
+                total=100 * total_matches,
+                completed=100 * failed_count,
+            )
+
+            def update_progress(track_number: int, info: Dict) -> None:
+                percentages[track_number] = max(
+                    percentages.get(track_number, 0.0),
+                    float(info.get("percent", 0.0) or 0.0),
+                )
+                track = tracks[track_number]
+                progress.update(
+                    task,
+                    completed=100 * failed_count + sum(percentages.values()),
+                    description=f"[cyan]Downloading: {track.title[:40]}",
+                )
+
+            results = self.download_service.download_many(
+                [item.request for item in prepared],
+                workers=jobs,
+                progress_callback=update_progress,
+            )
+            for result in results:
+                percentages[result.key] = 100.0
+            progress.update(
+                task,
+                completed=100 * failed_count + sum(percentages.values()),
+            )
+        return results
+
+    def _apply_results(
+        self,
+        prepared: List[_PreparedPlaylistTrack],
+        results: List[DownloadResult],
+        release_info: ReleaseInfo,
+        cover_art_data: Optional[bytes],
+        silent: bool,
+    ) -> Tuple[int, int]:
+        """Apply metadata serially and report ordered worker outcomes."""
+        results_by_key = {result.key: result for result in results}
+        downloaded = 0
+        failed = 0
+        console = self.display_manager.console
+
+        for item in prepared:
+            result = results_by_key.get(item.track.position)
+            if result is None:
+                result = DownloadResult(
+                    item.track.position,
+                    error="Download worker returned no result",
+                )
+            if not result.succeeded:
+                self._display_failure(item.track, result, silent)
+                failed += 1
+                continue
+
+            self._mark_track_downloaded(item.track.position)
+            if not silent:
+                self.display_manager.display_track_download_result(
+                    item.track.title,
+                    True,
+                    str(result.path),
+                    file_existed=result.file_existed,
+                )
+                console.print(f"  [dim]YouTube: {item.youtube_url}[/dim]")
+            try:
+                self.metadata_service.apply_metadata_with_cover_art(
+                    result.path,
+                    item.track,
+                    release_info,
+                    console if not silent else None,
+                    cover_art_data=cover_art_data,
+                    path_manager=self.path_manager,
+                    file_existed_before=result.file_existed,
+                )
+            except Exception as error:
+                if not silent:
+                    console.print(
+                        f"[yellow]⚠[/yellow] Could not apply metadata to "
+                        f"{item.track.title}: {error}"
+                    )
+            downloaded += 1
+
+        return downloaded, failed
+
+    def _display_failure(
+        self,
+        track: Track,
+        result: DownloadResult,
+        silent: bool,
+    ) -> None:
+        console = self.display_manager.console
+        if silent:
+            console.print(f"[red]✗[/red] Failed: {track.title}")
+            return
+
+        from rich import box
+        from rich.panel import Panel
+
+        error = result.error or "Download service returned no file"
+        if error.startswith("All download strategies failed. "):
+            error = error.replace("All download strategies failed. ", "", 1)
+        if len(error) > 150:
+            error = error[:147] + "..."
+        details = f"[yellow]{track.title}[/yellow] — [red]{error}[/red]"
+        if "bot" in error.lower() or "sign in" in error.lower():
+            details += (
+                "\n[yellow]Tip:[/yellow] YouTube may be blocking requests. "
+                "Try signing in to YouTube."
+            )
+        console.print(
+            Panel(
+                details,
+                title=f"[bold red]✗ Track {track.position}[/bold red]",
+                border_style="red",
+                box=box.ROUNDED,
+                padding=(0, 1),
+            )
+        )
