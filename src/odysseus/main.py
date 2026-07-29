@@ -27,10 +27,16 @@ else:
 logger = setup_logging()
 
 
-def main():
+def main(args=None):
     """Main entry point."""
     logger.debug("Starting Odysseus Music Discovery Tool")
     try:
+        cli_args = sys.argv[1:] if args is None else list(args)
+        if any(flag in cli_args for flag in ("-h", "--help", "--version")):
+            # Help and version must work without optional executables, API
+            # credentials, writable download paths, or service construction.
+            return OdysseusCLI(load_services=False).run(cli_args)
+
         try:
             validate_and_raise()
             logger.debug("Configuration validation passed")
@@ -51,7 +57,7 @@ def main():
         logger.debug("Dependency injection container initialized")
 
         cli = OdysseusCLI(container=container)
-        cli.run()
+        return cli.run(args) if args is not None else cli.run()
     except KeyboardInterrupt:
         logger.debug("Application interrupted by user")
         raise
@@ -63,4 +69,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

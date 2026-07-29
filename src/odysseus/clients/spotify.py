@@ -14,13 +14,20 @@ from ..models.search_results import SpotifyTrack
 class SpotifyClient:
     """Spotify client for parsing URLs and extracting track information."""
 
-    def __init__(self):
+    def __init__(self, http_client=None):
         self.base_url = "https://api.spotify.com/v1"
         self.auth_url = "https://accounts.spotify.com/api/token"
         self.client_id = None
         self.client_secret = None
         self.access_token = None
         self.timeout = 30
+        if http_client is None:
+            from ..core.http import HttpClient
+            http_client = HttpClient(
+                default_timeout=self.timeout,
+                default_request_delay=0.1,
+            )
+        self.http_client = http_client
 
         # Try to get credentials from environment
         import os
@@ -30,6 +37,16 @@ class SpotifyClient:
         # Authenticate if credentials are available
         if self.client_id and self.client_secret:
             self._authenticate()
+
+    def _register_session_headers(self) -> None:
+        if not hasattr(self.http_client, "session_manager"):
+            return
+        session_manager = self.http_client.session_manager
+        headers = self._get_headers()
+        if hasattr(session_manager, "register_headers"):
+            session_manager.register_headers("spotify", headers)
+        else:
+            session_manager.get_session("spotify").headers.update(headers)
 
     def _authenticate(self) -> bool:
         """Authenticate with Spotify API using client credentials flow."""
@@ -58,6 +75,7 @@ class SpotifyClient:
             if response.status_code == 200:
                 token_data = response.json()
                 self.access_token = token_data.get("access_token")
+                self._register_session_headers()
                 return True
             else:
                 return False
@@ -70,6 +88,54 @@ class SpotifyClient:
         if self.access_token:
             headers["Authorization"] = f"Bearer {self.access_token}"
         return headers
+
+    def _request_json(
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]] = None,
+        retry_auth: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        """Make a resilient Spotify request and refresh an expired token once."""
+        response = self.http_client.get(
+            url,
+            params=params,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+            handle_rate_limit=True,
+            rate_limit_codes=(429,),
+            rate_limit_wait=30,
+            session_name="spotify",
+            accepted_status_codes=(401,),
+        )
+        if response is None:
+            return None
+        if response.status_code == 401:
+            if retry_auth and self._authenticate():
+                return self._request_json(url, params=params, retry_auth=False)
+            return None
+        try:
+            return response.json()
+        except ValueError:
+            return None
+
+    def search_items(
+        self,
+        query: str,
+        item_type: str,
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """Search a Spotify item type through the resilient transport."""
+        data = self._request_json(
+            f"{self.base_url}/search",
+            params={
+                "q": query,
+                "type": item_type,
+                "limit": min(max(1, limit), 50),
+            },
+        )
+        if not data:
+            return []
+        return data.get(f"{item_type}s", {}).get("items", []) or []
 
     def parse_spotify_url(self, url: str) -> Optional[Dict[str, str]]:
         """
@@ -86,6 +152,13 @@ class SpotifyClient:
         """
         if not url:
             return None
+
+        collection_match = re.search(
+            r"open\.spotify\.com/user/([a-zA-Z0-9]+)/collection",
+            url,
+        )
+        if collection_match:
+            return {"type": "collection", "id": collection_match.group(1)}
 
         # Handle spotify: URIs
         if url.startswith("spotify:"):
@@ -137,12 +210,13 @@ class SpotifyClient:
     def _fetch_paginated_items(self, url: str, limit: int = 100) -> List[Dict[str, Any]]:
         """Fetch paginated items from Spotify API."""
         items, offset = [], 0
-        headers = self._get_headers()
         while True:
-            response = requests.get(url, headers=headers, params={"limit": limit, "offset": offset}, timeout=self.timeout)
-            if response.status_code != 200:
+            data = self._request_json(
+                url,
+                params={"limit": limit, "offset": offset},
+            )
+            if not data:
                 break
-            data = response.json()
             page_items = data.get("items", [])
             if not page_items:
                 break
@@ -159,11 +233,9 @@ class SpotifyClient:
 
         try:
             url = f"{self.base_url}/{resource_type}s/{resource_id}"
-            response = requests.get(url, headers=self._get_headers(), timeout=self.timeout)
-            if response.status_code != 200:
+            resource_data = self._request_json(url)
+            if not resource_data:
                 return None
-
-            resource_data = response.json()
             config = {
                 "playlist": {
                     "title": resource_data.get("name", "Unknown Playlist"),
@@ -313,6 +385,81 @@ class SpotifyClient:
 
         return sorted(artist_albums, key=lambda x: (x[0].lower(), x[1].lower(), x[2] or 0))
 
+    def _fetch_user_collection_items(
+        self,
+        access_token: str,
+        collection_type: str,
+    ) -> List[Dict[str, Any]]:
+        endpoint = "tracks" if collection_type == "tracks" else "albums"
+        url = f"{self.base_url}/me/{endpoint}"
+        params = {"limit": 50}
+        items = []
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        }
+        while url:
+            response = self.http_client.get(
+                url,
+                params=params,
+                headers=headers,
+                session_name="spotify-user",
+                accepted_status_codes=(401,),
+                handle_rate_limit=True,
+            )
+            if response is None:
+                raise RuntimeError("Failed to fetch Spotify user collection")
+            if response.status_code == 401:
+                raise ValueError("Spotify user access token is invalid or expired")
+            data = response.json()
+            items.extend(data.get("items", []))
+            url = data.get("next")
+            params = None
+        return items
+
+    def get_user_collection_releases(
+        self,
+        access_token: str,
+        collection_type: str = "tracks",
+    ) -> List[tuple]:
+        """Return unique releases from liked tracks and/or saved albums."""
+        if collection_type not in {"tracks", "albums", "both"}:
+            raise ValueError("Collection type must be tracks, albums, or both")
+        requested = (
+            ("tracks", "albums")
+            if collection_type == "both"
+            else (collection_type,)
+        )
+        releases = set()
+        for item_type in requested:
+            for item in self._fetch_user_collection_items(
+                access_token,
+                item_type,
+            ):
+                if item_type == "tracks":
+                    track = item.get("track") or {}
+                    album = track.get("album") or {}
+                    artists = track.get("artists") or album.get("artists") or []
+                else:
+                    album = item.get("album") or {}
+                    artists = album.get("artists") or []
+                artist = (
+                    artists[0].get("name", "Unknown Artist")
+                    if artists
+                    else "Unknown Artist"
+                )
+                releases.add(
+                    (
+                        artist,
+                        album.get("name", "Unknown Album"),
+                        self._extract_release_year(album.get("release_date")),
+                    )
+                )
+        return sorted(
+            releases,
+            key=lambda row: (row[0].lower(), row[1].lower(), row[2] or 0),
+        )
+
     def is_authenticated(self) -> bool:
         """Check if Spotify API is authenticated."""
         return self.access_token is not None
@@ -326,12 +473,7 @@ class SpotifyClient:
             query_parts = [f'artist:"{artist}"' if artist else '', f'album:"{album}"' if album else '']
             query = ' '.join(q for q in query_parts if q) or f'{artist} {album}'
 
-            response = requests.get(f"{self.base_url}/search", headers=self._get_headers(),
-                                  params={"q": query, "type": "album", "limit": min(limit, 50)}, timeout=self.timeout)
-            if response.status_code != 200:
-                return []
-
-            albums = response.json().get("albums", {}).get("items", [])
+            albums = self.search_items(query, "album", limit=limit)
             results = []
             for album_data in albums:
                 release_year_spotify = self._extract_release_year(album_data.get("release_date", ""))
@@ -353,4 +495,3 @@ class SpotifyClient:
             return results
         except Exception:
             return []
-

@@ -79,7 +79,10 @@ class PathUtils:
         try:
             resolved_path = path.resolve()
             base_dir_resolved = base_dir.resolve()
-            if not str(resolved_path).startswith(str(base_dir_resolved)):
+            if (
+                resolved_path != base_dir_resolved
+                and base_dir_resolved not in resolved_path.parents
+            ):
                 return base_dir
             return path
         except (OSError, ValueError):
@@ -143,4 +146,3 @@ class PathUtils:
         organized_dir = PathUtils._resolve_safe_path(organized_dir, download_dir)
         organized_dir.mkdir(parents=True, exist_ok=True)
         return organized_dir
-

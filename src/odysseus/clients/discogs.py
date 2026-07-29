@@ -4,12 +4,85 @@ A client for searching the Discogs database for music information.
 """
 
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from ..models.song import SongData
 from ..models.search_results import DiscogsRelease
 from ..models.releases import Track, ReleaseInfo
 from ..core.config import DISCOGS_CONFIG, ERROR_MESSAGES
 from .base_api_client import BaseAPIClient
+
+# Discogs "format" search/filter tokens that mean release type, not physical medium
+_RELEASE_TYPE_ALIASES = {
+    "album": "Album",
+    "lp": "Album",
+    "single": "Single",
+    "ep": "EP",
+    "compilation": "Compilation",
+    "mixtape": "Mixtape",
+    "live": "Live",
+}
+
+
+def _normalize_release_type_token(token: str) -> Optional[str]:
+    """Map a Discogs format/description token to a logical release type."""
+    if not token:
+        return None
+    return _RELEASE_TYPE_ALIASES.get(token.strip().lower())
+
+
+def extract_discogs_release_type(
+    formats: Optional[List[Union[str, Dict[str, Any]]]] = None,
+) -> Optional[str]:
+    """
+    Extract Album/Single/EP/etc from Discogs format payloads.
+
+    Search results use string lists like ``["Vinyl", "LP", "Album"]``.
+    Detail/artist endpoints use dicts with ``name`` and ``descriptions``.
+    """
+    if not formats:
+        return None
+
+    candidates: List[str] = []
+    for item in formats:
+        if isinstance(item, str):
+            candidates.append(item)
+        elif isinstance(item, dict):
+            name = item.get("name")
+            if name:
+                candidates.append(str(name))
+            for description in item.get("descriptions") or []:
+                candidates.append(str(description))
+
+    for candidate in candidates:
+        release_type = _normalize_release_type_token(candidate)
+        if release_type:
+            return release_type
+    return None
+
+
+def extract_discogs_physical_format(
+    formats: Optional[List[Union[str, Dict[str, Any]]]] = None,
+) -> Optional[str]:
+    """Extract the physical medium (Vinyl, CD, ...) from Discogs format payloads."""
+    if not formats:
+        return None
+
+    for item in formats:
+        if isinstance(item, str):
+            if _normalize_release_type_token(item) is None:
+                return item
+        elif isinstance(item, dict):
+            name = item.get("name")
+            if name and _normalize_release_type_token(str(name)) is None:
+                return str(name)
+
+    # Fall back to first available label if nothing looked like a medium
+    first = formats[0]
+    if isinstance(first, str):
+        return first
+    if isinstance(first, dict):
+        return first.get("name")
+    return None
 
 
 class DiscogsClient(BaseAPIClient):
@@ -30,7 +103,6 @@ class DiscogsClient(BaseAPIClient):
         # Setup Discogs-specific session headers
         # Access the session manager from http_client to set up Discogs-specific headers
         if hasattr(self.http_client, 'session_manager'):
-            session = self.http_client.session_manager.get_session("discogs")
             headers = {
                 'User-Agent': self.user_agent,
                 'Accept': 'application/json'
@@ -38,7 +110,11 @@ class DiscogsClient(BaseAPIClient):
             # Add user token if available (for higher rate limits)
             if self.user_token:
                 headers['Authorization'] = f'Discogs token={self.user_token}'
-            session.headers.update(headers)
+            session_manager = self.http_client.session_manager
+            if hasattr(session_manager, "register_headers"):
+                session_manager.register_headers("discogs", headers)
+            else:
+                session_manager.get_session("discogs").headers.update(headers)
 
     def _make_request(self, url: str, params: Dict[str, Any], batch_progress: Optional[Tuple[int, int]] = None) -> Optional[Dict[str, Any]]:
         """
@@ -58,7 +134,13 @@ class DiscogsClient(BaseAPIClient):
 
         # Use HttpClient.get() to get response object so we can check status code
         response = self._make_request_response(
-            url, params, batch_progress, log_callback, rate_limit_wait=60, session_name="discogs"
+            url,
+            params,
+            batch_progress,
+            log_callback,
+            rate_limit_wait=60,
+            session_name="discogs",
+            accepted_status_codes=(403,),
         )
 
         if response is None:
@@ -128,9 +210,11 @@ class DiscogsClient(BaseAPIClient):
                 'page': (offset // (limit or self.max_results)) + 1 if offset > 0 else 1
             }
 
-            # Add release type filter if specified
+            # Discogs search uses `format` for both media and release-type tokens
+            # (e.g. vinyl, album, single). Prefer the normalized release-type token.
             if release_type:
-                params['format'] = release_type.lower()
+                normalized = _normalize_release_type_token(release_type)
+                params['format'] = (normalized or release_type).lower()
 
             try:
                 # Dimmed text for technical/log message - Discogs is used for deduplication
@@ -258,9 +342,8 @@ class DiscogsClient(BaseAPIClient):
                     country = release_info.get('country', '')
 
                     formats = release_info.get('formats', [])
-                    format_type = None
-                    if formats:
-                        format_type = formats[0].get('name', '')
+                    format_type = extract_discogs_physical_format(formats)
+                    logical_release_type = extract_discogs_release_type(formats)
 
                     # Prefer full-size image over thumbnail
                     # Discogs provides: 'thumb' (low quality), 'cover_image' (full size)
@@ -273,9 +356,10 @@ class DiscogsClient(BaseAPIClient):
                     if year and year_val != year:
                         continue
 
-                    # Apply release type filter if specified
-                    if release_type and format_type:
-                        if release_type.lower() not in format_type.lower():
+                    # Apply release type filter if specified (Album/Single/EP, not Vinyl/CD)
+                    if release_type:
+                        expected = _normalize_release_type_token(release_type) or release_type
+                        if not logical_release_type or logical_release_type.lower() != expected.lower():
                             continue
 
                     result = DiscogsRelease(
@@ -288,6 +372,7 @@ class DiscogsClient(BaseAPIClient):
                         label=label,
                         country=country,
                         format=format_type,
+                        release_type=logical_release_type,
                         cover_art_url=cover_art_url,
                         discogs_id=release_id,
                         url=url_str,
@@ -393,7 +478,6 @@ class DiscogsClient(BaseAPIClient):
             style = None
             label = None
             country = None
-            format_type = None
             cover_art_url = None
 
             genres = release.get('genre', [])
@@ -411,8 +495,8 @@ class DiscogsClient(BaseAPIClient):
             country = release.get('country', '')
 
             formats = release.get('format', [])
-            if formats:
-                format_type = formats[0]
+            format_type = extract_discogs_physical_format(formats)
+            logical_release_type = extract_discogs_release_type(formats)
 
             # Prefer full-size image over thumbnail
             # Discogs search results may have 'cover_image' (full size) or 'thumb' (thumbnail)
@@ -431,6 +515,7 @@ class DiscogsClient(BaseAPIClient):
                 label=label,
                 country=country,
                 format=format_type,
+                release_type=logical_release_type,
                 cover_art_url=cover_art_url,
                 discogs_id=release_id,
                 url=url,
@@ -463,12 +548,9 @@ class DiscogsClient(BaseAPIClient):
             if genres:
                 genre = genres[0]
 
-            # Get release type from format
-            release_type = None
+            # Get logical release type (Album/Single/EP), not physical medium name
             formats = data.get('formats', [])
-            if formats:
-                format_info = formats[0]
-                release_type = format_info.get('name', '').title()  # e.g., "Album", "Single", "EP"
+            release_type = extract_discogs_release_type(formats)
 
             url = data.get('uri', '') or f"https://www.discogs.com/release/{release_id}"
 

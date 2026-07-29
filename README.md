@@ -33,10 +33,10 @@ If you're pulling this repository for the first time on a new computer, follow t
 #### 1. Prerequisites
 
 - Python 3.8 or higher
-- pip (Python package manager) - setuptools will be installed automatically by pip
+- pip (Python package manager)
 - Internet connection
 
-**Note:** Do not run `python setup.py` directly. Always use `pip install -e .` instead, as it automatically handles all dependencies including setuptools.
+The project is configured through `pyproject.toml`; do not run `setup.py`.
 
 #### 2. Clone and Install
 
@@ -58,6 +58,12 @@ source venv/bin/activate
 pip install -e .
 ```
 
+For development, install the test and lint tools:
+
+```bash
+pip install -e ".[dev]"
+```
+
 #### 3. Verify Installation
 
 ```bash
@@ -67,6 +73,31 @@ odysseus --help
 # Or test with Python directly
 python -m odysseus.main --help
 ```
+
+#### 4. Configure API access (recommended)
+
+Odysseus can fall back when a provider is unavailable, but authenticated,
+identified requests are less likely to be denied. Set only the providers you
+use:
+
+```bash
+# Uses the supported YouTube Data API instead of HTML search when present.
+export YOUTUBE_API_KEY="..."
+
+# Optional, but recommended for authenticated Discogs access.
+export DISCOGS_USER_TOKEN="..."
+
+# Required for Spotify metadata and search.
+export SPOTIFY_CLIENT_ID="..."
+export SPOTIFY_CLIENT_SECRET="..."
+
+# Optional overrides. Keep a real project URL or contact address in each value.
+export MUSICBRAINZ_USER_AGENT="Odysseus/1.0.0 (https://example.com/project)"
+export DISCOGS_USER_AGENT="Odysseus/1.0.0 (https://example.com/project)"
+```
+
+Do not commit API keys or tokens. Without `YOUTUBE_API_KEY`, YouTube HTML
+search remains available as a less reliable fallback.
 
 ### Command Line Interface
 
@@ -100,6 +131,21 @@ odysseus release --album "album_name" --artist "artist_name" --year 1982
 
 # Search only
 odysseus release --album "album_name" --artist "artist_name" --no-download
+```
+
+#### Export releases from Spotify
+
+```bash
+# Export the unique releases represented in a playlist
+odysseus spotify --mode releases --url "https://open.spotify.com/playlist/..." \
+  --export releases.tsv --no-download
+
+# Export liked-track and saved-album releases. The token needs
+# the Spotify user-library-read scope.
+export SPOTIFY_USER_ACCESS_TOKEN="..."
+odysseus spotify --mode releases \
+  --url "https://open.spotify.com/user/me/collection" \
+  --collection-type both --export library.json --export-format json --no-download
 ```
 
 #### Browse and Download from Discography

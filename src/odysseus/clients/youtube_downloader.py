@@ -50,7 +50,7 @@ class YouTubeDownloader:
             max_delay=self.max_retry_delay,
             max_total_time=self.max_total_time,
             timeout=self.timeout,
-            yt_dlp_manager=self.yt_dlp_manager
+            progress_parser=ProgressTracker.parse_progress_line,
         )
 
         # yt-dlp is checked by configuration validation and updated only when
@@ -60,8 +60,7 @@ class YouTubeDownloader:
         """
         Manually update yt-dlp.
 
-        Call this method if you're experiencing signature extraction errors
-        and the automatic update didn't work.
+        Call this method explicitly if a diagnostic recommends an update.
 
         Returns:
             True if update was successful, False otherwise
@@ -140,13 +139,16 @@ class YouTubeDownloader:
             if not chapters:
                 return None
 
-            # Format chapters: [{'start_time': seconds, 'title': 'Chapter Title'}, ...]
+            # Keep explicit end times when yt-dlp provides them. They are needed
+            # to validate chapter durations before splitting an album.
             formatted_chapters = []
             for chapter in chapters:
                 start_time = chapter.get('start_time', 0)
+                end_time = chapter.get('end_time')
                 title = chapter.get('title', '')
                 formatted_chapters.append({
                     'start_time': start_time,
+                    'end_time': end_time,
                     'title': title
                 })
 
@@ -543,12 +545,3 @@ class YouTubeDownloader:
         except Exception as e:
             print(f"Unexpected error: {e}")
             return []
-
-    # Backward compatibility methods for internal use by other modules
-    def _sanitize_filename(self, filename: str) -> str:
-        """Sanitize filename (backward compatibility wrapper)."""
-        return self.path_utils.sanitize_filename(filename)
-
-    def _create_organized_path(self, metadata: Optional[Dict[str, Any]] = None) -> Path:
-        """Create organized path (backward compatibility wrapper)."""
-        return self.path_utils.create_organized_path(self.download_dir, metadata)

@@ -5,7 +5,7 @@ Handler for discography mode (artist discography browse and download).
 from typing import Optional, List
 from .base_handler import BaseHandler
 from ...models.search_results import MusicBrainzSong
-from ...domain.music.search.release_info_fetcher import ReleaseInfoFetcher
+from ..release_info_flow import ReleaseInfoFetcher
 from ...ui.user_interaction import UserInteraction
 from ...core.config import PROJECT_NAME, ERROR_MESSAGES
 from rich.prompt import Prompt, Confirm
@@ -13,12 +13,12 @@ from rich.prompt import Prompt, Confirm
 
 class DiscographyHandler(BaseHandler):
     """Handler for discography browse and download mode."""
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.user_interaction = UserInteraction(self.display_manager)
         self.release_info_fetcher = ReleaseInfoFetcher(self.search_service, self.display_manager)
-    
+
     def handle(
         self,
         artist: str,
@@ -44,7 +44,7 @@ class DiscographyHandler(BaseHandler):
             subtitle
         ))
         console.print()
-        
+
         # Use cached releases if provided, otherwise search
         if cached_releases is not None:
             releases = cached_releases
@@ -59,32 +59,32 @@ class DiscographyHandler(BaseHandler):
                 release_type=release_type,
                 include_compilations=include_compilations
             )
-        
+
         if not releases:
             console.print(f"[bold red]✗[/bold red] {ERROR_MESSAGES['NO_RESULTS']}")
             return None
-        
+
         ordered_releases = self.display_manager.display_discography(releases)
-        
+
         if no_download:
             console.print("[blue]ℹ[/blue] Discography browse completed. Use without --no-download to download releases.")
             return releases
-        
+
         selected_releases, auto_download_all_tracks = self.display_manager.get_release_selection(
             ordered_releases, quality, self.search_service
         )
-        
+
         if not selected_releases:
             # User cancelled or didn't select anything - exit without prompting to go back
             return None
-        
+
         self._download_selected_releases(
             selected_releases, quality, auto_download_all_tracks=auto_download_all_tracks
         )
-        
+
         # Return releases for caching
         return releases
-    
+
     def _download_selected_releases(
         self,
         releases: List[MusicBrainzSong],
@@ -93,7 +93,7 @@ class DiscographyHandler(BaseHandler):
     ):
         """
         Download selected releases.
-        
+
         Args:
             releases: List of releases to download
             quality: Download quality
@@ -103,7 +103,7 @@ class DiscographyHandler(BaseHandler):
         console = self.display_manager.console
         total_downloaded = 0
         total_failed = 0
-        
+
         for i, release in enumerate(releases, 1):
             console.print()
             console.print(self.display_manager._create_header_panel(
@@ -111,18 +111,18 @@ class DiscographyHandler(BaseHandler):
                 f"Release {i}/{len(releases)}: {release.album} by {release.artist}"
             ))
             console.print()
-            
+
             # Use unified release info fetcher
             release_info = self.release_info_fetcher.fetch_release_info(
                 release,
                 batch_progress=(i, len(releases)),
                 fallback_to_spotify=True
             )
-            
+
             if not release_info:
                 total_failed += 1
                 continue
-            
+
             # Validate release match using unified validator
             source = getattr(release, 'source', 'musicbrainz')
             if not self.release_validator.validate_release_match(
@@ -133,9 +133,9 @@ class DiscographyHandler(BaseHandler):
             ):
                 total_failed += 1
                 continue
-            
+
             self.display_manager.display_track_listing(release_info)
-            
+
             if auto_download_all_tracks:
                 console.print(f"[cyan]Auto-downloading all {len(release_info.tracks)} track{'s' if len(release_info.tracks) != 1 else ''}...[/cyan]")
                 console.print()
@@ -147,10 +147,10 @@ class DiscographyHandler(BaseHandler):
                 total_failed += failed
             else:
                 self.display_manager.display_download_options()
-                
+
                 while True:
                     choice = Prompt.ask("[bold]Choose option[/bold]", choices=["1", "2", "3"], default="3")
-                    
+
                     if choice == '1':
                         console.print()
                         track_numbers = list(range(1, len(release_info.tracks) + 1))
@@ -175,7 +175,6 @@ class DiscographyHandler(BaseHandler):
                     elif choice == '3':
                         console.print(f"[yellow]⚠[/yellow] Skipped: [yellow]{release.album}[/yellow]")
                         break
-        
+
         console.print()
         self.display_manager.display_download_summary(total_downloaded, total_failed, len(releases))
-

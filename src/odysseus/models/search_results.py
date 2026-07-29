@@ -3,7 +3,7 @@ Search result models from various sources.
 """
 
 from dataclasses import dataclass
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 from abc import ABC, abstractmethod
 
 
@@ -15,7 +15,7 @@ class SearchResult(ABC):
     source: str
     score: int = 0
     url: str = ""
-    
+
     @abstractmethod
     def get_display_name(self) -> str:
         """Get display name for the result."""
@@ -32,7 +32,7 @@ class MusicBrainzSong(SearchResult):
     release_type: Optional[str] = None  # e.g., "Album", "Single", "EP", "Compilation", "Live", etc.
     mbid: str = ""
     source: str = "musicbrainz"
-    
+
     def get_display_name(self) -> str:
         """Get display name for the result."""
         return self.title or self.album or "Unknown"
@@ -48,11 +48,11 @@ class YouTubeVideo(SearchResult):
     publish_time: Optional[str] = None
     url_suffix: str = ""
     source: str = "youtube"
-    
+
     def get_display_name(self) -> str:
         """Get display name for the result."""
         return self.title or "No title"
-    
+
     @property
     def youtube_url(self) -> str:
         """Get full YouTube URL."""
@@ -70,30 +70,15 @@ class DiscogsRelease(SearchResult):
     style: Optional[str] = None
     label: Optional[str] = None
     country: Optional[str] = None
-    format: Optional[str] = None
+    format: Optional[str] = None  # Physical medium (Vinyl, CD, ...)
+    release_type: Optional[str] = None  # Logical type (Album, Single, EP, ...)
     cover_art_url: Optional[str] = None
     discogs_id: str = ""
     source: str = "discogs"
-    
+
     def get_display_name(self) -> str:
         """Get display name for the result."""
         return self.title or self.album or "Unknown"
-
-
-@dataclass
-class LastFmTrack(SearchResult):
-    """Last.fm track search result."""
-    album: Optional[str] = None
-    playcount: Optional[int] = None
-    listeners: Optional[int] = None
-    duration: Optional[int] = None
-    mbid: Optional[str] = None
-    tags: List[str] = None
-    source: str = "lastfm"
-    
-    def get_display_name(self) -> str:
-        """Get display name for the result."""
-        return self.title or "Unknown"
 
 
 @dataclass
@@ -109,24 +94,7 @@ class SpotifyTrack(SearchResult):
     cover_art_url: Optional[str] = None
     audio_features: Optional[Dict[str, Any]] = None
     source: str = "spotify"
-    
-    def get_display_name(self) -> str:
-        """Get display name for the result."""
-        return self.title or "Unknown"
 
-
-@dataclass
-class GeniusSong(SearchResult):
-    """Genius song search result."""
-    album: Optional[str] = None
-    year: Optional[int] = None
-    lyrics: Optional[str] = None
-    genius_id: str = ""
-    cover_art_url: Optional[str] = None
-    description: Optional[str] = None
-    song_art_image_url: Optional[str] = None
-    source: str = "genius"
-    
     def get_display_name(self) -> str:
         """Get display name for the result."""
         return self.title or "Unknown"

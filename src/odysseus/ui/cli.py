@@ -4,7 +4,6 @@ A comprehensive command-line interface for music discovery and downloading.
 """
 
 import argparse
-import sys
 import csv
 from pathlib import Path
 from typing import List, Tuple, Optional
@@ -12,18 +11,23 @@ from typing import List, Tuple, Optional
 from rich.prompt import Confirm
 
 from ..core.config import PROJECT_NAME, PROJECT_VERSION
+from ..models.outcomes import OperationOutcome, OperationStatus
 
 
 class OdysseusCLI:
     """Main CLI class for Odysseus music discovery tool."""
 
-    def __init__(self, container=None):
+    def __init__(self, container=None, *, load_services: bool = True):
         """
         Initialize the CLI.
 
         Args:
             container: Optional DI container instance (uses global container if None)
         """
+        if not load_services:
+            self.container = container
+            return
+
         if container is None:
             from ..core.container import get_container
             container = get_container()
@@ -255,6 +259,23 @@ Examples:
             action='store_true',
             help='Parse URL only, do not download'
         )
+        parser.add_argument(
+            '--export',
+            dest='export_path',
+            help='Export unique releases to a file (releases mode)'
+        )
+        parser.add_argument(
+            '--export-format',
+            choices=['tsv', 'csv', 'json'],
+            default='tsv',
+            help='Release export format (default: tsv)'
+        )
+        parser.add_argument(
+            '--collection-type',
+            choices=['tracks', 'albums', 'both'],
+            default='tracks',
+            help='Collection content to export/process for collection URLs'
+        )
 
     def _add_metadata_args(self, parser: argparse.ArgumentParser):
         """Add arguments for metadata mode."""
@@ -280,7 +301,7 @@ Examples:
             help='MusicBrainz release ID (optional, if provided will skip search)'
         )
 
-    def run(self, args: List[str] = None):
+    def run(self, args: List[str] = None) -> int:
         """Run the CLI with given arguments."""
         parser = self.create_parser()
         parsed_args = parser.parse_args(args)
@@ -295,12 +316,11 @@ Examples:
                     quality=parsed_args.quality,
                     no_download=parsed_args.no_download
                 )
-                # Exit after recording - no search info for another recording
-                sys.exit(0)
+                return 0
             elif parsed_args.mode == 'release':
                 # Handle batch processing
                 if parsed_args.batch:
-                    self._handle_batch_release(
+                    outcome = self._handle_batch_release(
                         batch_file=parsed_args.batch,
                         release_type=parsed_args.type,
                         quality=parsed_args.quality,
@@ -313,7 +333,7 @@ Examples:
                     if not parsed_args.album or not parsed_args.artist:
                         parser.error("--album and --artist are required unless --batch is used")
 
-                    self.release_handler.handle(
+                    outcome = self.release_handler.handle(
                         album=parsed_args.album,
                         artist=parsed_args.artist,
                         year=parsed_args.year,
@@ -323,8 +343,7 @@ Examples:
                         no_download=parsed_args.no_download,
                         auto=getattr(parsed_args, 'auto', False)
                     )
-                # Exit after release - no search info for another release
-                sys.exit(0)
+                return 0 if not isinstance(outcome, OperationOutcome) or outcome.succeeded else 1
             elif parsed_args.mode == 'discography':
                 # Loop for discography - allow user to go back to discography display
                 cached_releases = None
@@ -352,16 +371,19 @@ Examples:
                     if not Confirm.ask("[bold]Go back to discography display?[/bold]", default=False):
                         break
                     self.display_manager.console.print()
+                return 0
             elif parsed_args.mode == 'spotify':
                 self.spotify_handler.handle(
                     url=parsed_args.url,
                     mode=getattr(parsed_args, 'spotify_mode', 'recordings'),
                     quality=parsed_args.quality,
                     tracks=parsed_args.tracks,
-                    no_download=parsed_args.no_download
+                    no_download=parsed_args.no_download,
+                    export_path=parsed_args.export_path,
+                    export_format=parsed_args.export_format,
+                    collection_type=parsed_args.collection_type,
                 )
-                # Exit after spotify - no search info for another spotify URL
-                sys.exit(0)
+                return 0
             elif parsed_args.mode == 'metadata':
                 self.metadata_handler.handle(
                     file_path=parsed_args.file,
@@ -370,13 +392,14 @@ Examples:
                     year=parsed_args.year,
                     mbid=parsed_args.mbid
                 )
-                sys.exit(0)
+                return 0
         except KeyboardInterrupt:
             self.display_manager.console.print("\n[yellow]⚠[/yellow] Operation cancelled by user.")
-            sys.exit(1)
+            return 1
         except Exception as e:
             self.display_manager.console.print(f"[bold red]✗[/bold red] An error occurred: {e}")
-            sys.exit(1)
+            return 1
+        return 0
 
     def _parse_batch_file(self, batch_file: str) -> List[Tuple[str, str, Optional[int]]]:
         """
@@ -401,57 +424,26 @@ Examples:
             first_line = f.readline().strip()
             f.seek(0)  # Reset to beginning
 
-            # Check if it's TSV (tab-separated)
-            if '\t' in first_line:
-                reader = csv.reader(f, delimiter='\t')
+            delimiter = '\t' if '\t' in first_line else ',' if ',' in first_line else None
+            if delimiter:
+                reader = csv.reader(f, delimiter=delimiter)
                 for row_num, row in enumerate(reader, start=1):
-                    # Skip header row if it exists
-                    if row_num == 1 and row[0].lower() in ['artist', 'artists']:
+                    if not row:
                         continue
-
+                    if row_num == 1 and row[0].strip().lower() in {'artist', 'artists'}:
+                        continue
                     if len(row) < 2:
                         continue
-
                     artist = row[0].strip()
                     album = row[1].strip()
                     year = None
-
-                    # Try to parse year from third column if present
                     if len(row) >= 3 and row[2].strip():
                         try:
                             year = int(row[2].strip())
                         except ValueError:
                             pass
-
                     if artist and album:
                         entries.append((artist, album, year))
-
-            # Check if it's CSV (comma-separated)
-            elif ',' in first_line and '\t' not in first_line:
-                reader = csv.reader(f)
-                for row_num, row in enumerate(reader, start=1):
-                    # Skip header row if it exists
-                    if row_num == 1 and row[0].lower() in ['artist', 'artists']:
-                        continue
-
-                    if len(row) < 2:
-                        continue
-
-                    artist = row[0].strip()
-                    album = row[1].strip()
-                    year = None
-
-                    # Try to parse year from third column if present
-                    if len(row) >= 3 and row[2].strip():
-                        try:
-                            year = int(row[2].strip())
-                        except ValueError:
-                            pass
-
-                    if artist and album:
-                        entries.append((artist, album, year))
-
-            # Otherwise, try human-readable format: "Artist - Album (Year)" or "Artist - Album"
             else:
                 import re
                 for line_num, line in enumerate(f, start=1):
@@ -483,7 +475,7 @@ Examples:
         tracks: Optional[str],
         no_download: bool,
         auto: bool = False
-    ):
+    ) -> OperationOutcome:
         """Handle batch processing of releases from a file."""
         console = self.display_manager.console
 
@@ -491,7 +483,7 @@ Examples:
             entries = self._parse_batch_file(batch_file)
         except Exception as e:
             console.print(f"[bold red]✗[/bold red] Failed to parse batch file: {e}")
-            return
+            return OperationOutcome.failure(str(e), error=e)
 
         console.print()
         console.print(self.display_manager._create_header_panel(
@@ -502,6 +494,7 @@ Examples:
 
         successful = 0
         failed = 0
+        skipped = 0
 
         for idx, (artist, album, year) in enumerate(entries, start=1):
             console.print()
@@ -510,7 +503,7 @@ Examples:
             console.print(f"[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
 
             try:
-                self.release_handler.handle(
+                outcome = self.release_handler.handle(
                     album=album,
                     artist=artist,
                     year=year,
@@ -520,10 +513,22 @@ Examples:
                     no_download=no_download,
                     auto=auto
                 )
-                successful += 1
+                if not isinstance(outcome, OperationOutcome):
+                    outcome = OperationOutcome.failure(
+                        "Release handler returned no structured outcome"
+                    )
+                if outcome.status is OperationStatus.SUCCESS:
+                    successful += 1
+                elif outcome.status is OperationStatus.SKIPPED:
+                    skipped += 1
+                else:
+                    failed += 1
             except KeyboardInterrupt:
                 console.print("\n[yellow]⚠[/yellow] Batch processing cancelled by user.")
-                console.print(f"\n[blue]ℹ[/blue] Processed: {successful} successful, {failed} failed")
+                console.print(
+                    f"\n[blue]ℹ[/blue] Processed: {successful} successful, "
+                    f"{skipped} skipped, {failed} failed"
+                )
                 raise
             except Exception as e:
                 console.print(f"[bold red]✗[/bold red] Failed to process {album} by {artist}: {e}")
@@ -534,5 +539,19 @@ Examples:
         console.print()
         console.print(f"[bold green]✓[/bold green] Batch processing complete!")
         console.print(f"  Successful: [green]{successful}[/green]")
+        if skipped > 0:
+            console.print(f"  Skipped: [yellow]{skipped}[/yellow]")
         if failed > 0:
             console.print(f"  Failed: [red]{failed}[/red]")
+        if failed:
+            return OperationOutcome.failure(
+                f"{failed} release(s) failed",
+                processed=successful,
+                failed=failed,
+            )
+        if skipped and not successful:
+            return OperationOutcome.skipped(f"{skipped} release(s) skipped")
+        return OperationOutcome.success(
+            "Batch processing complete",
+            processed=successful,
+        )

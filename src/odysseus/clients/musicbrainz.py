@@ -45,6 +45,18 @@ class MusicBrainzClient(BaseAPIClient):
         # Initialize path utils for checking existing releases
         self.path_utils = PathUtils()
 
+        # Ensure MusicBrainz requests use the configured User-Agent (contact required)
+        if hasattr(self.http_client, "session_manager"):
+            headers = {
+                "User-Agent": self.user_agent,
+                "Accept": "application/json",
+            }
+            session_manager = self.http_client.session_manager
+            if hasattr(session_manager, "register_headers"):
+                session_manager.register_headers("musicbrainz", headers)
+            else:
+                session_manager.get_session("musicbrainz").headers.update(headers)
+
     def _log(self, message: str, batch_progress: Optional[Tuple[int, int]] = None, dim: bool = False):
         """Log message with optional batch progress prefix and dimming."""
         prefix = f"[{batch_progress[0]}/{batch_progress[1]}] " if batch_progress else ""
@@ -53,15 +65,6 @@ class MusicBrainzClient(BaseAPIClient):
             console.print(f"\n{prefix}[dim]{message}[/dim]")
         else:
             console.print(f"\n{prefix}{message}")
-
-    def _make_request(self, url: str, params: Dict[str, Any], batch_progress: Optional[Tuple[int, int]] = None, reduced_retries: bool = False) -> Optional[Dict[str, Any]]:
-        """Make a request using base class method."""
-        def log_callback(message: str, dim: bool = False):
-            self._log(message, batch_progress, dim=dim)
-
-        return self._make_request_json(
-            url, params, batch_progress, reduced_retries, log_callback, rate_limit_wait=60
-        )
 
     def _check_release_folder_exists(self, song_data: SongData) -> bool:
         """
@@ -145,7 +148,8 @@ class MusicBrainzClient(BaseAPIClient):
             log_callback=log_callback,
             handle_rate_limit=True,
             rate_limit_codes=(429,),
-            rate_limit_wait=60  # MusicBrainz allows 1 request/second
+            rate_limit_wait=60,  # MusicBrainz allows 1 request/second
+            session_name="musicbrainz",
         )
 
     def search_recording(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None) -> List[MusicBrainzSong]:

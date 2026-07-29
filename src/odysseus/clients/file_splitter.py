@@ -7,10 +7,38 @@ import subprocess
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable
 from .path_utils import PathUtils
+from ..utils.file_duration_reader import (
+    get_file_duration,
+    parse_duration_to_seconds,
+)
 
 
 class FileSplitter:
     """Splits full album videos into individual tracks."""
+
+    @staticmethod
+    def _is_existing_split_valid(
+        file_path: Path,
+        timestamp_info: Dict[str, Any],
+    ) -> bool:
+        """Return whether an existing file plausibly matches its track boundary."""
+        actual_duration = get_file_duration(file_path)
+        start_time = timestamp_info.get("start_time")
+        end_time = timestamp_info.get("end_time")
+        expected_duration = None
+        if start_time is not None and end_time is not None:
+            expected_duration = end_time - start_time
+        if not expected_duration:
+            track = timestamp_info.get("track")
+            expected_duration = parse_duration_to_seconds(
+                getattr(track, "duration", None)
+            )
+
+        # Preserve files we cannot assess; only overwrite proven bad splits.
+        if not actual_duration or not expected_duration:
+            return True
+        tolerance = max(12.0, expected_duration * 0.20)
+        return abs(actual_duration - expected_duration) <= tolerance
 
     @staticmethod
     def _get_existing_files_before_split(
@@ -35,7 +63,14 @@ class FileSplitter:
             found_existing = False
             for ext in audio_extensions:
                 potential_file = output_dir / f"{expected_base}{ext}"
-                if potential_file.exists() and potential_file.is_file():
+                if (
+                    potential_file.exists()
+                    and potential_file.is_file()
+                    and FileSplitter._is_existing_split_valid(
+                        potential_file,
+                        timestamp_info,
+                    )
+                ):
                     existing_files_before_split.add(potential_file)
                     found_existing = True
                     break
@@ -45,8 +80,15 @@ class FileSplitter:
                     f for f in output_dir.glob(f"{expected_base}*")
                     if f.is_file() and f.suffix.lower() in audio_extensions
                 ]
-                if existing_files:
-                    existing_files_before_split.add(existing_files[0])
+                valid_existing_files = [
+                    file_path for file_path in existing_files
+                    if FileSplitter._is_existing_split_valid(
+                        file_path,
+                        timestamp_info,
+                    )
+                ]
+                if valid_existing_files:
+                    existing_files_before_split.add(valid_existing_files[0])
 
         return existing_files_before_split
 
@@ -116,6 +158,18 @@ class FileSplitter:
                 if existing_files:
                     output_path = existing_files[0]
                     file_already_exists = True
+
+            if (
+                file_already_exists
+                and not FileSplitter._is_existing_split_valid(
+                    output_path,
+                    timestamp_info,
+                )
+            ):
+                print(
+                    f"Replacing invalid existing split: {output_path.name}"
+                )
+                file_already_exists = False
 
             # If file doesn't exist, create the path for splitting
             if not output_path:
@@ -192,4 +246,3 @@ class FileSplitter:
             })
 
         return output_files
-
