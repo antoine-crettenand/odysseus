@@ -287,7 +287,7 @@ def test_release_exporter_writes_deduplicated_tsv(temp_dir):
 def test_batch_accounting_uses_structured_outcomes():
     cli = OdysseusCLI.__new__(OdysseusCLI)
     cli.display_manager = MagicMock()
-    cli.display_manager._create_header_panel.return_value = "header"
+    cli.display_manager.create_header_panel.return_value = "header"
     cli._parse_batch_file = MagicMock(
         return_value=[
             ("A", "One", None),

@@ -29,7 +29,6 @@ class SubprocessRetryStrategy(RetryStrategy):
         max_delay: float = 60.0,
         max_total_time: float = 1800,
         timeout: int = 600,
-        yt_dlp_manager=None,
         progress_parser: Optional[Callable] = None,
         no_activity_timeout: int = 60,
     ):
@@ -42,14 +41,12 @@ class SubprocessRetryStrategy(RetryStrategy):
             max_delay: Maximum delay between retries
             max_total_time: Maximum total time for all attempts
             timeout: Timeout per attempt
-            yt_dlp_manager: Deprecated compatibility dependency
             progress_parser: Optional parser called for every output line
             no_activity_timeout: Maximum seconds without subprocess output
         """
         super().__init__(max_retries, base_delay, max_delay)
         self.max_total_time = max_total_time
         self.timeout = timeout
-        self.yt_dlp_manager = yt_dlp_manager
         self.progress_parser = progress_parser
         self.no_activity_timeout = no_activity_timeout
         self.start_time: Optional[float] = None

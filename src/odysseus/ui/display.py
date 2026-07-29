@@ -28,13 +28,9 @@ class DisplayManager:
         self.styling = Styling(self.console)
 
     # Delegate to formatters
-    def _create_header_panel(self, title: str, subtitle: Optional[str] = None):
-        """Create a styled header panel (backward compatibility)."""
+    def create_header_panel(self, title: str, subtitle: Optional[str] = None):
+        """Create a styled header panel."""
         return self.formatters.create_header_panel(title, subtitle)
-
-    def _format_score(self, score: int):
-        """Format score with color (backward compatibility)."""
-        return self.formatters.format_score(score)
 
     def display_search_results(self, results: List[SearchResult], search_type: str):
         """Display search results in a beautiful table."""
@@ -87,10 +83,6 @@ class DisplayManager:
     def display_download_info(self, url: str, quality: str, audio_only: bool, save_location: str, metadata: Optional[Dict[str, Any]] = None):
         """Display download information."""
         self.formatters.display_download_info(url, quality, audio_only, save_location, metadata)
-
-    def _format_track_number(self, number: int) -> str:
-        """Format track number with color (backward compatibility)."""
-        return self.formatters.format_track_number(number)
 
     # Delegate to input handlers
     def get_user_selection(self, results: List[SearchResult], prompt: str = "Select a result", allow_reshuffle: bool = True) -> Union[Optional[SearchResult], str]:

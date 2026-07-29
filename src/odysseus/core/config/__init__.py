@@ -18,25 +18,15 @@ from .musicbrainz_config import MUSICBRAINZ_CONFIG
 from .discogs_config import DISCOGS_CONFIG
 from .youtube_config import YOUTUBE_CONFIG
 from .download_config import DOWNLOAD_CONFIG
-from .ui_config import UI_CONFIG
 from .cache_config import CACHE_CONFIG
 from .retry_config import RETRY_CONFIG
 
 # Import other configs
 from .base_config import (
     ERROR_MESSAGES,
-    SUCCESS_MESSAGES,
-    FILE_EXTENSIONS,
-    QUALITY_PRESETS,
-    SEARCH_TYPES,
     LOGGING_CONFIG,
-    API_LIMITS,
-    DEFAULTS,
     VALIDATION_RULES,
     DURATION_VALIDATION_THRESHOLDS,
-    COLORS,
-    MENU_OPTIONS,
-    HELP_TEXT
 )
 
 __all__ = [
@@ -50,20 +40,10 @@ __all__ = [
     'DISCOGS_CONFIG',
     'YOUTUBE_CONFIG',
     'DOWNLOAD_CONFIG',
-    'UI_CONFIG',
     'CACHE_CONFIG',
     'RETRY_CONFIG',
     'ERROR_MESSAGES',
-    'SUCCESS_MESSAGES',
-    'FILE_EXTENSIONS',
-    'QUALITY_PRESETS',
-    'SEARCH_TYPES',
     'LOGGING_CONFIG',
-    'API_LIMITS',
-    'DEFAULTS',
     'VALIDATION_RULES',
     'DURATION_VALIDATION_THRESHOLDS',
-    'COLORS',
-    'MENU_OPTIONS',
-    'HELP_TEXT'
 ]

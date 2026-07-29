@@ -9,9 +9,7 @@ import json
 from typing import Dict, Any, Optional, List, Callable, Tuple
 from pathlib import Path
 from ..core.config import DOWNLOAD_CONFIG
-from ..utils.colors import Colors
 from ..utils.error_formatter import ErrorFormatter
-from .yt_dlp_manager import YtDlpManager
 from .cookie_manager import CookieManager
 from .path_utils import PathUtils
 from .download_strategies import DownloadStrategies
@@ -32,7 +30,6 @@ class YouTubeDownloader:
         self.timeout = DOWNLOAD_CONFIG["TIMEOUT"]
 
         # Initialize helper modules
-        self.yt_dlp_manager = YtDlpManager()
         self.cookie_manager = CookieManager()
         self.path_utils = PathUtils()
         self.download_strategies = DownloadStrategies(self.cookie_manager)
@@ -52,20 +49,6 @@ class YouTubeDownloader:
             timeout=self.timeout,
             progress_parser=ProgressTracker.parse_progress_line,
         )
-
-        # yt-dlp is checked by configuration validation and updated only when
-        # explicitly requested or when a signature failure requires it.
-
-    def update_yt_dlp(self) -> bool:
-        """
-        Manually update yt-dlp.
-
-        Call this method explicitly if a diagnostic recommends an update.
-
-        Returns:
-            True if update was successful, False otherwise
-        """
-        return self.yt_dlp_manager.update()
 
     def _try_get_video_info_with_client(self, url: str, client_type: str, operation_name: str,
                                         extra_args: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
@@ -259,7 +242,7 @@ class YouTubeDownloader:
             if progress_callback:
                 progress_callback({'percent': 100.0, 'status': 'completed', 'speed': None, 'eta': None})
             if not quiet:
-                print(f"{Colors.yellow('⏭')} Skipping download - file already exists: {Colors.blue(str(existing_file))}")
+                print(f"⏭ Skipping download - file already exists: {existing_file}")
             return existing_file, True
         return None
 
@@ -278,11 +261,7 @@ class YouTubeDownloader:
                                    quiet: bool, total_strategies: int) -> Tuple[Optional[Path], Optional[str]]:
         """Execute a single download strategy and return result."""
         if not quiet and not progress_callback:
-            try:
-                from rich.console import Console
-                Console().print(f"[blue]Trying strategy [bold white]{strategy_num}[/bold white]...[/blue]")
-            except ImportError:
-                print(f"Trying strategy {Colors.bold(Colors.white(str(strategy_num)))}...")
+            print(f"Trying strategy {strategy_num}...")
 
         cmd = strategy(url, quality, audio_only, output_template)
         existing_files = {f.name for f in self._get_audio_files(download_dir)}
@@ -296,11 +275,7 @@ class YouTubeDownloader:
         downloaded_file = self._find_downloaded_file(download_dir, existing_files, metadata)
         if downloaded_file:
             if not quiet and not progress_callback:
-                try:
-                    from rich.console import Console
-                    Console().print(f"[bold green]✓[/bold green] Success with strategy {strategy_num}")
-                except ImportError:
-                    print(f"{Colors.green('✅')} Success with strategy {strategy_num}")
+                print(f"✓ Success with strategy {strategy_num}")
             return downloaded_file, None
 
         error_msg = (result.stderr if hasattr(result, 'stderr') and result.stderr
@@ -326,16 +301,16 @@ class YouTubeDownloader:
 
             # Print download info
             if not quiet:
-                print(f"Downloading: {Colors.blue(url)}")
-                print(f"Quality: {Colors.cyan(quality)}")
-                print(f"Audio only: {Colors.cyan(str(audio_only))}")
-                print(f"Save location: {Colors.blue(str(download_dir))}")
+                print(f"Downloading: {url}")
+                print(f"Quality: {quality}")
+                print(f"Audio only: {audio_only}")
+                print(f"Save location: {download_dir}")
                 if metadata:
                     artist = metadata.get('artist', 'Unknown')
                     album = metadata.get('album', 'Unknown')
                     year = metadata.get('year', 'Unknown Year')
                     title = metadata.get('title', 'Unknown Title')
-                    print(f"Organized as: {Colors.green(artist)}/{Colors.yellow(album)} ({Colors.cyan(str(year))})/{Colors.white(title)}")
+                    print(f"Organized as: {artist}/{album} ({year})/{title}")
                 print()
 
             # Try strategies
@@ -483,9 +458,9 @@ class YouTubeDownloader:
                 url
             ]
 
-            print(f"Downloading playlist: {Colors.blue(url)}")
-            print(f"Quality: {Colors.cyan(quality)}")
-            print(f"Save location: {Colors.blue(str(self.download_dir))}")
+            print(f"Downloading playlist: {url}")
+            print(f"Quality: {quality}")
+            print(f"Save location: {self.download_dir}")
             print()
 
             subprocess.run(cmd, check=True)

@@ -7,8 +7,8 @@ from typing import Optional, Dict
 from pathlib import Path
 from ....models.releases import ReleaseInfo
 from ....clients.network_agent import NetworkAgent
+from ....core.cache import MemoryCache
 from ....core.http.http_client import HttpClient
-from ....utils.cache_wrapper import CacheWrapper
 from ...music.identity import select_best_release_match
 
 
@@ -35,18 +35,16 @@ class CoverArtFetcher:
             discogs_client: Shared Discogs provider
             spotify_client: Shared Spotify provider
         """
-        # Initialize cache wrappers
+        # Use the same cache protocol for managed and local caches.
         if cache_manager:
-            cover_art_backend = cache_manager.get_cache("cover_art")
-            discogs_backend = cache_manager.get_cache("discogs_search", backend="memory")
-            self.cover_art_cache = CacheWrapper(cover_art_backend)
-            self.discogs_cache = CacheWrapper(
-                discogs_backend,
-                key_converter=lambda k: ":".join(str(x) for x in k) if isinstance(k, tuple) else str(k)
+            self.cover_art_cache = cache_manager.get_cache("cover_art")
+            self.discogs_cache = cache_manager.get_cache(
+                "discogs_search",
+                backend="memory",
             )
         else:
-            self.cover_art_cache = CacheWrapper(local_cache={})
-            self.discogs_cache = CacheWrapper(local_cache={})
+            self.cover_art_cache = MemoryCache()
+            self.discogs_cache = MemoryCache()
 
         # Initialize network agent and HTTP client
         if network_agent is None:
@@ -321,7 +319,7 @@ class CoverArtFetcher:
             # Create cache key from artist and album
             artist = (release_info.artist or "").lower().strip()
             album = (release_info.title or "").lower().strip()
-            cache_key = (artist, album)
+            cache_key = f"{artist}:{album}"
 
             # Check cache first
             cached_url = self.discogs_cache.get(cache_key)

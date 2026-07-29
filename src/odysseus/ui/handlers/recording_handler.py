@@ -39,7 +39,7 @@ class RecordingHandler(BaseHandler):
 
         console = self.display_manager.console
         console.print()
-        console.print(self.display_manager._create_header_panel(
+        console.print(self.display_manager.create_header_panel(
             f"🎵 {PROJECT_NAME} - Recording Search",
             f"Searching for: {title} by {artist}"
         ))
@@ -77,7 +77,7 @@ class RecordingHandler(BaseHandler):
         search_query = f"{selected_song.artist} {selected_song.title}"
 
         console.print()
-        console.print(self.display_manager._create_header_panel(
+        console.print(self.display_manager.create_header_panel(
             "🔍 SEARCHING YOUTUBE",
             f"Search query: {search_query}"
         ))

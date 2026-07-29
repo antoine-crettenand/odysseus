@@ -68,6 +68,13 @@ def format_duration(seconds: float) -> str:
         return f"{minutes}:{secs:02d}"
 
 
+def format_duration_ms(milliseconds: Optional[int]) -> Optional[str]:
+    """Format a provider duration in milliseconds using the shared formatter."""
+    if not milliseconds or milliseconds < 0:
+        return None
+    return format_duration(milliseconds / 1000)
+
+
 def parse_duration_to_seconds(duration_str: Optional[str]) -> Optional[float]:
     """
     Parse duration string (MM:SS or HH:MM:SS) to seconds.
@@ -93,4 +100,3 @@ def parse_duration_to_seconds(duration_str: Optional[str]) -> Optional[float]:
         pass
     
     return None
-

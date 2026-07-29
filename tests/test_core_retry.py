@@ -7,11 +7,9 @@ from odysseus.core.retry import SubprocessRetryStrategy
 
 
 def test_signature_failure_retries_without_mutating_dependencies():
-    manager = MagicMock()
     strategy = SubprocessRetryStrategy(
         max_retries=1,
         base_delay=0,
-        yt_dlp_manager=manager,
     )
     failure = subprocess.CalledProcessError(
         1,
@@ -27,7 +25,6 @@ def test_signature_failure_retries_without_mutating_dependencies():
         result = strategy.execute_with_progress(["yt-dlp"])
 
     assert result is success
-    manager.force_update.assert_not_called()
 
 
 def test_generic_extraction_error_is_not_misclassified_as_signature_error():

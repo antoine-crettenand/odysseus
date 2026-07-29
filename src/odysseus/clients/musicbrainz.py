@@ -11,6 +11,7 @@ from ..models.song import SongData
 from ..models.search_results import MusicBrainzSong
 from ..models.releases import Track, ReleaseInfo
 from ..core.config import MUSICBRAINZ_CONFIG, ERROR_MESSAGES, DOWNLOADS_DIR
+from ..utils.file_duration_reader import format_duration_ms
 from ..utils.string_utils import normalize_string
 from .base_api_client import BaseAPIClient
 from .path_utils import PathUtils
@@ -38,9 +39,6 @@ class MusicBrainzClient(BaseAPIClient):
             http_client: Optional HttpClient instance (will use global if not provided)
         """
         super().__init__(MUSICBRAINZ_CONFIG, cache_manager, http_client)
-
-        # Track if we should try HTTP fallback (only as last resort)
-        self.use_http_fallback = False
 
         # Initialize path utils for checking existing releases
         self.path_utils = PathUtils()
@@ -620,7 +618,7 @@ class MusicBrainzClient(BaseAPIClient):
                     duration = None
                     for source in [track_data, recording]:
                         if 'length' in source and source['length']:
-                            duration = self._format_duration(source['length'])
+                            duration = format_duration_ms(source['length'])
                             break
 
                     tracks.append(Track(
@@ -647,19 +645,3 @@ class MusicBrainzClient(BaseAPIClient):
         except Exception as e:
             print(f"Error parsing release info: {e}")
             return None
-
-    def _format_duration(self, duration_value: int) -> str:
-        """
-        Format duration to MM:SS format.
-        MusicBrainz API 'length' field is in milliseconds.
-        """
-        if not duration_value:
-            return None
-
-        # MusicBrainz 'length' field is in milliseconds
-        # Convert to seconds (round to nearest second for display)
-        seconds = round(duration_value / 1000)
-        minutes = seconds // 60
-        seconds = seconds % 60
-
-        return f"{minutes:02d}:{seconds:02d}"

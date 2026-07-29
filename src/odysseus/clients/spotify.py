@@ -9,6 +9,7 @@ import base64
 from typing import List, Optional, Dict, Any
 from ..models.releases import Track, ReleaseInfo
 from ..models.search_results import SpotifyTrack
+from ..utils.file_duration_reader import format_duration_ms
 
 
 class SpotifyClient:
@@ -196,7 +197,7 @@ class SpotifyClient:
         artists = track_data.get("artists", [])
         artist_name = artists[0].get("name", default_artist) if artists else default_artist
         duration_ms = track_data.get("duration_ms", 0)
-        duration = self._format_duration(duration_ms) if duration_ms else None
+        duration = format_duration_ms(duration_ms)
 
         track_position = position if position is not None else track_data.get("track_number", 1)
 
@@ -329,17 +330,6 @@ class SpotifyClient:
             return self.get_track_info(url_id)
         else:
             raise ValueError(f"Unsupported Spotify URL type: {url_type}")
-
-    def _format_duration(self, duration_ms: int) -> str:
-        """Format duration from milliseconds to MM:SS format."""
-        if not duration_ms:
-            return None
-
-        total_seconds = duration_ms // 1000
-        minutes = total_seconds // 60
-        seconds = total_seconds % 60
-
-        return f"{minutes}:{seconds:02d}"
 
     def _extract_release_year(self, release_date: Optional[str]) -> Optional[int]:
         """

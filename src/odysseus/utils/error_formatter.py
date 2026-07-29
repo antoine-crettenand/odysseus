@@ -3,8 +3,7 @@ Error formatting utility for consistent error message formatting.
 Consolidates error formatting logic from various modules.
 """
 
-from typing import Optional, Callable, Any
-from ..utils.colors import Colors
+from typing import Optional, Callable
 
 
 class ErrorFormatter:
@@ -32,15 +31,9 @@ class ErrorFormatter:
 
         if not quiet and not progress_callback:
             msg = f"Strategy failed: {error_msg}"
-            try:
-                from rich.console import Console
-                Console().print(f"[bold red]✗[/bold red] {msg}")
-                if has_next:
-                    Console().print("[blue]ℹ[/blue] Trying next strategy...")
-            except ImportError:
-                print(f"{Colors.red('❌')} {msg}")
-                if has_next:
-                    print(f"{Colors.blue('ℹ')} Trying next strategy...")
+            print(f"✗ {msg}")
+            if has_next:
+                print("ℹ Trying next strategy...")
 
         return error_msg
 

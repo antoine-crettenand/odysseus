@@ -89,7 +89,7 @@ class MetadataHandler(BaseHandler):
         
         # Search for release
         console.print()
-        console.print(self.display_manager._create_header_panel(
+        console.print(self.display_manager.create_header_panel(
             "🔍 SEARCHING FOR RELEASE",
             f"Album: {album} by {artist}"
         ))
@@ -232,7 +232,7 @@ class MetadataHandler(BaseHandler):
     ):
         """Apply metadata to list of files."""
         console.print()
-        console.print(self.display_manager._create_header_panel(
+        console.print(self.display_manager.create_header_panel(
             "📝 APPLYING METADATA",
             f"Release: {release_info.title} by {release_info.artist}"
         ))
@@ -363,4 +363,3 @@ class MetadataHandler(BaseHandler):
                 return track
         
         return None
-

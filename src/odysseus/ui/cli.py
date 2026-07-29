@@ -486,7 +486,7 @@ Examples:
             return OperationOutcome.failure(str(e), error=e)
 
         console.print()
-        console.print(self.display_manager._create_header_panel(
+        console.print(self.display_manager.create_header_panel(
             f"📦 {PROJECT_NAME} - Batch Release Processing",
             f"Found {len(entries)} releases to process"
         ))

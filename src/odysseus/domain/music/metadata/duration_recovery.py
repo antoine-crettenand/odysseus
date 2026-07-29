@@ -6,6 +6,7 @@ Recovers missing track durations from MusicBrainz, Spotify, or Discogs.
 from typing import Optional
 from ....models.releases import Track, ReleaseInfo
 from ....models.song import SongData
+from ....utils.file_duration_reader import format_duration_ms
 
 
 class DurationRecoveryService:
@@ -137,7 +138,7 @@ class DurationRecoveryService:
 
             data = self.musicbrainz_client._make_request(url, params)
             if data and 'length' in data and data['length']:
-                return self.musicbrainz_client._format_duration(data['length'])
+                return format_duration_ms(data['length'])
         except Exception:
             pass
 
@@ -160,7 +161,7 @@ class DurationRecoveryService:
                 # Use the first result
                 duration_ms = tracks[0].get('duration_ms', 0)
                 if duration_ms:
-                    return self.spotify_client._format_duration(duration_ms)
+                    return format_duration_ms(duration_ms)
         except Exception:
             pass
 

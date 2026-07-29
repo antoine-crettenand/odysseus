@@ -1,8 +1,7 @@
-"""Tests for cache backends and their compatibility wrapper."""
+"""Tests for cache backends."""
 
 from odysseus.core.cache import MemoryCache, TTLCache
 from odysseus.clients.base_api_client import BaseAPIClient
-from odysseus.utils.cache_wrapper import CacheWrapper
 
 
 def test_memory_cache_update_does_not_evict_another_key():
@@ -19,22 +18,12 @@ def test_memory_cache_update_does_not_evict_another_key():
 
 def test_backend_can_distinguish_cached_none_from_missing_key():
     cache = TTLCache()
-    wrapper = CacheWrapper(cache_backend=cache)
 
-    wrapper.set("negative-result", None)
+    cache.set("negative-result", None)
 
-    assert wrapper.has("negative-result") is True
-    assert wrapper.get("negative-result") is None
-    assert wrapper.has("missing") is False
-
-
-def test_wrapper_preserves_provided_empty_dictionary():
-    local_cache = {}
-    wrapper = CacheWrapper(local_cache=local_cache)
-
-    wrapper.set("key", "value")
-
-    assert local_cache == {"key": "value"}
+    assert cache.has("negative-result") is True
+    assert cache.get("negative-result") is None
+    assert cache.has("missing") is False
 
 
 def test_recently_expired_value_is_returned_when_refresh_fails():

@@ -50,7 +50,7 @@ class ReleaseHandler(BaseHandler):
 
         console = self.display_manager.console
         console.print()
-        console.print(self.display_manager._create_header_panel(
+        console.print(self.display_manager.create_header_panel(
             f"💿 {PROJECT_NAME} - Release Search",
             f"Searching for release: {album} by {artist}"
         ))
@@ -110,7 +110,7 @@ class ReleaseHandler(BaseHandler):
         """Search and download tracks from a release."""
         console = self.display_manager.console
         console.print()
-        console.print(self.display_manager._create_header_panel(
+        console.print(self.display_manager.create_header_panel(
             "📥 RELEASE DOWNLOAD",
             f"Release: {selected_release.album} by {selected_release.artist}"
         ))

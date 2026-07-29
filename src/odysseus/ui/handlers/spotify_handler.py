@@ -73,7 +73,7 @@ class SpotifyHandler(BaseHandler):
         """Handle Spotify URL parsing and track download (recordings mode)."""
         console = self.display_manager.console
         console.print()
-        console.print(self.display_manager._create_header_panel(
+        console.print(self.display_manager.create_header_panel(
             f"🎵 {PROJECT_NAME} - Spotify Playlist/Album",
             f"Parsing Spotify URL: {url}"
         ))
@@ -110,7 +110,7 @@ class SpotifyHandler(BaseHandler):
 
         # Display the tracks
         console.print()
-        console.print(self.display_manager._create_header_panel(
+        console.print(self.display_manager.create_header_panel(
             "📋 SPOTIFY TRACKS",
             f"{release_info.title} by {release_info.artist}"
         ))
@@ -133,7 +133,7 @@ class SpotifyHandler(BaseHandler):
 
         # Download the selected tracks
         console.print()
-        console.print(self.display_manager._create_header_panel(
+        console.print(self.display_manager.create_header_panel(
             "📥 DOWNLOADING TRACKS",
             f"Downloading {len(track_numbers)} track{'s' if len(track_numbers) != 1 else ''} from Spotify playlist/album"
         ))
@@ -153,7 +153,7 @@ class SpotifyHandler(BaseHandler):
         """Handle Spotify URL parsing and release selection (releases mode)."""
         console = self.display_manager.console
         console.print()
-        console.print(self.display_manager._create_header_panel(
+        console.print(self.display_manager.create_header_panel(
             f"💿 {PROJECT_NAME} - Spotify Releases",
             f"Extracting releases from Spotify URL: {url}"
         ))
@@ -209,7 +209,7 @@ class SpotifyHandler(BaseHandler):
 
         # Display the releases
         console.print()
-        console.print(self.display_manager._create_header_panel(
+        console.print(self.display_manager.create_header_panel(
             "📦 SPOTIFY RELEASES",
             f"Found {len(releases)} unique release{'s' if len(releases) != 1 else ''} in playlist"
         ))

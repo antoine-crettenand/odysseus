@@ -39,7 +39,7 @@ class DiscographyHandler(BaseHandler):
             subtitle += f" (Type: {release_type})"
         if include_compilations:
             subtitle += " (including compilations)"
-        console.print(self.display_manager._create_header_panel(
+        console.print(self.display_manager.create_header_panel(
             f"📚 {PROJECT_NAME} - Discography Browse",
             subtitle
         ))
@@ -106,7 +106,7 @@ class DiscographyHandler(BaseHandler):
 
         for i, release in enumerate(releases, 1):
             console.print()
-            console.print(self.display_manager._create_header_panel(
+            console.print(self.display_manager.create_header_panel(
                 "📥 RELEASE DOWNLOAD",
                 f"Release {i}/{len(releases)}: {release.album} by {release.artist}"
             ))
