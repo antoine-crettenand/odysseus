@@ -4,7 +4,6 @@ Strategy for downloading full album videos and splitting them into tracks.
 
 import time
 import threading
-from itertools import combinations
 from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
 from .base_strategy import BaseDownloadStrategy
@@ -210,34 +209,10 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                 )
             return []
 
-        best_indices = None
-        best_score = -1.0
-        for indices in combinations(range(chapter_count), track_count):
-            pair_scores = []
-            for chapter_index, track in zip(indices, ordered_tracks):
-                title_score = self._chapter_title_score(
-                    ordered_chapters[chapter_index].get("title", ""),
-                    track.title,
-                )
-                duration_score = self._chapter_duration_score(
-                    ordered_chapters,
-                    chapter_index,
-                    track,
-                )
-                if title_score is None and duration_score is None:
-                    pair_score = 0.0
-                elif title_score is None:
-                    pair_score = duration_score
-                elif duration_score is None:
-                    pair_score = title_score
-                else:
-                    pair_score = title_score * 0.7 + duration_score * 0.3
-                pair_scores.append(pair_score)
-
-            score = sum(pair_scores) / len(pair_scores)
-            if score > best_score:
-                best_score = score
-                best_indices = indices
+        best_indices, best_score = self._best_chapter_alignment(
+            ordered_chapters,
+            ordered_tracks,
+        )
 
         if best_indices is None or best_score < 0.60:
             if not silent:
@@ -278,6 +253,96 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                 icon="✓",
             )
         return timestamps
+
+    def _chapter_pair_score(
+        self,
+        chapters: List[Dict[str, Any]],
+        chapter_index: int,
+        track,
+    ) -> float:
+        """Score one ordered chapter/track pairing."""
+        title_score = self._chapter_title_score(
+            chapters[chapter_index].get("title", ""),
+            track.title,
+        )
+        duration_score = self._chapter_duration_score(
+            chapters,
+            chapter_index,
+            track,
+        )
+        if title_score is None and duration_score is None:
+            return 0.0
+        if title_score is None:
+            return duration_score
+        if duration_score is None:
+            return title_score
+        return title_score * 0.7 + duration_score * 0.3
+
+    def _best_chapter_alignment(
+        self,
+        ordered_chapters: List[Dict[str, Any]],
+        ordered_tracks: List,
+    ) -> Tuple[Optional[Tuple[int, ...]], float]:
+        """
+        Align tracks to an order-preserving chapter subsequence.
+
+        Uses O(tracks * chapters) dynamic programming instead of enumerating
+        combinations, so large albums with a few intro/outro chapters stay safe.
+        """
+        track_count = len(ordered_tracks)
+        chapter_count = len(ordered_chapters)
+        if not track_count or chapter_count < track_count:
+            return None, -1.0
+
+        neg = float("-inf")
+        dp = [[neg] * (chapter_count + 1) for _ in range(track_count + 1)]
+        choice = [[None] * (chapter_count + 1) for _ in range(track_count + 1)]
+        dp[0][0] = 0.0
+        for chapter_used in range(1, chapter_count + 1):
+            dp[0][chapter_used] = 0.0
+            choice[0][chapter_used] = "skip"
+
+        for track_used in range(1, track_count + 1):
+            for chapter_used in range(track_used, chapter_count + 1):
+                # Skip this chapter (keep the same number of matched tracks).
+                if dp[track_used][chapter_used - 1] > dp[track_used][chapter_used]:
+                    dp[track_used][chapter_used] = dp[track_used][chapter_used - 1]
+                    choice[track_used][chapter_used] = "skip"
+
+                previous = dp[track_used - 1][chapter_used - 1]
+                if previous == neg:
+                    continue
+                candidate = previous + self._chapter_pair_score(
+                    ordered_chapters,
+                    chapter_used - 1,
+                    ordered_tracks[track_used - 1],
+                )
+                if candidate > dp[track_used][chapter_used]:
+                    dp[track_used][chapter_used] = candidate
+                    choice[track_used][chapter_used] = "match"
+
+        best_sum = dp[track_count][chapter_count]
+        if best_sum == neg:
+            return None, -1.0
+
+        indices: List[int] = []
+        track_used = track_count
+        chapter_used = chapter_count
+        while track_used > 0:
+            action = choice[track_used][chapter_used]
+            if action == "match":
+                indices.append(chapter_used - 1)
+                track_used -= 1
+                chapter_used -= 1
+            elif action == "skip":
+                chapter_used -= 1
+            else:
+                return None, -1.0
+
+        indices.reverse()
+        if len(indices) != track_count:
+            return None, -1.0
+        return tuple(indices), best_sum / track_count
 
     def download(
         self,
@@ -371,21 +436,20 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                         full_video_path, track_timestamps, output_dir, metadata_list, silent
                     )
 
-                    if split_files:
+                    successful_splits = [
+                        (path, timestamp_info)
+                        for path, timestamp_info in zip(split_files, track_timestamps)
+                        if path is not None
+                    ]
+                    if successful_splits:
                         # A split file is a successful download even when applying
                         # tags or cover art subsequently fails.
-                        split_track_numbers = [
-                            timestamp_info["track"].position
-                            for timestamp_info in track_timestamps
-                        ]
-                        completed_tracks = self.path_manager.get_existing_tracks(
-                            release_info,
-                            split_track_numbers
-                        )
-                        for track_number in completed_tracks:
-                            self._mark_track_downloaded(track_number)
+                        for path, timestamp_info in successful_splits:
+                            self._mark_track_downloaded(
+                                timestamp_info["track"].position
+                            )
 
-                        # Apply metadata to split files
+                        # Apply metadata to split files (index-aligned; None = failed)
                         return self._apply_metadata_to_split_files(
                             split_files, track_timestamps, release_info, cover_art_data,
                             existing_files_before_split, youtube_url, silent, styling, console
@@ -680,7 +744,7 @@ class FullAlbumStrategy(BaseDownloadStrategy):
         output_dir: Path,
         metadata_list: List[Dict[str, Any]],
         silent: bool
-    ) -> List[Path]:
+    ) -> List[Optional[Path]]:
         """Split video into tracks."""
         if not silent:
             console = self.display_manager.console
@@ -707,19 +771,21 @@ class FullAlbumStrategy(BaseDownloadStrategy):
         return split_files
 
     def _cleanup_temp_files(self, full_video_path: Path) -> None:
-        """Clean up temporary video file."""
+        """Clean up the downloaded full-album source file after splitting."""
+        if not full_video_path:
+            return
         try:
-            temp_dir = self.download_service.downloads_dir / ".temp_album"
             if full_video_path.exists():
                 full_video_path.unlink()
-            if temp_dir.exists():
-                temp_dir.rmdir()
-        except Exception:
-            pass  # Ignore cleanup errors
+        except OSError as error:
+            print(
+                f"Warning: could not remove temporary album file "
+                f"{full_video_path}: {error}"
+            )
 
     def _apply_metadata_to_split_files(
         self,
-        split_files: List[Path],
+        split_files: List[Optional[Path]],
         track_timestamps: List[Dict[str, Any]],
         release_info: ReleaseInfo,
         cover_art_data: Optional[bytes],
@@ -729,7 +795,7 @@ class FullAlbumStrategy(BaseDownloadStrategy):
         styling,
         console
     ) -> Tuple[int, int]:
-        """Apply metadata to all split files."""
+        """Apply metadata to all successfully split files."""
         downloaded_count = 0
         skipped_count = 0
         failed_count = 0
@@ -748,6 +814,15 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                     metadata_task_id,
                     description=f"Applying metadata: {track.title[:40]}"
                 )
+
+                if split_file is None:
+                    failed_count += 1
+                    if not silent:
+                        styling.log_warning(
+                            f"Could not split track: {track.title}"
+                        )
+                    metadata_progress.update(metadata_task_id, advance=1)
+                    continue
 
                 # Check if file already existed
                 file_existed = any(
@@ -794,6 +869,6 @@ class FullAlbumStrategy(BaseDownloadStrategy):
             if skipped_count > 0:
                 styling.log_info(f"Skipped {skipped_count} existing track{'s' if skipped_count != 1 else ''}", icon="⏭")
             if failed_count > 0:
-                styling.log_warning(f"Failed to apply metadata to {failed_count} track(s)")
+                styling.log_warning(f"Failed to split or tag {failed_count} track(s)")
 
         return downloaded_count, failed_count

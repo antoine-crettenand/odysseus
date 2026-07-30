@@ -8,7 +8,7 @@ import subprocess
 import json
 from typing import Dict, Any, Optional, List, Callable, Tuple
 from pathlib import Path
-from ..core.config import DOWNLOAD_CONFIG
+from ..core.config import DOWNLOAD_CONFIG, RETRY_CONFIG
 from ..utils.error_formatter import ErrorFormatter
 from .cookie_manager import CookieManager
 from .path_utils import PathUtils
@@ -27,7 +27,7 @@ class YouTubeDownloader:
 
         self.default_quality = DOWNLOAD_CONFIG["DEFAULT_QUALITY"]
         self.audio_format = DOWNLOAD_CONFIG["AUDIO_FORMAT"]
-        self.timeout = DOWNLOAD_CONFIG["TIMEOUT"]
+        self.timeout = RETRY_CONFIG["SUBPROCESS_TIMEOUT"]
 
         # Initialize helper modules
         self.cookie_manager = CookieManager()
@@ -35,10 +35,10 @@ class YouTubeDownloader:
         self.download_strategies = DownloadStrategies(self.cookie_manager)
 
         # Retry configuration for robust downloads
-        self.max_retries = 5
-        self.base_retry_delay = 2.0
-        self.max_retry_delay = 60.0
-        self.max_total_time = 1800
+        self.max_retries = RETRY_CONFIG["SUBPROCESS_MAX_RETRIES"]
+        self.base_retry_delay = RETRY_CONFIG["SUBPROCESS_BASE_DELAY"]
+        self.max_retry_delay = RETRY_CONFIG["SUBPROCESS_MAX_DELAY"]
+        self.max_total_time = RETRY_CONFIG["SUBPROCESS_MAX_TOTAL_TIME"]
 
         # Initialize retry strategy
         self.retry_strategy = SubprocessRetryStrategy(
@@ -51,8 +51,12 @@ class YouTubeDownloader:
         )
 
     def cancel_active_downloads(self) -> None:
-        """Terminate active yt-dlp subprocesses."""
+        """Terminate active yt-dlp subprocesses and stop further retries."""
         self.retry_strategy.cancel_active()
+
+    def reset_cancellation(self) -> None:
+        """Allow a new download batch after a previous cancellation."""
+        self.retry_strategy.reset_cancellation()
 
     def _try_get_video_info_with_client(self, url: str, client_type: str, operation_name: str,
                                         extra_args: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:

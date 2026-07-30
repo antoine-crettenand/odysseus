@@ -3,6 +3,7 @@ Polymorphic Network Agent Module
 A network agent that adapts headers and connection strategies based on error patterns.
 """
 
+import threading
 import requests
 from typing import Dict, List, Optional, Any
 from urllib3.exceptions import ProtocolError
@@ -41,6 +42,7 @@ class NetworkAgent:
         # Initialize header strategies
         self.strategies: List[HeaderStrategy] = []
         self.current_strategy_index = 0
+        self._strategy_lock = threading.Lock()
         
         # Create default strategies
         self._initialize_strategies()
@@ -217,25 +219,27 @@ class NetworkAgent:
         Returns:
             True if switched to a new strategy, False if all strategies exhausted
         """
-        if error:
-            self.error_history.append({
-                'error_type': type(error).__name__,
-                'error_message': str(error),
-                'strategy_before': self.get_current_strategy_name(),
-                'attempt': len(self.error_history) + 1
-            })
-        
-        if self.current_strategy_index < len(self.strategies) - 1:
-            self.current_strategy_index += 1
-            return True
-        else:
+        with self._strategy_lock:
+            if error:
+                self.error_history.append({
+                    'error_type': type(error).__name__,
+                    'error_message': str(error),
+                    'strategy_before': self.get_current_strategy_name(),
+                    'attempt': len(self.error_history) + 1
+                })
+
+            if self.current_strategy_index < len(self.strategies) - 1:
+                self.current_strategy_index += 1
+                return True
+
             # Reset to first strategy if we've tried all
             self.current_strategy_index = 0
             return False
     
     def reset_to_default(self):
         """Reset to the default strategy."""
-        self.current_strategy_index = 0
+        with self._strategy_lock:
+            self.current_strategy_index = 0
     
     def add_strategy(self, name: str, headers: Dict[str, str]):
         """
@@ -245,7 +249,8 @@ class NetworkAgent:
             name: Name of the strategy
             headers: Headers dictionary for this strategy
         """
-        self.strategies.append(HeaderStrategy(name, headers))
+        with self._strategy_lock:
+            self.strategies.append(HeaderStrategy(name, headers))
     
     def update_session_headers(self, session: requests.Session):
         """

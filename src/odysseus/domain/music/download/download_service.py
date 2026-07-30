@@ -169,6 +169,10 @@ class DownloadService:
         if not requests:
             return []
 
+        reset_cancellation = getattr(self.downloader, "reset_cancellation", None)
+        if reset_cancellation:
+            reset_cancellation()
+
         if workers == 1 or len(requests) == 1:
             return [
                 self._download_request(
@@ -293,7 +297,7 @@ class DownloadService:
         output_dir: Path,
         metadata_list: List[Dict[str, Any]],
         progress_callback: Optional[Callable] = None
-    ) -> List[Path]:
+    ) -> List[Optional[Path]]:
         """Split a full album video into individual tracks."""
         return self.downloader.split_video_into_tracks(
             video_path, track_timestamps, output_dir, metadata_list, progress_callback

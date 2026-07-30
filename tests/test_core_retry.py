@@ -36,6 +36,18 @@ def test_generic_extraction_error_is_not_misclassified_as_signature_error():
     assert reason == "Unknown error"
 
 
+def test_deleted_and_removed_videos_are_not_retryable():
+    for message in (
+        "ERROR: video unavailable",
+        "This video has been deleted",
+        "Content has been removed",
+        "The video does not exist",
+    ):
+        retryable, reason = SubprocessRetryStrategy.is_retryable_error(message)
+        assert retryable is False
+        assert reason == "Unavailable"
+
+
 def test_total_time_budget_is_reset_for_each_operation():
     strategy = SubprocessRetryStrategy(max_retries=0)
     success = subprocess.CompletedProcess(["yt-dlp"], 0, stdout="ok", stderr="")

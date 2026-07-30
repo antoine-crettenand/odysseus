@@ -12,6 +12,7 @@ from email.utils import parsedate_to_datetime
 from typing import Dict, Any, Optional, Callable, Tuple
 from .session_manager import SessionManager
 from ...clients.network_agent import NetworkAgent
+from ..config import RETRY_CONFIG
 from ..retry import HttpRetryStrategy
 
 
@@ -20,6 +21,7 @@ class HttpClient:
 
     _TRANSIENT_STATUS_CODES = {408, 425, 500, 502, 503, 504}
     _MAX_INLINE_RATE_LIMIT_WAIT = 10.0
+    _CIRCUIT_ACCEPTED_FAILURE_CODES = {401, 403}
 
     def __init__(
         self,
@@ -45,6 +47,7 @@ class HttpClient:
         self.session_manager = session_manager or SessionManager(network_agent=network_agent)
         self.default_timeout = default_timeout
         self.default_request_delay = default_request_delay
+        self._session_request_delays: Dict[str, float] = {}
         self._last_request_times: Dict[str, float] = {}
         self._request_locks: Dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
@@ -54,8 +57,16 @@ class HttpClient:
         self.circuit_breaker_threshold = max(1, circuit_breaker_threshold)
         self.circuit_breaker_cooldown = max(0.0, circuit_breaker_cooldown)
 
-        # Initialize retry strategy
-        self.retry_strategy = HttpRetryStrategy(max_retries=3, base_delay=2.0)
+        # Initialize retry strategy from shared retry config
+        self.retry_strategy = HttpRetryStrategy(
+            max_retries=RETRY_CONFIG["HTTP_MAX_RETRIES"],
+            base_delay=RETRY_CONFIG["HTTP_BASE_DELAY"],
+            max_delay=RETRY_CONFIG["HTTP_MAX_DELAY"],
+        )
+
+    def set_session_request_delay(self, session_name: str, delay: float) -> None:
+        """Override the inter-request delay for one named session."""
+        self._session_request_delays[session_name] = max(0.0, float(delay))
 
     def _get_request_lock(self, session_name: str) -> threading.Lock:
         """Return a per-provider lock used for pacing and retry coordination."""
@@ -123,15 +134,27 @@ class HttpClient:
         """Spread retries to avoid synchronized request bursts."""
         return random.uniform(0.0, max(0.0, delay))
 
-    def _apply_request_delay(self, session_name: str) -> None:
-        """Sleep so successive requests on a session respect ``default_request_delay``."""
-        if self.default_request_delay <= 0:
+    def _apply_request_delay(
+        self,
+        session_name: str,
+        request_delay: Optional[float] = None,
+    ) -> None:
+        """Sleep so successive requests on a session respect its pacing delay."""
+        delay = (
+            request_delay
+            if request_delay is not None
+            else self._session_request_delays.get(
+                session_name,
+                self.default_request_delay,
+            )
+        )
+        if delay <= 0:
             return
         last_request = self._last_request_times.get(session_name)
         if last_request is None:
             return
         elapsed = time.monotonic() - last_request
-        remaining = self.default_request_delay - elapsed
+        remaining = delay - elapsed
         if remaining > 0:
             time.sleep(remaining)
 
@@ -149,6 +172,7 @@ class HttpClient:
         session_name: str = "default",
         accepted_status_codes: Tuple[int, ...] = (),
         headers: Optional[Dict[str, str]] = None,
+        request_delay: Optional[float] = None,
     ) -> Optional[requests.Response]:
         """
         Make a GET request with retry logic.
@@ -167,6 +191,7 @@ class HttpClient:
             accepted_status_codes: Error status codes to return to the caller
                 instead of converting them to a failed request
             headers: Optional per-request headers
+            request_delay: Optional per-call pacing override in seconds
 
         Returns:
             Response object, or None if failed
@@ -190,7 +215,7 @@ class HttpClient:
             for attempt in range(max_retries + 1):
                 try:
                     # Pace requests across attempts (including the first after prior calls)
-                    self._apply_request_delay(session_name)
+                    self._apply_request_delay(session_name, request_delay)
 
                     response = session.get(
                         url,
@@ -242,6 +267,13 @@ class HttpClient:
                         continue
 
                     if response.status_code in accepted_status_codes:
+                        # Auth/forbidden denials should open the provider circuit
+                        # instead of being treated as quiet successes forever.
+                        if response.status_code in self._CIRCUIT_ACCEPTED_FAILURE_CODES:
+                            self._record_terminal_failure(
+                                session_name,
+                                f"HTTP {response.status_code}",
+                            )
                         return response
 
                     response.raise_for_status()
@@ -309,6 +341,7 @@ class HttpClient:
         rate_limit_wait: int = 60,
         session_name: str = "default",
         headers: Optional[Dict[str, str]] = None,
+        request_delay: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Make a GET request and return JSON response.
@@ -324,11 +357,12 @@ class HttpClient:
             rate_limit_codes: HTTP status codes that indicate rate limiting
             rate_limit_wait: Seconds to wait when rate limited
             session_name: Session name identifier
+            request_delay: Optional per-call pacing override in seconds
 
         Returns:
             JSON response as dict, or None if failed
         """
-        max_retries = 1 if reduced_retries else 3
+        max_retries = 1 if reduced_retries else RETRY_CONFIG["HTTP_MAX_RETRIES"]
 
         response = self.get(
             url=url,
@@ -342,6 +376,7 @@ class HttpClient:
             rate_limit_wait=rate_limit_wait,
             session_name=session_name,
             headers=headers,
+            request_delay=request_delay,
         )
 
         if response is None:

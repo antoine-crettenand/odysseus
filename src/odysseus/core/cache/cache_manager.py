@@ -6,6 +6,7 @@ Manages multiple cache instances with different TTLs and backends.
 from typing import Dict, Optional
 import threading
 from .cache_backends import CacheBackend, TTLCache, MemoryCache
+from ..config import CACHE_CONFIG
 
 
 class CacheManager:
@@ -16,10 +17,10 @@ class CacheManager:
     Provides a unified interface for caching across the application.
     """
 
-    # Default TTL configurations
-    DEFAULT_TTL_SEARCH = 3600  # 1 hour
-    DEFAULT_TTL_RELEASE_INFO = 7200  # 2 hours
-    DEFAULT_TTL_COVER_ART = 86400  # 24 hours
+    # Default TTL configurations (sourced from CACHE_CONFIG)
+    DEFAULT_TTL_SEARCH = CACHE_CONFIG["SEARCH_TTL"]
+    DEFAULT_TTL_RELEASE_INFO = CACHE_CONFIG["RELEASE_INFO_TTL"]
+    DEFAULT_TTL_COVER_ART = CACHE_CONFIG["COVER_ART_TTL"]
 
     def __init__(self):
         """Initialize cache manager."""
@@ -29,7 +30,7 @@ class CacheManager:
             "search": self.DEFAULT_TTL_SEARCH,
             "release_info": self.DEFAULT_TTL_RELEASE_INFO,
             "cover_art": self.DEFAULT_TTL_COVER_ART,
-            "default": 3600
+            "default": CACHE_CONFIG["DEFAULT_TTL"],
         }
 
     def get_cache(

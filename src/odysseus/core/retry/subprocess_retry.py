@@ -51,6 +51,15 @@ class SubprocessRetryStrategy(RetryStrategy):
         self.no_activity_timeout = no_activity_timeout
         self._active_processes = set()
         self._active_processes_lock = threading.Lock()
+        self._cancel_event = threading.Event()
+
+    def reset_cancellation(self) -> None:
+        """Clear a previous cancellation so a new batch can run."""
+        self._cancel_event.clear()
+
+    def is_cancelled(self) -> bool:
+        """Return whether cancellation was requested."""
+        return self._cancel_event.is_set()
 
     @staticmethod
     def is_retryable_error(error_output: str) -> Tuple[bool, Optional[str]]:
@@ -64,6 +73,22 @@ class SubprocessRetryStrategy(RetryStrategy):
             Tuple of (is_retryable, reason)
         """
         error_lower = error_output.lower()
+
+        # Explicit cancellation - never retry
+        if "cancelled" in error_lower:
+            return False, "Cancelled"
+
+        # Permanently unavailable media - fail fast
+        unavailable_markers = (
+            "video unavailable",
+            "private video",
+            "deleted",
+            "removed",
+            "not available",
+            "does not exist",
+        )
+        if any(marker in error_lower for marker in unavailable_markers):
+            return False, "Unavailable"
 
         # Connection errors - definitely retryable
         if any(x in error_lower for x in ['connection', 'network', 'timeout', 'timed out']):
@@ -100,6 +125,9 @@ class SubprocessRetryStrategy(RetryStrategy):
         Returns:
             True if retry should be attempted
         """
+        if self._cancel_event.is_set():
+            return False
+
         # Check if we've exceeded max retries
         if context.attempt >= self.max_retries:
             return False
@@ -238,6 +266,7 @@ class SubprocessRetryStrategy(RetryStrategy):
 
     def cancel_active(self) -> None:
         """Terminate every subprocess currently owned by this strategy."""
+        self._cancel_event.set()
         with self._active_processes_lock:
             processes = list(self._active_processes)
 
@@ -258,11 +287,29 @@ class SubprocessRetryStrategy(RetryStrategy):
                 except OSError:
                     pass
 
+    def _raise_if_cancelled(self, cmd: list) -> None:
+        if self._cancel_event.is_set():
+            raise subprocess.CalledProcessError(
+                -1,
+                cmd,
+                output="",
+                stderr="cancelled",
+            )
+
+    def _interruptible_sleep(self, delay: float, cmd: list) -> None:
+        """Sleep unless cancellation is requested first."""
+        if delay <= 0:
+            self._raise_if_cancelled(cmd)
+            return
+        if self._cancel_event.wait(timeout=delay):
+            self._raise_if_cancelled(cmd)
+
     def _run_attempt(
         self,
         cmd: list,
         progress_callback: Optional[Callable],
     ) -> subprocess.CompletedProcess:
+        self._raise_if_cancelled(cmd)
         if progress_callback and self.progress_parser:
             return self._run_streaming(cmd, progress_callback)
         return subprocess.run(
@@ -302,6 +349,8 @@ class SubprocessRetryStrategy(RetryStrategy):
 
         for attempt in range(self.max_retries + 1):
             try:
+                self._raise_if_cancelled(cmd)
+
                 # Update progress callback if provided
                 if progress_callback:
                     progress_callback({
@@ -349,7 +398,7 @@ class SubprocessRetryStrategy(RetryStrategy):
                 if not quiet:
                     print(f"Retrying {operation_name} (attempt {attempt + 1}/{self.max_retries}) after {delay:.1f}s...")
 
-                time.sleep(delay)
+                self._interruptible_sleep(delay, cmd)
 
             except subprocess.TimeoutExpired as e:
                 last_exception = e
@@ -370,7 +419,7 @@ class SubprocessRetryStrategy(RetryStrategy):
                 if not quiet:
                     print(f"Timeout on {operation_name}, retrying (attempt {attempt + 1}/{self.max_retries}) after {delay:.1f}s...")
 
-                time.sleep(delay)
+                self._interruptible_sleep(delay, cmd)
 
             except Exception as e:
                 last_exception = e
@@ -391,7 +440,7 @@ class SubprocessRetryStrategy(RetryStrategy):
                 if not quiet:
                     print(f"Error on {operation_name}, retrying (attempt {attempt + 1}/{self.max_retries}) after {delay:.1f}s...")
 
-                time.sleep(delay)
+                self._interruptible_sleep(delay, cmd)
 
         # Should never reach here, but just in case
         if last_exception:

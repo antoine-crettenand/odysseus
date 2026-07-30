@@ -15,6 +15,22 @@ from ...music.identity import select_best_release_match
 class CoverArtFetcher:
     """Service for fetching cover art from various sources."""
 
+    @staticmethod
+    def _is_image_payload(data: Optional[bytes]) -> bool:
+        """Return whether bytes look like a supported image payload."""
+        if not data or len(data) < 12:
+            return False
+        if data.startswith(b"\xff\xd8\xff"):
+            return True
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return True
+        if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+            return True
+        # WebP: RIFF....WEBP
+        if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+            return True
+        return False
+
     def __init__(
         self,
         network_agent=None,
@@ -96,9 +112,13 @@ class CoverArtFetcher:
         # Check cache first
         if use_cache and self.cover_art_cache.has(url):
             cached_data = self.cover_art_cache.get(url)
-            if cached_data is not None and console:
-                console.print(f"[dim blue]ℹ[/dim blue] [dim]Using cached cover art from URL ({len(cached_data)} bytes)[/dim]")
-            return cached_data
+            if cached_data is None:
+                return None
+            if self._is_image_payload(cached_data):
+                if console:
+                    console.print(f"[dim blue]ℹ[/dim blue] [dim]Using cached cover art from URL ({len(cached_data)} bytes)[/dim]")
+                return cached_data
+            # Stale non-image payload — fall through and refetch.
 
         try:
             response = self.http_client.get(
@@ -118,6 +138,15 @@ class CoverArtFetcher:
                 return None
 
             if response.status_code == 200:
+                if not self._is_image_payload(response.content):
+                    self._handle_fetch_error(
+                        url,
+                        "Cover art URL returned a non-image payload",
+                        console,
+                        use_cache,
+                        cache_negative=False,
+                    )
+                    return None
                 if console:
                     console.print(f"[dim blue]ℹ[/dim blue] [dim]Fetched cover art from URL ({len(response.content)} bytes)[/dim]")
                 if use_cache:
@@ -208,6 +237,8 @@ class CoverArtFetcher:
                         if image_url:
                             img_response = self.http_client.get(image_url, timeout=10, max_retries=3)
                             if img_response and img_response.status_code == 200:
+                                if not self._is_image_payload(img_response.content):
+                                    continue
                                 if console:
                                     prefix = "front" if image.get('front') else "first available"
                                     console.print(f"[dim blue]ℹ[/dim blue] [dim]Fetched {prefix} cover art ({len(img_response.content)} bytes)[/dim]")

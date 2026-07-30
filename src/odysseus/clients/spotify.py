@@ -29,6 +29,10 @@ class SpotifyClient:
                 default_request_delay=0.1,
             )
         self.http_client = http_client
+        self.request_delay = 0.1
+        if hasattr(self.http_client, "set_session_request_delay"):
+            self.http_client.set_session_request_delay("spotify", self.request_delay)
+            self.http_client.set_session_request_delay("spotify-user", self.request_delay)
 
         # Try to get credentials from environment
         import os
@@ -107,6 +111,7 @@ class SpotifyClient:
             rate_limit_wait=30,
             session_name="spotify",
             accepted_status_codes=(401,),
+            request_delay=self.request_delay,
         )
         if response is None:
             return None
@@ -396,6 +401,7 @@ class SpotifyClient:
                 session_name="spotify-user",
                 accepted_status_codes=(401,),
                 handle_rate_limit=True,
+                request_delay=self.request_delay,
             )
             if response is None:
                 raise RuntimeError("Failed to fetch Spotify user collection")

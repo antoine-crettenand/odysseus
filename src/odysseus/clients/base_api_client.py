@@ -108,6 +108,7 @@ class BaseAPIClient:
             rate_limit_codes=(429,),
             rate_limit_wait=rate_limit_wait,
             session_name=session_name,
+            request_delay=self.request_delay,
         )
 
     def _make_request_response(self, url: str, params: Dict[str, Any], batch_progress: Optional[Tuple[int, int]] = None,
@@ -148,6 +149,7 @@ class BaseAPIClient:
             rate_limit_wait=rate_limit_wait,
             session_name=session_name,
             accepted_status_codes=accepted_status_codes,
+            request_delay=self.request_delay,
         )
 
     def _get_cached_or_fetch(

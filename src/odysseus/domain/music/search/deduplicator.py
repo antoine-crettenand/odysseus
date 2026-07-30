@@ -19,15 +19,26 @@ class ResultDeduplicator:
         """
         self.year_validator = year_validator
 
-    def _create_deduplication_key(self, result: MusicBrainzSong) -> Tuple[str, str]:
+    def _create_deduplication_key(
+        self,
+        result: MusicBrainzSong,
+        *,
+        recordings: bool = False,
+    ) -> Tuple[str, str]:
         """
-        Create a deduplication key for a search result (album + artist only, no year).
-        For releases: uses album (or title if album is empty) and artist
-        For recordings: uses title and artist (album is optional)
+        Create a deduplication key for a search result (no year).
+
+        For releases: uses album (or title if album is empty) and artist.
+        For recordings: uses title and artist (album is ignored so distinct
+        tracks from the same release stay distinct).
         """
         title = normalize_string(result.title)
         album = normalize_string(result.album)
         artist = normalize_string(result.artist)
+
+        if recordings:
+            primary_key = title or album or ""
+            return (primary_key, artist)
 
         if album and title and album == title:
             primary_key = album
@@ -80,10 +91,14 @@ class ResultDeduplicator:
     def deduplicate_results(
         self,
         results: List[MusicBrainzSong],
-        release_type: Optional[str] = None
+        release_type: Optional[str] = None,
+        *,
+        recordings: bool = False,
     ) -> List[MusicBrainzSong]:
         """
-        Remove duplicate results based on normalized (album, artist) key.
+        Remove duplicate results based on a normalized identity key.
+
+        Releases key on (album, artist). Recordings key on (title, artist).
         When duplicates are found, prioritizes:
         1. Original releases (where release_date matches original_release_date)
         2. Original releases (earliest date, not remasters/reissues)
@@ -97,7 +112,7 @@ class ResultDeduplicator:
         grouped_by_key: Dict[Tuple[str, str], List[MusicBrainzSong]] = {}
 
         for result in results:
-            key = self._create_deduplication_key(result)
+            key = self._create_deduplication_key(result, recordings=recordings)
 
             if not key[0]:
                 continue

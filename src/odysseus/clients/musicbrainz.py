@@ -148,6 +148,7 @@ class MusicBrainzClient(BaseAPIClient):
             rate_limit_codes=(429,),
             rate_limit_wait=60,  # MusicBrainz allows 1 request/second
             session_name="musicbrainz",
+            request_delay=self.request_delay,
         )
 
     def search_recording(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None) -> List[MusicBrainzSong]:

@@ -88,7 +88,11 @@ class SearchService:
     def search_recordings(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None) -> List[MusicBrainzSong]:
         """Search for recordings in MusicBrainz."""
         results = self.musicbrainz_client.search_recording(song_data, offset=offset, limit=limit)
-        return self.deduplicator.deduplicate_results(results, release_type=None)
+        return self.deduplicator.deduplicate_results(
+            results,
+            release_type=None,
+            recordings=True,
+        )
 
     def search_releases(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None, release_type: Optional[str] = None) -> List[MusicBrainzSong]:
         """Search for releases, prioritizing Spotify if API key is available, then MusicBrainz and Discogs.

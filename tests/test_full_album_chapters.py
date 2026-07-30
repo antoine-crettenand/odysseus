@@ -175,6 +175,40 @@ def test_vinyl_marker_hidden_in_chapters_rejects_video():
     ) == []
 
 
+def test_chapter_alignment_uses_dp_instead_of_combinatorial_blowup():
+    strategy = _strategy()
+    tracks = [
+        Track(index, f"Track {index}", "Artist", "02:00")
+        for index in range(1, 51)
+    ]
+    chapters = [{"start_time": 0, "end_time": 5, "title": "Silence"}]
+    start = 5.0
+    for track in tracks:
+        chapters.append({
+            "start_time": start,
+            "end_time": start + 120,
+            "title": track.title,
+        })
+        start += 120
+    chapters.append({
+        "start_time": start,
+        "end_time": start + 20,
+        "title": "Outro",
+    })
+
+    timestamps = strategy._align_chapters_to_tracks(
+        chapters,
+        tracks,
+        tracks[:3],
+        silent=True,
+        styling=MagicMock(),
+    )
+
+    assert len(timestamps) == 3
+    assert timestamps[0]["track"].position == 1
+    assert timestamps[0]["chapter_title"] == "Track 1"
+
+
 def test_bad_existing_split_is_marked_for_replacement(temp_dir):
     existing_file = temp_dir / "01 - Black Focus.mp3"
     existing_file.touch()

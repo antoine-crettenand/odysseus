@@ -99,7 +99,7 @@ class FileSplitter:
         output_dir: Path,
         metadata_list: List[Dict[str, Any]],
         progress_callback: Optional[Callable] = None
-    ) -> List[Path]:
+    ) -> List[Optional[Path]]:
         """
         Split a full album video into individual tracks using ffmpeg.
 
@@ -111,7 +111,8 @@ class FileSplitter:
             progress_callback: Optional callback for progress updates
 
         Returns:
-            List of paths to the split track files
+            List of paths aligned with ``track_timestamps``. Failed splits are
+            ``None`` so callers can pair results by index safely.
         """
         if not video_path.exists():
             raise FileNotFoundError(f"Video file not found: {video_path}")
@@ -119,7 +120,7 @@ class FileSplitter:
         if len(track_timestamps) != len(metadata_list):
             raise ValueError("track_timestamps and metadata_list must have the same length")
 
-        output_files = []
+        output_files: List[Optional[Path]] = [None] * len(track_timestamps)
         audio_extensions = ['.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav', '.aac', '.webm']
         system_files = {'.DS_Store', '.Thumbs.db', 'desktop.ini'}
 
@@ -176,9 +177,9 @@ class FileSplitter:
                 output_filename = f"{expected_base}.mp3"
                 output_path = output_dir / output_filename
 
-            # If file already exists, skip splitting and add to output list
+            # If file already exists, skip splitting and record the path
             if file_already_exists:
-                output_files.append(output_path)
+                output_files[i] = output_path
                 if progress_callback:
                     # Update progress
                     progress = ((i + 1) / len(track_timestamps)) * 100
@@ -228,14 +229,12 @@ class FileSplitter:
                 )
 
                 if output_path.exists():
-                    output_files.append(output_path)
+                    output_files[i] = output_path
 
             except subprocess.CalledProcessError as e:
                 print(f"Error splitting track {i+1}: {e.stderr if e.stderr else e}")
-                continue
             except subprocess.TimeoutExpired:
                 print(f"Timeout splitting track {i+1}")
-                continue
 
         if progress_callback:
             progress_callback({

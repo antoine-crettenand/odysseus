@@ -37,6 +37,10 @@ class YouTubeClient:
                 default_request_delay=0.5,
             )
         self.http_client = http_client
+        self.request_delay = 0.5
+        if hasattr(self.http_client, "set_session_request_delay"):
+            self.http_client.set_session_request_delay("youtube-api", self.request_delay)
+            self.http_client.set_session_request_delay("youtube-web", self.request_delay)
 
         self.headers = {"User-Agent": self.user_agent}
         self.videos: List[YouTubeVideo] = self._search()
