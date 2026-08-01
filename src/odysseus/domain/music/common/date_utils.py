@@ -2,7 +2,7 @@
 Date parsing utilities for music domain.
 """
 
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 
 def extract_year(release_date: Optional[str]) -> Optional[str]:
@@ -29,3 +29,26 @@ def parse_release_date(release_date: Optional[str]) -> Optional[Tuple[int, int, 
         return (year, month, day)
 
     return None
+
+
+def release_year_in_range(
+    release: Any,
+    year_from: Optional[int],
+    year_to: Optional[int],
+) -> bool:
+    """Return whether a release's dated edition is within inclusive bounds."""
+    if year_from is None and year_to is None:
+        return True
+
+    release_date = getattr(release, "release_date", None)
+    original_date = getattr(release, "original_release_date", None)
+    year_text = extract_year(release_date or original_date)
+    if year_text is None:
+        return False
+
+    year = int(year_text)
+    if year_from is not None and year < year_from:
+        return False
+    if year_to is not None and year > year_to:
+        return False
+    return True

@@ -24,7 +24,6 @@ RETRY_DELAY_BASE = 2
 MAX_RETRIES_TRANSIENT_SSL = 5
 PAGINATION_LIMIT = 100
 COMPILATION_TYPES = {'Compilation'}
-JOIN_PHRASES = {'&', 'and', 'And', 'AND'}
 
 
 class MusicBrainzClient(BaseAPIClient):
@@ -539,7 +538,7 @@ class MusicBrainzClient(BaseAPIClient):
 
         return results
 
-    def _parse_artist_credit(self, artist_credits: List[Dict[str, Any]]) -> str:
+    def _parse_artist_credit(self, artist_credits: List[Any]) -> str:
         """
         Parse MusicBrainz artist-credit array to build full artist name.
 
@@ -548,36 +547,36 @@ class MusicBrainzClient(BaseAPIClient):
         if not artist_credits:
             return ''
 
-        artist_names = []
-        join_phrases = []
         artist_parts = []
 
-        for credit in artist_credits:
-            if 'artist' in credit:
-                artist_obj = credit['artist']
-                name = artist_obj.get('name') if isinstance(artist_obj, dict) else artist_obj
-                if name:
-                    artist_names.append(name)
-                    artist_parts.append(name)
-            elif 'name' in credit:
-                name = credit['name']
-                name_stripped = name.strip()
-                is_join_phrase = (
-                    not name_stripped or
-                    name_stripped in JOIN_PHRASES or
-                    '&' in name_stripped or
-                    (len(name_stripped) <= 5 and not any(c.isalnum() for c in name_stripped))
+        for index, credit in enumerate(artist_credits):
+            if isinstance(credit, str):
+                artist_parts.append(credit)
+                continue
+            if not isinstance(credit, dict):
+                continue
+
+            # MusicBrainz exposes the credited name separately from the
+            # canonical artist name. Preserve what appeared on the release.
+            name = credit.get('name')
+            if not name:
+                artist_obj = credit.get('artist')
+                name = (
+                    artist_obj.get('name')
+                    if isinstance(artist_obj, dict)
+                    else artist_obj
                 )
+            if name:
+                artist_parts.append(str(name))
 
-                if is_join_phrase:
-                    normalized = ' & ' if name_stripped in JOIN_PHRASES else name
-                    join_phrases.append(normalized)
-                    artist_parts.append(normalized)
-                else:
-                    artist_names.append(name)
-                    artist_parts.append(name)
+            if 'joinphrase' in credit:
+                artist_parts.append(str(credit.get('joinphrase') or ''))
+            elif index < len(artist_credits) - 1:
+                # Retain compatibility with simplified fixtures or providers
+                # that omit MusicBrainz's joinphrase field.
+                artist_parts.append(' & ')
 
-        return ' & '.join(artist_names) if len(artist_names) > 1 and not join_phrases else ''.join(artist_parts)
+        return ''.join(artist_parts).strip()
 
     def _parse_release_info(self, data: Dict[str, Any]) -> Optional[ReleaseInfo]:
         """Parse detailed release information."""

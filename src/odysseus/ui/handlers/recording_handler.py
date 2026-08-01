@@ -9,6 +9,7 @@ from ...models.search_results import MusicBrainzSong
 from ...core.config import PROJECT_NAME, ERROR_MESSAGES, YOUTUBE_CONFIG
 from ...core.validation import validate_year, validate_required_fields
 from ...core.exceptions import ValidationError
+from ...models.outcomes import OperationOutcome
 
 
 class RecordingHandler(BaseHandler):
@@ -22,7 +23,7 @@ class RecordingHandler(BaseHandler):
         year: Optional[int] = None,
         quality: str = "audio",
         no_download: bool = False
-    ):
+    ) -> OperationOutcome:
         """Handle recording search and download."""
         # Validate input parameters
         try:
@@ -31,11 +32,11 @@ class RecordingHandler(BaseHandler):
                 validate_year(year)
         except (ValidationError, ValueError) as e:
             self._handle_validation_error(e)
-            return
+            return OperationOutcome.failure(str(e), error=e)
 
         # Validate search params using base handler method
         if not self._validate_search_params(artist=artist):
-            return
+            return OperationOutcome.failure("Artist is required")
 
         console = self.display_manager.console
         console.print()
@@ -63,15 +64,19 @@ class RecordingHandler(BaseHandler):
         )
 
         if not selected_song:
-            return
+            return OperationOutcome.skipped("No recording selected")
 
         if no_download:
             console.print("[blue]ℹ[/blue] Search completed. Use without --no-download to download.")
-            return
+            return OperationOutcome.success("Search completed")
 
-        self._search_and_download_recording(selected_song, quality)
+        return self._search_and_download_recording(selected_song, quality)
 
-    def _search_and_download_recording(self, selected_song: MusicBrainzSong, quality: str):
+    def _search_and_download_recording(
+        self,
+        selected_song: MusicBrainzSong,
+        quality: str,
+    ) -> OperationOutcome:
         """Search YouTube and download a recording."""
         console = self.display_manager.console
         search_query = f"{selected_song.artist} {selected_song.title}"
@@ -97,7 +102,7 @@ class RecordingHandler(BaseHandler):
                 if not videos:
                     if offset == 0:
                         console.print(f"[bold red]✗[/bold red] {ERROR_MESSAGES['NO_RESULTS']}")
-                        return
+                        return OperationOutcome.failure("No YouTube results")
                     console.print(
                         "[yellow]⚠[/yellow] No more YouTube results. Starting from the beginning..."
                     )
@@ -115,7 +120,7 @@ class RecordingHandler(BaseHandler):
                     continue
                 elif not selected_video:
                     console.print("[yellow]⚠[/yellow] No video selected for download.")
-                    return
+                    return OperationOutcome.skipped("No video selected")
 
                 break
 
@@ -129,9 +134,19 @@ class RecordingHandler(BaseHandler):
                 release_year=release_year
             )
 
-            self.download_orchestrator.download_recording(
+            downloaded_path = self.download_orchestrator.download_recording(
                 song_data, selected_video, selected_song, quality
+            )
+            if downloaded_path:
+                return OperationOutcome.success(
+                    "Recording downloaded",
+                    processed=1,
+                )
+            return OperationOutcome.failure(
+                "Recording download failed",
+                failed=1,
             )
 
         except Exception as e:
             console.print(f"[bold red]✗[/bold red] Error searching YouTube: {e}")
+            return OperationOutcome.failure(str(e), failed=1, error=e)

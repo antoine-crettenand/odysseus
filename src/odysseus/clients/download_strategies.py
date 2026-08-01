@@ -50,15 +50,15 @@ STRATEGIES = [
 class DownloadStrategies:
     """Command building strategies for YouTube downloads."""
     
-    def __init__(self, cookie_manager: CookieManager):
+    def __init__(self, cookie_manager: CookieManager, audio_format: str = "mp3"):
         self.cookie_manager = cookie_manager
+        self.audio_format = audio_format.lower()
     
     def build_strategy(self, strategy_config: Dict[str, Any], url: str, quality: str, audio_only: bool, output_template: str) -> List[str]:
         """Build download command from strategy configuration."""
         cmd = [
             'yt-dlp',
             '--user-agent', strategy_config['user_agent'],
-            '--no-check-certificate',
             '--ignore-errors',
             '--no-warnings',
             '--extractor-args', f'youtube:player_client={strategy_config["client"]}'
@@ -84,10 +84,14 @@ class DownloadStrategies:
         if audio_only:
             cmd.extend([
                 '-x',
-                '--audio-format', 'mp3',
+                '--audio-format', self.audio_format,
                 '--audio-quality', '0',
-                '--postprocessor-args', 'ffmpeg:-b:a 320k'
             ])
+            if self.audio_format == 'mp3':
+                cmd.extend([
+                    '--postprocessor-args',
+                    'ffmpeg:-b:a 320k',
+                ])
         else:
             cmd.extend(['-f', quality])
         
@@ -103,4 +107,3 @@ class DownloadStrategies:
             lambda url, quality, audio_only, output_template: self.build_strategy(STRATEGIES[3], url, quality, audio_only, output_template),
             lambda url, quality, audio_only, output_template: self.build_strategy(STRATEGIES[4], url, quality, audio_only, output_template)
         ]
-

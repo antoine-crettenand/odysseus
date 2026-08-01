@@ -15,6 +15,8 @@ from ...ui.handlers.base_handler import BaseHandler
 from ...models.song import SongData
 from ...models.releases import ReleaseInfo, Track
 from ...models.search_results import MusicBrainzSong
+from ...models.outcomes import OperationOutcome
+from ...utils.metadata_appliers import SUPPORTED_METADATA_EXTENSIONS
 
 
 class MetadataHandler(BaseHandler):
@@ -27,7 +29,7 @@ class MetadataHandler(BaseHandler):
         artist: Optional[str] = None,
         year: Optional[int] = None,
         mbid: Optional[str] = None
-    ):
+    ) -> OperationOutcome:
         """Apply metadata to existing file(s).
         
         Args:
@@ -42,7 +44,7 @@ class MetadataHandler(BaseHandler):
         
         if not path.exists():
             console.print(f"[bold red]✗[/bold red] Path does not exist: {file_path}")
-            return
+            return OperationOutcome.failure("Path does not exist")
         
         # Collect audio files
         audio_files = []
@@ -51,12 +53,12 @@ class MetadataHandler(BaseHandler):
                 audio_files = [path]
             else:
                 console.print(f"[bold red]✗[/bold red] Not an audio file: {file_path}")
-                return
+                return OperationOutcome.failure("Unsupported audio file")
         elif path.is_dir():
             audio_files = self._find_audio_files(path)
             if not audio_files:
                 console.print(f"[yellow]⚠[/yellow] No audio files found in directory: {file_path}")
-                return
+                return OperationOutcome.failure("No supported audio files found")
         
         console.print(f"[cyan]Found {len(audio_files)} audio file(s)[/cyan]")
         
@@ -69,10 +71,15 @@ class MetadataHandler(BaseHandler):
             )
             if not release_info:
                 console.print(f"[bold red]✗[/bold red] Failed to get release information for MBID: {mbid}")
-                return
+                return OperationOutcome.failure(
+                    "Failed to get release information"
+                )
             
-            self._apply_metadata_to_files(audio_files, release_info, console)
-            return
+            return self._apply_metadata_to_files(
+                audio_files,
+                release_info,
+                console,
+            )
         
         # Try to extract metadata from first file if not provided
         if not artist or not album:
@@ -85,7 +92,7 @@ class MetadataHandler(BaseHandler):
         if not artist or not album:
             console.print("[yellow]⚠[/yellow] Need at least artist and album to search for metadata.")
             console.print("Please provide --artist and --album, or ensure files are in Artist/Album/ format")
-            return
+            return OperationOutcome.failure("Artist and album are required")
         
         # Search for release
         console.print()
@@ -104,18 +111,18 @@ class MetadataHandler(BaseHandler):
         
         releases = self.display_manager.show_loading_spinner(
             f"Searching for: {album} by {artist}",
-            self.search_service.search_release,
+            self.search_service.search_releases,
             song_data
         )
         
         if not releases:
             console.print("[bold red]✗[/bold red] No releases found.")
-            return
+            return OperationOutcome.failure("No releases found")
         
         # Let user select release
         selected_release = self._select_release(releases, console)
         if not selected_release:
-            return
+            return OperationOutcome.skipped("No release selected")
         
         # Get detailed release info
         source = getattr(selected_release, 'source', 'musicbrainz')
@@ -128,7 +135,7 @@ class MetadataHandler(BaseHandler):
         
         if not release_info:
             console.print("[bold red]✗[/bold red] Failed to get release details.")
-            return
+            return OperationOutcome.failure("Failed to get release details")
         
         # Fallback: If release_info.artist is empty, use the artist from selected_release
         # This handles cases where the API response doesn't include artist-credit data
@@ -142,19 +149,21 @@ class MetadataHandler(BaseHandler):
             console.print(f"[yellow]⚠[/yellow] Release is from {source}. Cover art may not be available (requires MusicBrainz MBID).")
         
         # Apply metadata to files
-        self._apply_metadata_to_files(audio_files, release_info, console, is_musicbrainz)
+        return self._apply_metadata_to_files(
+            audio_files,
+            release_info,
+            console,
+            is_musicbrainz,
+        )
     
     def _is_audio_file(self, path: Path) -> bool:
         """Check if file is an audio file."""
-        audio_extensions = {'.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav', '.aac', '.webm', '.mp4'}
-        return path.suffix.lower() in audio_extensions
+        return path.suffix.lower() in SUPPORTED_METADATA_EXTENSIONS
     
     def _find_audio_files(self, directory: Path) -> List[Path]:
         """Find all audio files in directory (recursively)."""
         audio_files = []
-        audio_extensions = {'.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav', '.aac', '.webm', '.mp4'}
-        
-        for ext in audio_extensions:
+        for ext in SUPPORTED_METADATA_EXTENSIONS:
             audio_files.extend(directory.rglob(f'*{ext}'))
         
         return sorted(audio_files)
@@ -229,7 +238,7 @@ class MetadataHandler(BaseHandler):
         release_info: ReleaseInfo,
         console,
         is_musicbrainz: bool = True
-    ):
+    ) -> OperationOutcome:
         """Apply metadata to list of files."""
         console.print()
         console.print(self.display_manager.create_header_panel(
@@ -302,6 +311,15 @@ class MetadataHandler(BaseHandler):
         console.print(f"[bold green]✓[/bold green] Successfully applied metadata to {success_count} file(s)")
         if failed_count > 0:
             console.print(f"[bold red]✗[/bold red] Failed to apply metadata to {failed_count} file(s)")
+            return OperationOutcome.failure(
+                f"Failed to apply metadata to {failed_count} file(s)",
+                processed=success_count,
+                failed=failed_count,
+            )
+        return OperationOutcome.success(
+            "Metadata applied",
+            processed=success_count,
+        )
     
     def _match_file_to_track(self, file_path: Path, release_info: ReleaseInfo) -> Optional[Track]:
         """Try to match a file to a track in the release.

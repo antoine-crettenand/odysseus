@@ -1,6 +1,6 @@
 """User-input validation helpers."""
 
-from typing import Optional
+from typing import Optional, Tuple
 
 from ..config import VALIDATION_RULES
 
@@ -55,6 +55,30 @@ def validate_year(year: Optional[int], *, coerce: bool = False) -> Optional[int]
     if coerce:
         return None
     raise ValueError(f"Year must be between {min_year} and {max_year}")
+
+
+def validate_year_range(
+    year: Optional[int] = None,
+    year_from: Optional[int] = None,
+    year_to: Optional[int] = None,
+) -> Tuple[Optional[int], Optional[int]]:
+    """Validate an exact year or inclusive range and return normalized bounds."""
+    if year is not None and (year_from is not None or year_to is not None):
+        raise ValueError("--year cannot be combined with --year-from or --year-to")
+
+    if year is not None:
+        validated_year = validate_year(year)
+        return validated_year, validated_year
+
+    validated_from = validate_year(year_from)
+    validated_to = validate_year(year_to)
+    if (
+        validated_from is not None
+        and validated_to is not None
+        and validated_from > validated_to
+    ):
+        raise ValueError("--year-from must be less than or equal to --year-to")
+    return validated_from, validated_to
 
 
 def validate_string_length(

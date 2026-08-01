@@ -481,6 +481,7 @@ class SpotifyClient:
                 results.append({
                     "album": album_data.get("name", ""),
                     "artist": artists[0].get("name", "") if artists else "",
+                    "release_type": album_data.get("album_type", ""),
                     "release_date": album_data.get("release_date", ""),
                     "release_year": release_year_spotify,
                     "cover_art_url": images[0].get("url") if images else None,

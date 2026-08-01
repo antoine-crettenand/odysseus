@@ -11,6 +11,18 @@ from ..models.song import AudioMetadata
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_METADATA_EXTENSIONS = frozenset({
+    '.mp3',
+    '.m4a',
+    '.mp4',
+    '.m4p',
+    '.flac',
+    '.ogg',
+    '.oga',
+    '.opus',
+    '.wav',
+})
+
 
 class FormatMetadataApplier(ABC):
     """Base class for format-specific metadata appliers."""
@@ -165,13 +177,39 @@ class M4AMetadataApplier(FormatMetadataApplier):
     def apply_cover_art(self, audio_file, file_path: Path, mime_type: str, quiet: bool) -> None:
         try:
             from mutagen.mp4 import MP4Cover
-            audio_file.tags['covr'] = [MP4Cover(self.metadata.cover_art_data, imageformat=MP4Cover.FORMAT_JPEG if mime_type == 'image/jpeg' else MP4Cover.FORMAT_PNG)]
+            image_formats = {
+                'image/jpeg': MP4Cover.FORMAT_JPEG,
+                'image/png': MP4Cover.FORMAT_PNG,
+            }
+            image_format = image_formats.get(mime_type)
+            if image_format is None:
+                if not quiet:
+                    print(
+                        f"⚠ Could not add {mime_type} cover art to "
+                        f"{file_path.name}; M4A supports JPEG and PNG"
+                    )
+                logger.warning(
+                    "Skipping unsupported M4A cover-art type %s for %s",
+                    mime_type,
+                    file_path,
+                )
+                return
+            audio_file.tags['covr'] = [
+                MP4Cover(self.metadata.cover_art_data, imageformat=image_format)
+            ]
             if not quiet:
                 print(f"✓ Added cover art to {file_path.name} ({len(self.metadata.cover_art_data)} bytes)")
         except Exception as e:
             if not quiet:
                 print(f"⚠ Could not add cover art to M4A file {file_path.name}: {e}")
             logger.warning(f"Could not add cover art to M4A file {file_path}: {e}")
+
+    def save(self, audio_file, file_path: Path) -> None:
+        audio_file.save()
+
+
+class WAVMetadataApplier(MP3MetadataApplier):
+    """Apply ID3 metadata through Mutagen's WAVE container support."""
 
     def save(self, audio_file, file_path: Path) -> None:
         audio_file.save()
@@ -254,7 +292,9 @@ def get_metadata_applier(file_ext: str, metadata: AudioMetadata) -> FormatMetada
         return M4AMetadataApplier(metadata)
     elif file_ext_lower == '.flac':
         return FLACMetadataApplier(metadata)
-    elif file_ext_lower in ['.ogg', '.oga']:
+    elif file_ext_lower in ['.ogg', '.oga', '.opus']:
         return OGGMetadataApplier(metadata)
+    elif file_ext_lower == '.wav':
+        return WAVMetadataApplier(metadata)
     else:
         return GenericMetadataApplier(metadata)

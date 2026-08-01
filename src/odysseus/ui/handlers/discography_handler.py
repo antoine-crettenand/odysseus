@@ -2,12 +2,14 @@
 Handler for discography mode (artist discography browse and download).
 """
 
-from typing import Optional, List
+from typing import Optional, List, Union
 from .base_handler import BaseHandler
 from ...models.search_results import MusicBrainzSong
 from ..release_info_flow import ReleaseInfoFetcher
 from ...ui.user_interaction import UserInteraction
 from ...core.config import PROJECT_NAME, ERROR_MESSAGES
+from ...core.validation import validate_year_range
+from ...models.outcomes import OperationOutcome
 from rich.prompt import Prompt, Confirm
 
 
@@ -23,19 +25,31 @@ class DiscographyHandler(BaseHandler):
         self,
         artist: str,
         year: Optional[int] = None,
+        year_from: Optional[int] = None,
+        year_to: Optional[int] = None,
         release_type: Optional[str] = None,
         quality: str = "audio",
         no_download: bool = False,
         cached_releases: Optional[List[MusicBrainzSong]] = None,
         include_compilations: bool = False,
         jobs: int = 1,
-    ) -> Optional[List[MusicBrainzSong]]:
+    ) -> Union[List[MusicBrainzSong], OperationOutcome]:
         """Handle discography browse and download."""
         console = self.display_manager.console
+        try:
+            validate_year_range(year, year_from, year_to)
+        except ValueError as error:
+            self._handle_validation_error(error)
+            return OperationOutcome.failure(str(error), error=error)
+
         console.print()
         subtitle = f"Searching discography for: {artist}"
         if year:
             subtitle += f" (Year: {year})"
+        elif year_from is not None or year_to is not None:
+            lower = str(year_from) if year_from is not None else "earliest"
+            upper = str(year_to) if year_to is not None else "latest"
+            subtitle += f" (Years: {lower}–{upper})"
         if release_type:
             subtitle += f" (Type: {release_type})"
         if include_compilations:
@@ -57,13 +71,15 @@ class DiscographyHandler(BaseHandler):
                 self.search_service.search_artist_releases,
                 artist,
                 year=year,
+                year_from=year_from,
+                year_to=year_to,
                 release_type=release_type,
                 include_compilations=include_compilations
             )
 
         if not releases:
             console.print(f"[bold red]✗[/bold red] {ERROR_MESSAGES['NO_RESULTS']}")
-            return None
+            return OperationOutcome.failure("No discography results")
 
         ordered_releases = self.display_manager.display_discography(releases)
 
@@ -77,14 +93,16 @@ class DiscographyHandler(BaseHandler):
 
         if not selected_releases:
             # User cancelled or didn't select anything - exit without prompting to go back
-            return None
+            return OperationOutcome.skipped("No releases selected")
 
-        self._download_selected_releases(
+        outcome = self._download_selected_releases(
             selected_releases,
             quality,
             auto_download_all_tracks=auto_download_all_tracks,
             jobs=jobs,
         )
+        if not outcome.succeeded:
+            return outcome
 
         # Return releases for caching
         return releases
@@ -95,7 +113,7 @@ class DiscographyHandler(BaseHandler):
         quality: str,
         auto_download_all_tracks: bool = False,
         jobs: int = 1,
-    ):
+    ) -> OperationOutcome:
         """
         Download selected releases.
 
@@ -195,3 +213,13 @@ class DiscographyHandler(BaseHandler):
 
         console.print()
         self.display_manager.display_download_summary(total_downloaded, total_failed, len(releases))
+        if total_failed:
+            return OperationOutcome.failure(
+                f"{total_failed} track or release operation(s) failed",
+                processed=total_downloaded,
+                failed=total_failed,
+            )
+        return OperationOutcome.success(
+            "Discography processed",
+            processed=total_downloaded,
+        )

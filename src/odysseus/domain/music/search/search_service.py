@@ -10,7 +10,11 @@ from ....models.search_results import SearchResult, MusicBrainzSong, YouTubeVide
 from ....utils.pattern_matcher import PatternMatcher
 from .deduplicator import ResultDeduplicator
 from ..validation.year_validator import YearValidator
-from ..common.date_utils import extract_year, parse_release_date
+from ..common.date_utils import (
+    extract_year,
+    parse_release_date,
+    release_year_in_range,
+)
 
 
 class SearchService:
@@ -77,6 +81,35 @@ class SearchService:
         return self.deduplicator.deduplicate_with_priority(mb_results, discogs_results)
 
     @staticmethod
+    def _filter_release_type(
+        results: List[MusicBrainzSong],
+        release_type: Optional[str],
+    ) -> List[MusicBrainzSong]:
+        """Filter candidates before cross-provider deduplication."""
+        if not release_type:
+            return results
+        expected = release_type.casefold()
+        return [
+            result
+            for result in results
+            if result.release_type
+            and result.release_type.casefold() == expected
+        ]
+
+    @staticmethod
+    def _filter_release_years(
+        results: List[MusicBrainzSong],
+        year_from: Optional[int],
+        year_to: Optional[int],
+    ) -> List[MusicBrainzSong]:
+        """Filter releases by inclusive year bounds before deduplication."""
+        return [
+            result
+            for result in results
+            if release_year_in_range(result, year_from, year_to)
+        ]
+
+    @staticmethod
     def _safe_provider_search(provider: str, search_func, *args) -> list:
         """Keep one provider failure from discarding another provider's results."""
         try:
@@ -94,7 +127,15 @@ class SearchService:
             recordings=True,
         )
 
-    def search_releases(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None, release_type: Optional[str] = None) -> List[MusicBrainzSong]:
+    def search_releases(
+        self,
+        song_data: SongData,
+        offset: int = 0,
+        limit: Optional[int] = None,
+        release_type: Optional[str] = None,
+        year_from: Optional[int] = None,
+        year_to: Optional[int] = None,
+    ) -> List[MusicBrainzSong]:
         """Search for releases, prioritizing Spotify if API key is available, then MusicBrainz and Discogs.
 
         Args:
@@ -102,7 +143,13 @@ class SearchService:
             offset: Offset for pagination
             limit: Maximum number of results
             release_type: Optional release type filter (e.g., "Album", "Single", "EP", "Compilation", "Live", etc.)
+            year_from: Optional inclusive lower release-year bound
+            year_to: Optional inclusive upper release-year bound
         """
+        exact_year = song_data.release_year
+        effective_year_from = exact_year if exact_year is not None else year_from
+        effective_year_to = exact_year if exact_year is not None else year_to
+
         # Fetch a bounded candidate pool before deduplication and pagination.
         default_max = self.musicbrainz_client.max_results if hasattr(self.musicbrainz_client, 'max_results') else 3
         requested_limit = max(1, limit or default_max)
@@ -110,6 +157,8 @@ class SearchService:
         # provider for 50 records when the UI normally displays only a few.
         page_end = max(0, offset) + requested_limit
         fetch_limit = min(max(page_end * 3, page_end), 50)
+        if year_from is not None or year_to is not None:
+            fetch_limit = 50
 
         # Check if Spotify is available and search it first
         spotify_client = self._get_spotify_client()
@@ -139,7 +188,7 @@ class SearchService:
                 song_data,
                 0,
                 fetch_limit,
-                None,
+                release_type,
             )
             discogs_future = executor.submit(
                 self._safe_provider_search,
@@ -157,6 +206,31 @@ class SearchService:
         # Convert Discogs to MusicBrainz format
         discogs_formatted = self._convert_discogs_to_mb_format(discogs_results)
 
+        # Filter each provider before deduplication. Otherwise a higher-priority
+        # result of the wrong type or year can discard an eligible result from
+        # another provider that shares the same album/artist identity.
+        spotify_results = self._filter_release_type(spotify_results, release_type)
+        mb_results = self._filter_release_type(mb_results, release_type)
+        discogs_formatted = self._filter_release_type(
+            discogs_formatted,
+            release_type,
+        )
+        spotify_results = self._filter_release_years(
+            spotify_results,
+            effective_year_from,
+            effective_year_to,
+        )
+        mb_results = self._filter_release_years(
+            mb_results,
+            effective_year_from,
+            effective_year_to,
+        )
+        discogs_formatted = self._filter_release_years(
+            discogs_formatted,
+            effective_year_from,
+            effective_year_to,
+        )
+
         # Use priority-based deduplication: Spotify first (if available), then MusicBrainz, then Discogs
         # This deduplicates ALL results to find the best (earliest) release
         if spotify_results:
@@ -166,13 +240,6 @@ class SearchService:
         else:
             # No Spotify, use MusicBrainz and Discogs
             all_results = self._deduplicate_with_priority(mb_results, discogs_formatted)
-
-        if release_type:
-            filtered_results = []
-            for result in all_results:
-                if result.release_type and result.release_type.lower() == release_type.lower():
-                    filtered_results.append(result)
-            all_results = filtered_results
 
         # Sort results to prioritize original releases:
         # 1. By original release date (earliest first) - this is the most important factor
@@ -211,12 +278,17 @@ class SearchService:
         if offset > 0:
             all_results = all_results[offset:]
 
-        if limit and len(all_results) > limit:
-            all_results = all_results[:limit]
+        return all_results[:requested_limit]
 
-        return all_results
-
-    def search_artist_releases(self, artist: str, year: Optional[int] = None, release_type: Optional[str] = None, include_compilations: bool = False) -> List[MusicBrainzSong]:
+    def search_artist_releases(
+        self,
+        artist: str,
+        year: Optional[int] = None,
+        release_type: Optional[str] = None,
+        include_compilations: bool = False,
+        year_from: Optional[int] = None,
+        year_to: Optional[int] = None,
+    ) -> List[MusicBrainzSong]:
         """Search for releases by a specific artist in MusicBrainz.
         Discogs is only consulted during deduplication for year validation when there's ambiguity.
 
@@ -225,10 +297,20 @@ class SearchService:
             year: Optional year filter
             release_type: Optional release type filter (e.g., "Album", "Single", "EP", "Compilation", "Live", etc.)
             include_compilations: If True, also search for compilations where the artist appears as a track artist
+            year_from: Optional inclusive lower release-year bound
+            year_to: Optional inclusive upper release-year bound
         """
+        effective_year_from = year if year is not None else year_from
+        effective_year_to = year if year is not None else year_to
+
         # Search MusicBrainz only - it usually has comprehensive coverage
         # Discogs is only used for year validation during deduplication when there's ambiguity
         mb_results = self.musicbrainz_client.search_artist_releases(artist, year, None, release_type)
+        mb_results = self._filter_release_years(
+            mb_results,
+            effective_year_from,
+            effective_year_to,
+        )
 
         # Deduplicate MusicBrainz results only (no initial Discogs search)
         # Pass release_type so validation can filter Discogs searches
@@ -237,6 +319,11 @@ class SearchService:
         # If include_compilations is True, also search for compilations where artist appears on tracks
         if include_compilations:
             compilation_results = self.musicbrainz_client.search_artist_compilations(artist, year)
+            compilation_results = self._filter_release_years(
+                compilation_results,
+                effective_year_from,
+                effective_year_to,
+            )
             # Deduplicate compilation results against existing results
             existing_keys = {self.deduplicator._create_deduplication_key(r) for r in all_results}
             for comp_result in compilation_results:
@@ -323,7 +410,7 @@ class SearchService:
                 release_date=release_date,
                 original_release_date=release_date,  # Spotify doesn't distinguish original vs re-release
                 genre=None,
-                release_type="Album",  # Spotify search returns albums
+                release_type=spotify_item.get("release_type") or "Album",
                 mbid=spotify_item.get("spotify_id", ""),
                 score=spotify_item.get("popularity", 0),  # Use popularity as score
                 url=spotify_item.get("url", ""),

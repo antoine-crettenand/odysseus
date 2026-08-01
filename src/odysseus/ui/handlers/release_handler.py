@@ -9,7 +9,7 @@ from ...models.search_results import MusicBrainzSong
 from ..release_info_flow import ReleaseInfoFetcher
 from ...ui.user_interaction import UserInteraction
 from ...core.config import PROJECT_NAME, ERROR_MESSAGES
-from ...core.validation import validate_year, validate_required_fields
+from ...core.validation import validate_required_fields, validate_year_range
 from ...core.exceptions import ValidationError
 from ...models.outcomes import OperationOutcome
 from ...domain.music.identity import select_best_release_match
@@ -28,6 +28,8 @@ class ReleaseHandler(BaseHandler):
         album: str,
         artist: str,
         year: Optional[int] = None,
+        year_from: Optional[int] = None,
+        year_to: Optional[int] = None,
         release_type: Optional[str] = None,
         quality: str = "audio",
         tracks: Optional[str] = None,
@@ -39,8 +41,7 @@ class ReleaseHandler(BaseHandler):
         # Validate input parameters
         try:
             validate_required_fields(album=album, artist=artist)
-            if year is not None:
-                validate_year(year)
+            validate_year_range(year, year_from, year_to)
         except (ValidationError, ValueError) as e:
             self._handle_validation_error(e)
             return OperationOutcome.failure(str(e), error=e)
@@ -51,9 +52,16 @@ class ReleaseHandler(BaseHandler):
 
         console = self.display_manager.console
         console.print()
+        search_description = f"Searching for release: {album} by {artist}"
+        if year is not None:
+            search_description += f" (Year: {year})"
+        elif year_from is not None or year_to is not None:
+            lower = str(year_from) if year_from is not None else "earliest"
+            upper = str(year_to) if year_to is not None else "latest"
+            search_description += f" (Years: {lower}–{upper})"
         console.print(self.display_manager.create_header_panel(
             f"💿 {PROJECT_NAME} - Release Search",
-            f"Searching for release: {album} by {artist}"
+            search_description,
         ))
         console.print()
 
@@ -81,7 +89,9 @@ class ReleaseHandler(BaseHandler):
             auto_select_args,
             song_data,
             auto=auto,
-            release_type=release_type
+            release_type=release_type,
+            year_from=year_from,
+            year_to=year_to,
         )
 
         if not selected_release:

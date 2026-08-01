@@ -11,6 +11,7 @@ from typing import List, Tuple, Optional
 from rich.prompt import Confirm
 
 from ..core.config import PROJECT_NAME, PROJECT_VERSION
+from ..core.validation import validate_year, validate_year_range
 from ..domain.music.download.download_service import MAX_PARALLEL_DOWNLOADS
 from ..models.outcomes import OperationOutcome, OperationStatus
 
@@ -67,6 +68,7 @@ Examples:
   %(prog)s release --album "Album Name" --artist "Artist Name"
   %(prog)s release --batch playlist_artists_albums.txt
   %(prog)s discography --artist "Artist Name" --year 1970
+  %(prog)s discography --artist "Artist Name" --year-from 1965 --year-to 1975
   %(prog)s spotify --url "https://open.spotify.com/playlist/..."
   %(prog)s spotify --url "https://open.spotify.com/playlist/..." --mode releases
   %(prog)s metadata /path/to/file.mp3 --album "Album Name" --artist "Artist Name"
@@ -171,6 +173,16 @@ Examples:
             help='Release year (optional, ignored when using --batch)'
         )
         parser.add_argument(
+            '--year-from',
+            type=int,
+            help='Inclusive earliest release year (applies to batch rows without a year)'
+        )
+        parser.add_argument(
+            '--year-to',
+            type=int,
+            help='Inclusive latest release year (applies to batch rows without a year)'
+        )
+        parser.add_argument(
             '--type', '-t',
             choices=['Album', 'Single', 'EP', 'Compilation', 'Live', 'Soundtrack', 'Spokenword', 'Interview', 'Audiobook', 'Other'],
             help='Filter by release type (e.g., Album, Single, EP, Compilation, Live, etc.)'
@@ -209,6 +221,16 @@ Examples:
             '--year', '-y',
             type=int,
             help='Filter releases by year'
+        )
+        parser.add_argument(
+            '--year-from',
+            type=int,
+            help='Inclusive earliest release year'
+        )
+        parser.add_argument(
+            '--year-to',
+            type=int,
+            help='Inclusive latest release year'
         )
         parser.add_argument(
             '--type', '-t',
@@ -324,10 +346,19 @@ Examples:
         """Run the CLI with given arguments."""
         parser = self.create_parser()
         parsed_args = parser.parse_args(args)
+        if parsed_args.mode in {'release', 'discography'}:
+            try:
+                validate_year_range(
+                    getattr(parsed_args, 'year', None),
+                    getattr(parsed_args, 'year_from', None),
+                    getattr(parsed_args, 'year_to', None),
+                )
+            except ValueError as error:
+                parser.error(str(error))
 
         try:
             if parsed_args.mode == 'recording':
-                self.recording_handler.handle(
+                outcome = self.recording_handler.handle(
                     title=parsed_args.title,
                     artist=parsed_args.artist,
                     album=parsed_args.album,
@@ -335,7 +366,7 @@ Examples:
                     quality=parsed_args.quality,
                     no_download=parsed_args.no_download
                 )
-                return 0
+                return self._outcome_exit_code(outcome)
             elif parsed_args.mode == 'release':
                 # Handle batch processing
                 if parsed_args.batch:
@@ -347,6 +378,8 @@ Examples:
                         no_download=parsed_args.no_download,
                         auto=getattr(parsed_args, 'auto', False),
                         jobs=parsed_args.jobs,
+                        year_from=parsed_args.year_from,
+                        year_to=parsed_args.year_to,
                     )
                 else:
                     # Validate required arguments for single release
@@ -357,6 +390,8 @@ Examples:
                         album=parsed_args.album,
                         artist=parsed_args.artist,
                         year=parsed_args.year,
+                        year_from=parsed_args.year_from,
+                        year_to=parsed_args.year_to,
                         release_type=parsed_args.type,
                         quality=parsed_args.quality,
                         tracks=parsed_args.tracks,
@@ -364,14 +399,17 @@ Examples:
                         auto=getattr(parsed_args, 'auto', False),
                         jobs=parsed_args.jobs,
                     )
-                return 0 if not isinstance(outcome, OperationOutcome) or outcome.succeeded else 1
+                return self._outcome_exit_code(outcome)
             elif parsed_args.mode == 'discography':
                 # Loop for discography - allow user to go back to discography display
                 cached_releases = None
+                exit_code = 0
                 while True:
                     releases = self.discography_handler.handle(
                         artist=parsed_args.artist,
                         year=parsed_args.year,
+                        year_from=parsed_args.year_from,
+                        year_to=parsed_args.year_to,
                         release_type=parsed_args.type,
                         quality=parsed_args.quality,
                         no_download=parsed_args.no_download,
@@ -379,6 +417,10 @@ Examples:
                         include_compilations=getattr(parsed_args, 'include_compilations', False),
                         jobs=parsed_args.jobs,
                     )
+
+                    if isinstance(releases, OperationOutcome):
+                        exit_code = self._outcome_exit_code(releases)
+                        break
 
                     # If user cancelled, exit immediately without prompting
                     if releases is None:
@@ -393,9 +435,9 @@ Examples:
                     if not Confirm.ask("[bold]Go back to discography display?[/bold]", default=False):
                         break
                     self.display_manager.console.print()
-                return 0
+                return exit_code
             elif parsed_args.mode == 'spotify':
-                self.spotify_handler.handle(
+                outcome = self.spotify_handler.handle(
                     url=parsed_args.url,
                     mode=getattr(parsed_args, 'spotify_mode', 'recordings'),
                     quality=parsed_args.quality,
@@ -406,22 +448,29 @@ Examples:
                     collection_type=parsed_args.collection_type,
                     jobs=parsed_args.jobs,
                 )
-                return 0
+                return self._outcome_exit_code(outcome)
             elif parsed_args.mode == 'metadata':
-                self.metadata_handler.handle(
+                outcome = self.metadata_handler.handle(
                     file_path=parsed_args.file,
                     album=parsed_args.album,
                     artist=parsed_args.artist,
                     year=parsed_args.year,
                     mbid=parsed_args.mbid
                 )
-                return 0
+                return self._outcome_exit_code(outcome)
         except KeyboardInterrupt:
             self.display_manager.console.print("\n[yellow]⚠[/yellow] Operation cancelled by user.")
             return 1
         except Exception as e:
             self.display_manager.console.print(f"[bold red]✗[/bold red] An error occurred: {e}")
             return 1
+        return 0
+
+    @staticmethod
+    def _outcome_exit_code(outcome) -> int:
+        """Translate structured handler outcomes while tolerating legacy callers."""
+        if isinstance(outcome, OperationOutcome):
+            return 0 if outcome.succeeded else 1
         return 0
 
     def _parse_batch_file(self, batch_file: str) -> List[Tuple[str, str, Optional[int]]]:
@@ -443,17 +492,66 @@ Examples:
         entries = []
 
         with open(batch_path, 'r', encoding='utf-8') as f:
-            # Try to detect format by reading first line
-            first_line = f.readline().strip()
+            # Detect from the first content line. Human-readable entries may
+            # contain commas in artist names, so a comma alone is not enough
+            # to classify a text file as CSV.
+            first_line = next(
+                (
+                    line.strip()
+                    for line in f
+                    if line.strip() and not line.lstrip().startswith('#')
+                ),
+                '',
+            )
             f.seek(0)  # Reset to beginning
 
-            delimiter = '\t' if '\t' in first_line else ',' if ',' in first_line else None
+            import re
+
+            def parse_batch_year(value: str, line_number: int) -> int:
+                """Parse and validate an explicitly supplied batch year."""
+                try:
+                    year_value = int(value.strip())
+                except ValueError as error:
+                    raise ValueError(
+                        f"Invalid year on line {line_number}: {value!r}"
+                    ) from error
+                try:
+                    return validate_year(year_value)
+                except ValueError as error:
+                    raise ValueError(
+                        f"Invalid year on line {line_number}: {error}"
+                    ) from error
+
+            human_pattern = re.compile(
+                r'^(.+?)\s+-\s+(.+?)(?:\s+\((\d{4})\))?\s*$'
+            )
+            first_row = next(csv.reader([first_line]), []) if first_line else []
+            has_csv_header = (
+                len(first_row) >= 2
+                and first_row[0].strip().lower() in {'artist', 'artists'}
+                and first_row[1].strip().lower() in {'album', 'release'}
+            )
+            if '\t' in first_line:
+                delimiter = '\t'
+            elif batch_path.suffix.lower() == '.csv' or has_csv_header:
+                delimiter = ','
+            elif ',' in first_line and not human_pattern.fullmatch(first_line):
+                delimiter = ','
+            else:
+                delimiter = None
+
             if delimiter:
                 reader = csv.reader(f, delimiter=delimiter)
-                for row_num, row in enumerate(reader, start=1):
-                    if not row:
+                for row in reader:
+                    if not row or not any(value.strip() for value in row):
                         continue
-                    if row_num == 1 and row[0].strip().lower() in {'artist', 'artists'}:
+                    if row[0].lstrip().startswith('#'):
+                        continue
+                    if (
+                        len(row) >= 2
+                        and row[0].strip().lower() in {'artist', 'artists'}
+                        and row[1].strip().lower() in {'album', 'release'}
+                    ):
                         continue
                     if len(row) < 2:
                         continue
@@ -461,26 +559,26 @@ Examples:
                     album = row[1].strip()
                     year = None
                     if len(row) >= 3 and row[2].strip():
-                        try:
-                            year = int(row[2].strip())
-                        except ValueError:
-                            pass
+                        year = parse_batch_year(row[2], reader.line_num)
                     if artist and album:
                         entries.append((artist, album, year))
             else:
-                import re
                 for line_num, line in enumerate(f, start=1):
                     line = line.strip()
                     if not line or line.startswith('#'):
                         continue
 
                     # Pattern: "Artist - Album (Year)" or "Artist - Album"
-                    match = re.match(r'^(.+?)\s*-\s*(.+?)(?:\s*\((\d{4})\))?\s*$', line)
+                    match = human_pattern.fullmatch(line)
                     if match:
                         artist = match.group(1).strip()
                         album = match.group(2).strip()
                         year_str = match.group(3)
-                        year = int(year_str) if year_str else None
+                        year = (
+                            parse_batch_year(year_str, line_num)
+                            if year_str
+                            else None
+                        )
 
                         if artist and album:
                             entries.append((artist, album, year))
@@ -499,9 +597,17 @@ Examples:
         no_download: bool,
         auto: bool = False,
         jobs: int = 1,
+        year_from: Optional[int] = None,
+        year_to: Optional[int] = None,
     ) -> OperationOutcome:
         """Handle batch processing of releases from a file."""
         console = self.display_manager.console
+
+        try:
+            validate_year_range(None, year_from, year_to)
+        except ValueError as error:
+            console.print(f"[bold red]✗[/bold red] Invalid year range: {error}")
+            return OperationOutcome.failure(str(error), error=error)
 
         try:
             entries = self._parse_batch_file(batch_file)
@@ -531,6 +637,8 @@ Examples:
                     album=album,
                     artist=artist,
                     year=year,
+                    year_from=None if year is not None else year_from,
+                    year_to=None if year is not None else year_to,
                     release_type=release_type,
                     quality=quality,
                     tracks=tracks,

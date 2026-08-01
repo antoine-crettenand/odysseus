@@ -14,10 +14,6 @@ PROJECT_DESCRIPTION = "Music Discovery Tool - Search MusicBrainz, find YouTube v
 # File Paths
 def _get_base_dir() -> Path:
     """Get the base directory for the project."""
-    downloads_env = os.getenv("ODYSSEUS_DOWNLOADS_DIR")
-    if downloads_env:
-        return Path(downloads_env).parent
-
     current = Path(__file__).resolve()
     for parent in [current.parent, current.parent.parent, current.parent.parent.parent, current.parent.parent.parent.parent]:
         if (parent / "pyproject.toml").exists() or (parent / "README.md").exists():
@@ -26,7 +22,10 @@ def _get_base_dir() -> Path:
     return Path.cwd()
 
 BASE_DIR = _get_base_dir()
-DOWNLOADS_DIR = Path(os.getenv("ODYSSEUS_DOWNLOADS_DIR", BASE_DIR / "downloads"))
+# Keep media output relative to the directory from which Odysseus is run.
+# A single relative root also ensures every organized download path remains
+# underneath ./downloads rather than writing into the installed package tree.
+DOWNLOADS_DIR = Path("downloads")
 CONFIG_DIR = Path(os.getenv("ODYSSEUS_CONFIG_DIR", BASE_DIR / "config"))
 
 # Error Messages

@@ -534,13 +534,25 @@ class DiscogsClient(BaseAPIClient):
             year = data.get('year')
             release_date = str(year) if year else None
 
-            # Extract artist and album from title (format: "Artist - Album")
-            artist = ''
+            # Detailed release responses expose the title and artists separately.
+            # A release title itself may legitimately contain " - ", so do not
+            # attempt to recover the artist by splitting it.
+            artist_parts = []
+            artist_data_list = data.get('artists', [])
+            for index, artist_data in enumerate(artist_data_list):
+                name = (artist_data.get('name') or '').strip()
+                if not name:
+                    continue
+                artist_parts.append(name)
+                join_text = (artist_data.get('join') or '').strip()
+                if join_text:
+                    artist_parts.append(f" {join_text} ")
+                elif index < len(artist_data_list) - 1:
+                    artist_parts.append(", ")
+            artist = ''.join(artist_parts).strip()
+            if not artist:
+                artist = (data.get('artists_sort') or '').strip()
             album = title
-            if ' - ' in title:
-                parts = title.split(' - ', 1)
-                artist = parts[0].strip()
-                album = parts[1].strip()
 
             # Get genre information
             genres = data.get('genres', [])
@@ -577,7 +589,19 @@ class DiscogsClient(BaseAPIClient):
             # Use sequential positions (1, 2, 3, ..., N) instead of parsing Discogs positions
             # Discogs positions are per-side for vinyl (A1, A2, B1, B2, etc.) which causes duplicates
             # Sequential positions work better for downloads and track selection
-            for idx, track_data in enumerate(tracklist, start=1):
+            playable_tracks = []
+            for track_data in tracklist:
+                row_type = (track_data.get('type_') or 'track').lower()
+                if row_type == 'track':
+                    playable_tracks.append(track_data)
+                elif row_type == 'index':
+                    playable_tracks.extend(
+                        sub_track
+                        for sub_track in track_data.get('sub_tracks') or []
+                        if (sub_track.get('type_') or 'track').lower() == 'track'
+                    )
+
+            for idx, track_data in enumerate(playable_tracks, start=1):
                 track_title = track_data.get('title', '')
                 duration = track_data.get('duration', '')
 

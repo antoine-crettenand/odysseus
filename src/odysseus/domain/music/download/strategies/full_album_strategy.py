@@ -27,22 +27,22 @@ class FullAlbumStrategy(BaseDownloadStrategy):
         # real offset in the full-album video.
         sorted_tracks = sorted(tracks, key=lambda track: track.position)
         selected_positions = set(track_numbers)
+        if not selected_positions:
+            return []
+        last_selected_position = max(selected_positions)
 
         for track in sorted_tracks:
+            if track.position > last_selected_position:
+                break
             duration_seconds = self.video_validator._parse_duration_to_seconds(track.duration)
+            if not duration_seconds:
+                # A guessed duration before a selected track changes every later
+                # boundary and can silently return audio from the wrong song.
+                return []
 
             start_time = current_time
-            end_time = None
-
-            if duration_seconds:
-                end_time = start_time + duration_seconds
-                current_time = end_time
-            else:
-                # If no duration, estimate based on average (3-4 minutes)
-                # This is a fallback - better to have chapters
-                estimated_duration = 210  # 3.5 minutes
-                end_time = start_time + estimated_duration
-                current_time = end_time
+            end_time = start_time + duration_seconds
+            current_time = end_time
 
             if track.position in selected_positions:
                 timestamps.append({
@@ -597,11 +597,21 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                 styling.log_warning("No YouTube chapters found. Using MusicBrainz durations...")
                 styling.log_technical("Note: Split track durations may differ from metadata due to video timing differences")
 
-            # Check if we have durations for all tracks
-            all_tracks_have_durations = all(t.duration for t in selected_tracks)
-            if not all_tracks_have_durations:
+            # Every track through the last selection contributes to its offset.
+            # Missing durations after the last selected track are irrelevant.
+            last_selected_position = max(t.position for t in selected_tracks)
+            offset_tracks = [
+                track
+                for track in release_info.tracks
+                if track.position <= last_selected_position
+            ]
+            all_offsets_are_known = all(t.duration for t in offset_tracks)
+            if not all_offsets_are_known:
                 if not silent:
-                    reason = f"Missing track durations for some tracks - cannot safely split without chapters"
+                    reason = (
+                        "Missing duration before or within the selected tracks - "
+                        "cannot safely split without chapters"
+                    )
                     styling.log_warning(reason)
                 return []
 

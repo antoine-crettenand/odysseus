@@ -32,7 +32,10 @@ class YouTubeDownloader:
         # Initialize helper modules
         self.cookie_manager = CookieManager()
         self.path_utils = PathUtils()
-        self.download_strategies = DownloadStrategies(self.cookie_manager)
+        self.download_strategies = DownloadStrategies(
+            self.cookie_manager,
+            audio_format=self.audio_format,
+        )
 
         # Retry configuration for robust downloads
         self.max_retries = RETRY_CONFIG["SUBPROCESS_MAX_RETRIES"]
@@ -175,7 +178,8 @@ class YouTubeDownloader:
             track_timestamps,
             output_dir,
             metadata_list,
-            progress_callback
+            progress_callback,
+            audio_format=self.audio_format,
         )
 
     _AUDIO_EXTENSIONS = ['.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav', '.aac', '.webm']

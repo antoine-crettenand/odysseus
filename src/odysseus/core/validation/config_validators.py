@@ -33,15 +33,24 @@ def check_dependencies() -> Tuple[bool, List[str]]:
         except ImportError:
             missing.append(package_name)
 
-    try:
-        subprocess.run(
-            ["yt-dlp", "--version"],
-            capture_output=True,
-            check=True,
-            timeout=5,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-        missing.append("yt-dlp (command line tool)")
+    required_executables = {
+        "yt-dlp": (["yt-dlp", "--version"], "yt-dlp (command line tool)"),
+        "ffmpeg": (["ffmpeg", "-version"], "ffmpeg (audio transcoder)"),
+    }
+    for command, label in required_executables.values():
+        try:
+            subprocess.run(
+                command,
+                capture_output=True,
+                check=True,
+                timeout=5,
+            )
+        except (
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            subprocess.TimeoutExpired,
+        ):
+            missing.append(label)
 
     return not missing, missing
 
@@ -91,7 +100,7 @@ def validate_configuration() -> Tuple[bool, List[str]]:
             f"DEFAULT_QUALITY must be one of: {', '.join(sorted(valid_qualities))}"
         )
 
-    valid_formats = {"mp3", "wav", "flac", "aac", "ogg"}
+    valid_formats = {"mp3", "wav", "flac", "ogg"}
     if DOWNLOAD_CONFIG["AUDIO_FORMAT"] not in valid_formats:
         errors.append(
             f"AUDIO_FORMAT must be one of: {', '.join(sorted(valid_formats))}"

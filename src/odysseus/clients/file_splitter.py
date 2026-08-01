@@ -98,7 +98,8 @@ class FileSplitter:
         track_timestamps: List[Dict[str, Any]],
         output_dir: Path,
         metadata_list: List[Dict[str, Any]],
-        progress_callback: Optional[Callable] = None
+        progress_callback: Optional[Callable] = None,
+        audio_format: str = "mp3",
     ) -> List[Optional[Path]]:
         """
         Split a full album video into individual tracks using ffmpeg.
@@ -109,6 +110,7 @@ class FileSplitter:
             output_dir: Directory to save split tracks
             metadata_list: List of metadata dicts for each track (must match track_timestamps length)
             progress_callback: Optional callback for progress updates
+            audio_format: Configured output format for newly split tracks
 
         Returns:
             List of paths aligned with ``track_timestamps``. Failed splits are
@@ -119,6 +121,16 @@ class FileSplitter:
 
         if len(track_timestamps) != len(metadata_list):
             raise ValueError("track_timestamps and metadata_list must have the same length")
+
+        encoder_args = {
+            "mp3": ["-acodec", "libmp3lame", "-b:a", "320k"],
+            "flac": ["-acodec", "flac"],
+            "ogg": ["-acodec", "libvorbis", "-q:a", "8"],
+            "wav": ["-acodec", "pcm_s16le"],
+        }
+        audio_format = audio_format.lower()
+        if audio_format not in encoder_args:
+            raise ValueError(f"Unsupported split audio format: {audio_format}")
 
         output_files: List[Optional[Path]] = [None] * len(track_timestamps)
         audio_extensions = ['.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav', '.aac', '.webm']
@@ -171,10 +183,11 @@ class FileSplitter:
                     f"Replacing invalid existing split: {output_path.name}"
                 )
                 file_already_exists = False
+                output_path = None
 
             # If file doesn't exist, create the path for splitting
             if not output_path:
-                output_filename = f"{expected_base}.mp3"
+                output_filename = f"{expected_base}.{audio_format}"
                 output_path = output_dir / output_filename
 
             # If file already exists, skip splitting and record the path
@@ -196,8 +209,7 @@ class FileSplitter:
                 'ffmpeg',
                 '-i', str(video_path),
                 '-ss', str(start_time),  # Start time
-                '-acodec', 'libmp3lame',
-                '-ab', '320k',  # High quality audio
+                *encoder_args[audio_format],
                 '-y',  # Overwrite output file
             ]
 

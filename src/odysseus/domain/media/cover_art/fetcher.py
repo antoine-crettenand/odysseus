@@ -489,8 +489,18 @@ class CoverArtFetcher:
             Cover art data as bytes, or None if failed
         """
         try:
-            # Look for audio files (MP3, M4A, FLAC, etc.)
-            audio_extensions = ['.mp3', '.m4a', '.flac', '.ogg', '.aac']
+            # Look for formats whose embedded artwork can be decoded below.
+            audio_extensions = [
+                '.mp3',
+                '.m4a',
+                '.mp4',
+                '.m4p',
+                '.flac',
+                '.ogg',
+                '.oga',
+                '.opus',
+                '.wav',
+            ]
             existing_files = []
             for ext in audio_extensions:
                 existing_files.extend(list(folder_path.glob(f"*{ext}")))
@@ -507,7 +517,10 @@ class CoverArtFetcher:
                     from mutagen.mp3 import MP3
                     from mutagen.id3 import ID3NoHeaderError
                     from mutagen.mp4 import MP4
-                    from mutagen.flac import FLAC
+                    from mutagen.flac import FLAC, Picture
+                    from mutagen.wave import WAVE
+                    from mutagen import File as MutagenFile
+                    import base64
 
                     file_ext = audio_file.suffix.lower()
 
@@ -526,15 +539,16 @@ class CoverArtFetcher:
                         except ID3NoHeaderError:
                             pass
 
-                    elif file_ext == '.m4a':
+                    elif file_ext in {'.m4a', '.mp4', '.m4p'}:
                         try:
                             audio = MP4(str(audio_file))
                             if audio.tags and 'covr' in audio.tags:
                                 cover = audio.tags['covr'][0]
-                                if hasattr(cover, 'data'):
+                                cover_data = bytes(cover)
+                                if cover_data:
                                     if console:
-                                        console.print(f"[green]✓ Extracted cover art from {audio_file.name} ({len(cover.data)} bytes)[/green]")
-                                    return cover.data
+                                        console.print(f"[green]✓ Extracted cover art from {audio_file.name} ({len(cover_data)} bytes)[/green]")
+                                    return cover_data
                         except Exception:
                             pass
 
@@ -546,6 +560,45 @@ class CoverArtFetcher:
                                 if hasattr(picture, 'data'):
                                     if console:
                                         console.print(f"[green]✓ Extracted cover art from {audio_file.name} ({len(picture.data)} bytes)[/green]")
+                                    return picture.data
+                        except Exception:
+                            pass
+
+                    elif file_ext == '.wav':
+                        try:
+                            audio = WAVE(str(audio_file))
+                            if audio.tags:
+                                for key in audio.tags.keys():
+                                    if key.startswith('APIC'):
+                                        cover_data = audio.tags[key].data
+                                        if cover_data:
+                                            if console:
+                                                console.print(
+                                                    f"[green]✓ Extracted cover art "
+                                                    f"from {audio_file.name} "
+                                                    f"({len(cover_data)} bytes)[/green]"
+                                                )
+                                            return cover_data
+                        except Exception:
+                            pass
+
+                    elif file_ext in {'.ogg', '.oga', '.opus'}:
+                        try:
+                            audio = MutagenFile(str(audio_file))
+                            pictures = (
+                                audio.tags.get('metadata_block_picture', [])
+                                if audio and audio.tags
+                                else []
+                            )
+                            if pictures:
+                                picture = Picture(base64.b64decode(pictures[0]))
+                                if picture.data:
+                                    if console:
+                                        console.print(
+                                            f"[green]✓ Extracted cover art from "
+                                            f"{audio_file.name} "
+                                            f"({len(picture.data)} bytes)[/green]"
+                                        )
                                     return picture.data
                         except Exception:
                             pass

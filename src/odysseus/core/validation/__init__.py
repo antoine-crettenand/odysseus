@@ -15,6 +15,7 @@ from .input_validators import (
     validate_string_length,
     validate_user_input,
     validate_year,
+    validate_year_range,
 )
 
 __all__ = [
@@ -30,4 +31,5 @@ __all__ = [
     "validate_string_length",
     "validate_user_input",
     "validate_year",
+    "validate_year_range",
 ]

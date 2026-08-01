@@ -12,6 +12,7 @@ from ...ui.user_interaction import UserInteraction
 from ...core.config import PROJECT_NAME, ERROR_MESSAGES
 from ...utils.release_exporter import export_releases
 from ..selection import parse_numeric_selection
+from ...models.outcomes import OperationOutcome
 
 
 class SpotifyHandler(BaseHandler):
@@ -46,10 +47,10 @@ class SpotifyHandler(BaseHandler):
         export_format: str = "tsv",
         collection_type: str = "tracks",
         jobs: int = 1,
-    ):
+    ) -> OperationOutcome:
         """Handle Spotify URL parsing and track download."""
         if mode == "releases":
-            self._handle_releases_mode(
+            return self._handle_releases_mode(
                 url,
                 quality,
                 tracks,
@@ -60,7 +61,7 @@ class SpotifyHandler(BaseHandler):
                 jobs,
             )
         else:
-            self._handle_recordings_mode(
+            return self._handle_recordings_mode(
                 url,
                 quality,
                 tracks,
@@ -75,7 +76,7 @@ class SpotifyHandler(BaseHandler):
         tracks: Optional[str] = None,
         no_download: bool = False,
         jobs: int = 1,
-    ):
+    ) -> OperationOutcome:
         """Handle Spotify URL parsing and track download (recordings mode)."""
         console = self.display_manager.console
         console.print()
@@ -94,7 +95,7 @@ class SpotifyHandler(BaseHandler):
             )
         except ValueError as e:
             console.print(f"[bold red]✗[/bold red] {str(e)}")
-            return
+            return OperationOutcome.failure(str(e), error=e)
         except Exception as e:
             error_msg = str(e)
             if "authentication required" in error_msg.lower():
@@ -104,15 +105,15 @@ class SpotifyHandler(BaseHandler):
                 console.print("[blue]ℹ[/blue] Create an app and add the credentials as environment variables.")
             else:
                 console.print(f"[bold red]✗[/bold red] Failed to parse Spotify URL: {error_msg}")
-            return
+            return OperationOutcome.failure(error_msg, error=e)
 
         if not release_info:
             console.print(f"[bold red]✗[/bold red] {ERROR_MESSAGES['NO_RESULTS']}")
-            return
+            return OperationOutcome.failure("No Spotify results")
 
         if not release_info.tracks:
             console.print("[bold red]✗[/bold red] No tracks found in the Spotify URL.")
-            return
+            return OperationOutcome.failure("No tracks found")
 
         # Display the tracks
         console.print()
@@ -126,7 +127,10 @@ class SpotifyHandler(BaseHandler):
 
         if no_download:
             console.print("[blue]ℹ[/blue] Track listing completed. Use without --no-download to download.")
-            return
+            return OperationOutcome.success(
+                "Track listing completed",
+                processed=len(release_info.tracks),
+            )
 
         # Get track selection from user
         track_numbers = self.user_interaction.parse_track_selection(
@@ -135,7 +139,7 @@ class SpotifyHandler(BaseHandler):
 
         if not track_numbers:
             console.print("[yellow]⚠[/yellow] No tracks selected for download.")
-            return
+            return OperationOutcome.skipped("No tracks selected")
 
         # Download the selected tracks
         console.print()
@@ -145,12 +149,22 @@ class SpotifyHandler(BaseHandler):
         ))
         console.print()
 
-        self.download_orchestrator.download_release_tracks(
+        processed, failed = self.download_orchestrator.download_release_tracks(
             release_info,
             track_numbers,
             quality,
             silent=False,
             jobs=jobs,
+        )
+        if failed:
+            return OperationOutcome.failure(
+                f"{failed} track(s) failed",
+                processed=processed,
+                failed=failed,
+            )
+        return OperationOutcome.success(
+            "Spotify tracks processed",
+            processed=processed,
         )
 
     def _handle_releases_mode(
@@ -163,7 +177,7 @@ class SpotifyHandler(BaseHandler):
         export_format: str = "tsv",
         collection_type: str = "tracks",
         jobs: int = 1,
-    ):
+    ) -> OperationOutcome:
         """Handle Spotify URL parsing and release selection (releases mode)."""
         console = self.display_manager.console
         console.print()
@@ -177,12 +191,12 @@ class SpotifyHandler(BaseHandler):
         parsed = self.spotify_client.parse_spotify_url(url)
         if not parsed:
             console.print(f"[bold red]✗[/bold red] Invalid Spotify URL: {url}")
-            return
+            return OperationOutcome.failure("Invalid Spotify URL")
 
         if parsed["type"] not in {"playlist", "collection"}:
             console.print(f"[bold red]✗[/bold red] Releases mode supports playlist and collection URLs. Got: {parsed['type']}")
             console.print("[blue]ℹ[/blue] Use recordings mode (default) for album and track URLs.")
-            return
+            return OperationOutcome.failure("Unsupported Spotify URL type")
 
         # Extract unique releases from playlist
         try:
@@ -215,11 +229,11 @@ class SpotifyHandler(BaseHandler):
                 console.print("[blue]ℹ[/blue] Create an app and add the credentials as environment variables.")
             else:
                 console.print(f"[bold red]✗[/bold red] Failed to extract releases: {error_msg}")
-            return
+            return OperationOutcome.failure(error_msg, error=e)
 
         if not releases:
             console.print("[bold red]✗[/bold red] No releases found in the playlist.")
-            return
+            return OperationOutcome.failure("No releases found")
 
         # Display the releases
         console.print()
@@ -240,16 +254,22 @@ class SpotifyHandler(BaseHandler):
 
         if no_download:
             console.print("[blue]ℹ[/blue] Release listing completed. Use without --no-download to download.")
-            return
+            return OperationOutcome.success(
+                "Release listing completed",
+                processed=len(releases),
+            )
 
         # Get release selection from user
         selected_releases = self._get_release_selection(releases)
 
         if not selected_releases:
             console.print("[yellow]⚠[/yellow] No releases selected for download.")
-            return
+            return OperationOutcome.skipped("No releases selected")
 
         # Download each selected release
+        processed = 0
+        failed = 0
+        cancelled = False
         for idx, (artist, album, year) in enumerate(selected_releases, start=1):
             console.print()
             console.print(f"[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
@@ -257,7 +277,7 @@ class SpotifyHandler(BaseHandler):
             console.print(f"[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
 
             try:
-                self.release_handler.handle(
+                outcome = self.release_handler.handle(
                     album=album,
                     artist=artist,
                     year=year,
@@ -267,12 +287,32 @@ class SpotifyHandler(BaseHandler):
                     no_download=no_download,
                     jobs=jobs,
                 )
+                if isinstance(outcome, OperationOutcome):
+                    processed += outcome.processed
+                    failed += outcome.failed
+                    if not outcome.succeeded and outcome.failed == 0:
+                        failed += 1
             except KeyboardInterrupt:
                 console.print("\n[yellow]⚠[/yellow] Download cancelled by user.")
+                cancelled = True
                 break
             except Exception as e:
                 console.print(f"[bold red]✗[/bold red] Failed to process {album} by {artist}: {e}")
+                failed += 1
                 continue
+
+        if failed:
+            return OperationOutcome.failure(
+                f"{failed} release or track operation(s) failed",
+                processed=processed,
+                failed=failed,
+            )
+        if cancelled:
+            return OperationOutcome.skipped("Spotify release processing cancelled")
+        return OperationOutcome.success(
+            "Spotify releases processed",
+            processed=processed,
+        )
 
     def _display_releases(self, releases: List[Tuple[str, str, Optional[int]]]):
         """Display releases in a table."""

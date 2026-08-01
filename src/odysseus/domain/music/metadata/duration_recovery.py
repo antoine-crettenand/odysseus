@@ -7,6 +7,11 @@ from typing import Optional
 from ....models.releases import Track, ReleaseInfo
 from ....models.song import SongData
 from ....utils.file_duration_reader import format_duration_ms
+from ..identity import (
+    select_best_release_match,
+    text_similarity,
+    track_titles_match,
+)
 
 
 class DurationRecoveryService:
@@ -114,12 +119,18 @@ class DurationRecoveryService:
             )
 
             recordings = self.musicbrainz_client.search_recording(song_data, limit=5)
-            if recordings:
-                # Use the first result's duration
-                # Note: MusicBrainzSong doesn't have duration, so we need to get the recording
-                # For now, we'll search and get the first recording's MBID, then fetch it
-                if recordings[0].mbid:
-                    duration = self._get_recording_by_mbid(recordings[0].mbid)
+            matching_recordings = [
+                recording
+                for recording in recordings
+                if self._recording_matches(recording, track, release_info)
+            ]
+            if matching_recordings:
+                best_match = max(
+                    matching_recordings,
+                    key=lambda recording: recording.score or 0,
+                )
+                if best_match.mbid:
+                    duration = self._get_recording_by_mbid(best_match.mbid)
                     if duration:
                         return duration
         except Exception:
@@ -157,9 +168,13 @@ class DurationRecoveryService:
             # Search for track
             query = f"track:{track.title} artist:{track.artist or release_info.artist}"
             tracks = self.spotify_client.search_items(query, "track", limit=5)
-            if tracks:
-                # Use the first result
-                duration_ms = tracks[0].get('duration_ms', 0)
+            matching_tracks = [
+                candidate
+                for candidate in tracks
+                if self._spotify_track_matches(candidate, track, release_info)
+            ]
+            if matching_tracks:
+                duration_ms = matching_tracks[0].get('duration_ms', 0)
                 if duration_ms:
                     return format_duration_ms(duration_ms)
         except Exception:
@@ -185,20 +200,65 @@ class DurationRecoveryService:
 
             releases = self.discogs_client.search_release(song_data, limit=5)
             if releases:
-                # Get the first release's details
-                release_id = releases[0].discogs_id  # Discogs uses discogs_id field
+                matching_release = select_best_release_match(
+                    releases,
+                    expected_album=release_info.title,
+                    expected_artist=release_info.artist,
+                    expected_year=self._extract_year(release_info.release_date),
+                )
+                release_id = (
+                    matching_release.discogs_id
+                    if matching_release is not None
+                    else None
+                )
                 if release_id:
                     release_details = self.discogs_client.get_release_info(release_id)
                     if release_details:
                         # Find matching track in the release
                         for release_track in release_details.tracks:
-                            if (release_track.title.lower() == track.title.lower() and
-                                release_track.duration):
+                            if (
+                                track_titles_match(
+                                    track.title,
+                                    release_track.title,
+                                )
+                                and release_track.duration
+                            ):
                                 return release_track.duration
         except Exception:
             pass
 
         return None
+
+    @staticmethod
+    def _recording_matches(recording, track: Track, release_info: ReleaseInfo) -> bool:
+        """Require recording identity before trusting its duration."""
+        if not track_titles_match(track.title, recording.title):
+            return False
+
+        expected_artist = track.artist or release_info.artist
+        if text_similarity(expected_artist, recording.artist) < 0.82:
+            return False
+
+        if recording.album and release_info.title:
+            return text_similarity(release_info.title, recording.album) >= 0.82
+        return True
+
+    @staticmethod
+    def _spotify_track_matches(candidate, track: Track, release_info: ReleaseInfo) -> bool:
+        """Require Spotify track, artist, and album identity."""
+        if not track_titles_match(track.title, candidate.get('name', '')):
+            return False
+
+        artists = candidate.get('artists', [])
+        candidate_artist = artists[0].get('name', '') if artists else ''
+        expected_artist = track.artist or release_info.artist
+        if text_similarity(expected_artist, candidate_artist) < 0.82:
+            return False
+
+        candidate_album = candidate.get('album', {}).get('name', '')
+        if candidate_album and release_info.title:
+            return text_similarity(release_info.title, candidate_album) >= 0.82
+        return True
 
     def _extract_year(self, date_str: Optional[str]) -> Optional[int]:
         """Extract year from date string."""

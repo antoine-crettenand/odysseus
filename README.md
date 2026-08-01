@@ -34,7 +34,12 @@ If you're pulling this repository for the first time on a new computer, follow t
 
 - Python 3.8 or higher
 - pip (Python package manager)
+- FFmpeg (required for audio extraction, conversion, and album splitting)
 - Internet connection
+
+Install FFmpeg with your system package manager, for example `brew install
+ffmpeg` on macOS, `sudo apt install ffmpeg` on Debian/Ubuntu, or `winget
+install Gyan.FFmpeg` on Windows.
 
 The project is configured through `pyproject.toml`; do not run `setup.py`.
 
