@@ -6,6 +6,7 @@ import re
 from typing import List, Optional, Tuple, Set
 from ....models.releases import ReleaseInfo
 from ....models.search_results import YouTubeVideo
+from ..common.date_utils import get_original_release_year
 
 
 class VideoSearcher:
@@ -56,10 +57,9 @@ class VideoSearcher:
         # If titles are similar, add disambiguating terms
         if titles_similar:
             query_parts.append("album")
-            if release_info.release_date:
-                year = release_info.release_date[:4] if len(release_info.release_date) >= 4 else None
-                if year and year.isdigit():
-                    query_parts.append(year)
+            year = get_original_release_year(release_info)
+            if year:
+                query_parts.append(str(year))
 
         return " ".join(query_parts)
 

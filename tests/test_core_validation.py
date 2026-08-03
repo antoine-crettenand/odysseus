@@ -66,8 +66,8 @@ class TestValidateConfiguration:
         with patch('odysseus.core.validation.check_dependencies') as mock_check:
             mock_check.return_value = (True, [])
 
-            with patch('odysseus.core.config.DOWNLOADS_DIR', temp_dir):
-                with patch('odysseus.core.config.CONFIG_DIR', temp_dir):
+            with patch('odysseus.core.validation.config_validators.PROJECT_DOWNLOADS_DIR', temp_dir):
+                with patch('odysseus.core.validation.config_validators.CONFIG_DIR', temp_dir):
                     is_valid, errors = validate_configuration()
 
                     assert is_valid is True

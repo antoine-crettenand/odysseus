@@ -32,9 +32,10 @@ If you're pulling this repository for the first time on a new computer, follow t
 
 #### 1. Prerequisites
 
-- Python 3.8 or higher
+- Python 3.10 or higher
 - pip (Python package manager)
 - FFmpeg (required for audio extraction, conversion, and album splitting)
+- Chromaprint `fpcalc` (optional, for AcoustID verification)
 - Internet connection
 
 Install FFmpeg with your system package manager, for example `brew install
@@ -69,6 +70,12 @@ For development, install the test and lint tools:
 pip install -e ".[dev]"
 ```
 
+To install the native desktop interface as well:
+
+```bash
+pip install -e ".[gui]"
+```
+
 #### 3. Verify Installation
 
 ```bash
@@ -96,6 +103,13 @@ export DISCOGS_USER_TOKEN="..."
 export SPOTIFY_CLIENT_ID="..."
 export SPOTIFY_CLIENT_SECRET="..."
 
+# Optional Apple Music edition enrichment. Supply a signed developer token.
+export APPLE_MUSIC_DEVELOPER_TOKEN="..."
+export APPLE_MUSIC_STOREFRONT="ch"
+
+# Optional post-download fingerprint verification; also requires fpcalc.
+export ACOUSTID_API_KEY="..."
+
 # Optional overrides. Keep a real project URL or contact address in each value.
 export MUSICBRAINZ_USER_AGENT="Odysseus/1.0.0 (https://example.com/project)"
 export DISCOGS_USER_AGENT="Odysseus/1.0.0 (https://example.com/project)"
@@ -103,6 +117,43 @@ export DISCOGS_USER_AGENT="Odysseus/1.0.0 (https://example.com/project)"
 
 Do not commit API keys or tokens. Without `YOUTUBE_API_KEY`, YouTube HTML
 search remains available as a less reliable fallback.
+
+The desktop interface also provides **Settings** (`Ctrl+,`) for configuring
+these providers without environment variables or an application restart.
+Secret fields are masked and saved through the operating-system credential
+store supplied by the `keyring` package in the `gui` installation extra. If a
+credential store is temporarily unavailable, the panel clearly switches to
+session-only storage. Blank fields preserve an existing credential, while
+**Clear saved** removes the selected provider's saved override. Environment
+variables remain valid fallbacks and are never copied into the credential
+store automatically.
+
+MusicBrainz release groups remain the authority for original dates, with
+Discogs master years as the secondary signal. Apple Music and Spotify are
+edition-level fallbacks and never override an established original year.
+When AcoustID is configured, downloads are checked against MusicBrainz
+recording IDs. A mismatch is reported as a warning because fingerprint and
+metadata coverage can be incomplete; the downloaded file is preserved.
+
+### Desktop Interface
+
+Launch the native recording workspace with:
+
+```bash
+odysseus-gui
+```
+
+The desktop interface supports individual recordings, full album/release
+downloads, and artist discography browsing. Album downloads include release
+selection, track selection, parallel-job controls, cancellation, and the same
+full-album, playlist, and individual-track fallback chain as the CLI. Album and
+discography searches support either an exact year or an optional inclusive
+dual-slider year range. Spotify
+imports, batch jobs, and existing-file metadata operations remain available
+through the `odysseus` CLI while those screens are added. Recording and album
+requests are placed in a background queue, so searches and discography browsing
+remain available while downloads run. Open the queue drawer to inspect progress
+and persistent error details or to clear completed jobs.
 
 ### Command Line Interface
 

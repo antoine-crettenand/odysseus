@@ -100,8 +100,11 @@ class ReleaseHandler(BaseHandler):
             return OperationOutcome.skipped("No release selected")
 
         # Check for year mismatch in auto mode
-        if auto and year and selected_release.release_date:
-            release_year = self.release_validator.extract_release_year(selected_release.release_date)
+        selected_date = (
+            selected_release.original_release_date or selected_release.release_date
+        )
+        if auto and year and selected_date:
+            release_year = self.release_validator.extract_release_year(selected_date)
             if release_year and release_year != year:
                 console.print(f"[yellow]⚠[/yellow] Year mismatch: requested {year}, found {release_year}")
 

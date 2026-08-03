@@ -9,6 +9,7 @@ from ....models.releases import ReleaseInfo
 from ....clients.network_agent import NetworkAgent
 from ....core.cache import MemoryCache
 from ....core.http.http_client import HttpClient
+from ...music.common.date_utils import get_original_release_year
 from ...music.identity import select_best_release_match
 
 
@@ -297,13 +298,7 @@ class CoverArtFetcher:
         try:
             from ....models.song import SongData
 
-            # Extract year from release date if available
-            release_year = None
-            if release_info.release_date and len(release_info.release_date) >= 4:
-                try:
-                    release_year = int(release_info.release_date[:4])
-                except ValueError:
-                    pass
+            release_year = get_original_release_year(release_info)
 
             song_data = SongData(
                 title="",  # Not needed for release search
@@ -379,7 +374,7 @@ class CoverArtFetcher:
                 title="",
                 artist=release_info.artist or "",
                 album=release_info.title or "",
-                release_year=int(release_info.release_date[:4]) if release_info.release_date and len(release_info.release_date) >= 4 else None
+                release_year=get_original_release_year(release_info)
             )
 
             # Search for releases
@@ -441,11 +436,7 @@ class CoverArtFetcher:
                 return None
 
             try:
-                year = (
-                    int(release_info.release_date[:4])
-                    if release_info.release_date
-                    else None
-                )
+                year = get_original_release_year(release_info)
                 albums = spotify_client.search_release(
                     release_info.title,
                     release_info.artist,

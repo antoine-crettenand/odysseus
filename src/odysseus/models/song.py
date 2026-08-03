@@ -61,6 +61,8 @@ class AudioMetadata:
     disc_number: Optional[int] = None
     total_discs: Optional[int] = None
     year: Optional[int] = None
+    release_date: Optional[str] = None
+    original_release_date: Optional[str] = None
     genre: Optional[str] = None
     comment: Optional[str] = None
     composer: Optional[str] = None
@@ -69,6 +71,15 @@ class AudioMetadata:
     publisher: Optional[str] = None
     copyright: Optional[str] = None
     isrc: Optional[str] = None
+    catalog_number: Optional[str] = None
+    barcode: Optional[str] = None
+    release_type: Optional[str] = None
+    release_status: Optional[str] = None
+    release_country: Optional[str] = None
+    media_format: Optional[str] = None
+    source_url: Optional[str] = None
+    release_id: Optional[str] = None
+    recording_id: Optional[str] = None
     bpm: Optional[int] = None
     key: Optional[str] = None
     mood: Optional[str] = None

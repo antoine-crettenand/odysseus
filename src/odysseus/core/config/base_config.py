@@ -11,21 +11,24 @@ PROJECT_NAME = "Odysseus"
 PROJECT_VERSION = "1.0.0"
 PROJECT_DESCRIPTION = "Music Discovery Tool - Search MusicBrainz, find YouTube videos, and download music"
 
+
 # File Paths
-def _get_base_dir() -> Path:
-    """Get the base directory for the project."""
+def _get_project_root() -> Path:
+    """Locate the project root independently of the launch directory."""
     current = Path(__file__).resolve()
-    for parent in [current.parent, current.parent.parent, current.parent.parent.parent, current.parent.parent.parent.parent]:
-        if (parent / "pyproject.toml").exists() or (parent / "README.md").exists():
+    for parent in current.parents:
+        if (parent / "pyproject.toml").is_file():
             return parent
 
     return Path.cwd()
 
-BASE_DIR = _get_base_dir()
-# Keep media output relative to the directory from which Odysseus is run.
-# A single relative root also ensures every organized download path remains
-# underneath ./downloads rather than writing into the installed package tree.
-DOWNLOADS_DIR = Path("downloads")
+
+PROJECT_ROOT = _get_project_root()
+PROJECT_DOWNLOADS_DIR = PROJECT_ROOT / "downloads"
+
+# Backward-compatible names for callers that import the original constants.
+BASE_DIR = PROJECT_ROOT
+DOWNLOADS_DIR = PROJECT_DOWNLOADS_DIR
 CONFIG_DIR = Path(os.getenv("ODYSSEUS_CONFIG_DIR", BASE_DIR / "config"))
 
 # Error Messages

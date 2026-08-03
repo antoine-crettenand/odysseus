@@ -125,7 +125,9 @@ class RecordingHandler(BaseHandler):
                 break
 
             # Extract year from release_date using unified validator
-            release_year = self.release_validator.extract_release_year(selected_song.release_date)
+            release_year = self.release_validator.extract_release_year(
+                selected_song.original_release_date or selected_song.release_date
+            )
 
             song_data = SongData(
                 title=selected_song.title,

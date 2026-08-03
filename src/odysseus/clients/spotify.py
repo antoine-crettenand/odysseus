@@ -53,6 +53,17 @@ class SpotifyClient:
         else:
             session_manager.get_session("spotify").headers.update(headers)
 
+    def set_credentials(
+        self,
+        client_id: Optional[str],
+        client_secret: Optional[str],
+    ) -> None:
+        """Replace client credentials and authenticate lazily on next use."""
+        self.client_id = client_id or None
+        self.client_secret = client_secret or None
+        self.access_token = None
+        self._register_session_headers()
+
     def _authenticate(self) -> bool:
         """Authenticate with Spotify API using client credentials flow."""
         if not self.client_id or not self.client_secret:
@@ -205,12 +216,17 @@ class SpotifyClient:
         duration = format_duration_ms(duration_ms)
 
         track_position = position if position is not None else track_data.get("track_number", 1)
+        external_ids = track_data.get("external_ids") or {}
 
         return Track(
             position=track_position,
             title=track_name,
             artist=artist_name,
-            duration=duration
+            duration=duration,
+            source_id=track_data.get("id"),
+            isrc=external_ids.get("isrc"),
+            disc_number=track_data.get("disc_number"),
+            disc_track_number=track_data.get("track_number"),
         )
 
     def _fetch_paginated_items(self, url: str, limit: int = 100) -> List[Dict[str, Any]]:
@@ -285,9 +301,34 @@ class SpotifyClient:
             else:
                 items = self._fetch_paginated_items(config["tracks_url"], config["limit"])
                 for idx, item in enumerate(items, start=1):
-                    track = self._build_track_from_data(item, config["artist"], position=idx if config["use_nested"] else None)
+                    track = self._build_track_from_data(
+                        item, config["artist"], position=idx
+                    )
                     if track:
                         tracks.append(track)
+
+            disc_counts = {}
+            for track in tracks:
+                if track.disc_number:
+                    disc_counts[track.disc_number] = (
+                        disc_counts.get(track.disc_number, 0) + 1
+                    )
+            for track in tracks:
+                if track.disc_number:
+                    track.disc_total_tracks = disc_counts.get(
+                        track.disc_number
+                    )
+
+            external_ids = resource_data.get("external_ids") or {}
+            copyrights = resource_data.get("copyrights") or []
+            copyright_text = next(
+                (
+                    item.get("text")
+                    for item in copyrights
+                    if item.get("text")
+                ),
+                None,
+            )
 
             return ReleaseInfo(
                 title=config["title"],
@@ -295,9 +336,22 @@ class SpotifyClient:
                 release_date=config["release_date"],
                 genre=config["genre"],
                 release_type=config["release_type"],
+                release_status=(
+                    "Official" if resource_type != "playlist" else None
+                ),
+                label=resource_data.get("label"),
+                barcode=(
+                    external_ids.get("upc")
+                    or external_ids.get("ean")
+                ),
+                media_format="Digital Media",
+                mbid=resource_id,
                 url=f"https://open.spotify.com/{resource_type}/{resource_id}",
                 cover_art_url=self._extract_cover_art(cover_art_data),
-                tracks=tracks
+                tracks=tracks,
+                copyright=copyright_text,
+                total_discs=max(disc_counts, default=1),
+                source="spotify",
             )
         except Exception as e:
             raise Exception(f"Failed to get {resource_type} tracks: {str(e)}")
@@ -458,7 +512,11 @@ class SpotifyClient:
 
     def is_authenticated(self) -> bool:
         """Check if Spotify API is authenticated."""
-        return self.access_token is not None
+        if self.access_token is not None:
+            return True
+        if self.client_id and self.client_secret:
+            return self._authenticate()
+        return False
 
     def search_release(self, album: str, artist: str, release_year: Optional[int] = None, limit: int = 10) -> List[Dict[str, Any]]:
         """Search for albums/releases on Spotify."""

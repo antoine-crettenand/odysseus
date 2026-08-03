@@ -100,8 +100,10 @@ class DiscogsClient(BaseAPIClient):
 
         self.user_token = DISCOGS_CONFIG.get("USER_TOKEN")  # Optional, for higher rate limits
 
-        # Setup Discogs-specific session headers
-        # Access the session manager from http_client to set up Discogs-specific headers
+        self._register_session_headers()
+
+    def _register_session_headers(self) -> None:
+        """Replace Discogs headers after a token is added or removed."""
         if hasattr(self.http_client, 'session_manager'):
             headers = {
                 'User-Agent': self.user_agent,
@@ -115,6 +117,11 @@ class DiscogsClient(BaseAPIClient):
                 session_manager.register_headers("discogs", headers)
             else:
                 session_manager.get_session("discogs").headers.update(headers)
+
+    def set_user_token(self, token: Optional[str]) -> None:
+        """Apply a new optional user token without recreating the client."""
+        self.user_token = token or ""
+        self._register_session_headers()
 
     def _make_request(self, url: str, params: Dict[str, Any], batch_progress: Optional[Tuple[int, int]] = None) -> Optional[Dict[str, Any]]:
         """
@@ -233,6 +240,33 @@ class DiscogsClient(BaseAPIClient):
         if cached_result is not None and len(cached_result) > 0:
             print(f"Using cached Discogs result for: {song_data.album} by {song_data.artist}")
         return cached_result or []
+
+    def get_master_year(self, master_id: Union[str, int]) -> Optional[int]:
+        """Return Discogs' original master year for a release family."""
+        normalized_id = str(master_id or "").strip()
+        if not normalized_id or normalized_id == "0":
+            return None
+
+        key = self._generate_release_info_cache_key(
+            "discogs_master_year", normalized_id
+        )
+
+        def fetch_func() -> Optional[int]:
+            data = self._make_request(
+                f"{self.base_url}/masters/{normalized_id}", {}
+            )
+            if not data:
+                return None
+            try:
+                year = int(data.get("year") or 0)
+            except (TypeError, ValueError):
+                return None
+            return year if year > 0 else None
+
+        try:
+            return self._get_cached_or_fetch("release_info", key, fetch_func)
+        except Exception:
+            return None
 
     def _search_artist_id(self, artist: str) -> Optional[int]:
         """
@@ -461,6 +495,7 @@ class DiscogsClient(BaseAPIClient):
         for release in releases:
             title = release.get('title', '')
             release_id = str(release.get('id', ''))
+            master_id = str(release.get('master_id') or '')
             year = release.get('year')
 
             # Extract artist and album from title (format: "Artist - Album" or "Artist - Title")
@@ -518,6 +553,7 @@ class DiscogsClient(BaseAPIClient):
                 release_type=logical_release_type,
                 cover_art_url=cover_art_url,
                 discogs_id=release_id,
+                master_id=master_id,
                 url=url,
                 score=0  # Discogs doesn't provide scores in search results
             )
@@ -533,6 +569,8 @@ class DiscogsClient(BaseAPIClient):
             release_id = str(data.get('id', ''))
             year = data.get('year')
             release_date = str(year) if year else None
+            master_year = self.get_master_year(data.get('master_id'))
+            original_release_date = str(master_year) if master_year else None
 
             # Detailed release responses expose the title and artists separately.
             # A release title itself may legitimately contain " - ", so do not
@@ -563,6 +601,35 @@ class DiscogsClient(BaseAPIClient):
             # Get logical release type (Album/Single/EP), not physical medium name
             formats = data.get('formats', [])
             release_type = extract_discogs_release_type(formats)
+            media_format = extract_discogs_physical_format(formats)
+            format_quantities = []
+            for format_row in formats:
+                if not isinstance(format_row, dict):
+                    continue
+                try:
+                    quantity = int(format_row.get('qty') or 0)
+                except (TypeError, ValueError):
+                    quantity = 0
+                if quantity > 0:
+                    format_quantities.append(quantity)
+            total_discs = max(format_quantities, default=1)
+
+            labels = data.get('labels') or []
+            primary_label = labels[0] if labels else {}
+            label = primary_label.get('name') if primary_label else None
+            catalog_number = (
+                primary_label.get('catno') if primary_label else None
+            )
+            barcode = next(
+                (
+                    identifier.get('value')
+                    for identifier in data.get('identifiers') or []
+                    if str(identifier.get('type') or '').casefold()
+                    == 'barcode'
+                    and identifier.get('value')
+                ),
+                None,
+            )
 
             url = data.get('uri', '') or f"https://www.discogs.com/release/{release_id}"
 
@@ -627,12 +694,21 @@ class DiscogsClient(BaseAPIClient):
                 title=album,
                 artist=artist,
                 release_date=release_date,
+                original_release_date=original_release_date,
                 genre=genre,
                 release_type=release_type,
+                release_status=data.get('status'),
+                country=data.get('country'),
+                label=label,
+                catalog_number=catalog_number,
+                barcode=barcode,
+                media_format=media_format,
                 mbid=release_id,  # Use Discogs ID in mbid field for consistency
                 url=url,
                 cover_art_url=cover_art_url,
-                tracks=tracks
+                tracks=tracks,
+                total_discs=total_discs,
+                source="discogs",
             )
 
         except Exception as e:

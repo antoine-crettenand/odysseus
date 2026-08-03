@@ -11,6 +11,7 @@ from rich.text import Text
 from rich.align import Align
 from rich import box
 
+from ..domain.music.common.date_utils import format_release_date_label
 from ..models.search_results import SearchResult, MusicBrainzSong, YouTubeVideo
 from ..models.releases import ReleaseInfo
 from .styling import Styling
@@ -91,7 +92,7 @@ class DisplayFormatters:
         table.add_column("Artist", style="green", width=30, no_wrap=False)
         table.add_column("Album", style="yellow", width=25, no_wrap=False)
         table.add_column("Type", style="magenta", width=12, justify="center")
-        table.add_column("Release Date", style="cyan", width=12, justify="center")
+        table.add_column("Release Date", style="cyan", width=25, justify="center")
         table.add_column("Source", style="bold", width=12, justify="center")
         table.add_column("Score", style="bold", width=8, justify="center")
 
@@ -109,8 +110,8 @@ class DisplayFormatters:
 
             if hasattr(result, 'album') and result.album:
                 album = result.album
-            if hasattr(result, 'release_date') and result.release_date:
-                release_date = result.release_date
+            if hasattr(result, 'release_date'):
+                release_date = format_release_date_label(result)
             if hasattr(result, 'release_type') and result.release_type:
                 release_type = Text(result.release_type, style="bold magenta")
             if hasattr(result, 'score') and result.score:
@@ -193,8 +194,10 @@ class DisplayFormatters:
         header_content += f"\n[green]by {release_info.artist}[/green]"
         if release_info.release_type:
             header_content += f"\n[bold magenta]Type: {release_info.release_type}[/bold magenta]"
-        if release_info.release_date:
-            header_content += f"\n[cyan]Released: {release_info.release_date}[/cyan]"
+        if release_info.release_date or release_info.original_release_date:
+            header_content += (
+                f"\n[cyan]Released: {format_release_date_label(release_info)}[/cyan]"
+            )
         if release_info.genre:
             header_content += f"\n[magenta]Genre: {release_info.genre}[/magenta]"
 
@@ -309,17 +312,11 @@ class DisplayFormatters:
             table.add_column("Album", style="yellow", width=40)
             table.add_column("Artist", style="green", width=25)
             table.add_column("Type", style="magenta", width=12, justify="center")
-            table.add_column("Release Date", style="cyan", width=15)
+            table.add_column("Release Date", style="cyan", width=25)
             table.add_column("Score", style="bold", width=8, justify="center")
 
             for release in year_releases:
-                # Display original_release_date to match the grouping logic
-                # This ensures re-releases show their original release year, not the re-release year
-                date_to_display = release.original_release_date or release.release_date
-                if date_to_display and len(date_to_display) >= 4:
-                    release_date = date_to_display
-                else:
-                    release_date = "—"
+                release_date = format_release_date_label(release)
                 release_type = Text(release.release_type, style="bold magenta") if release.release_type else Text("—", style="dim")
                 score = self.format_score(release.score) if release.score else Text("—", style="dim")
 

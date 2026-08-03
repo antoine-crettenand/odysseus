@@ -10,6 +10,7 @@ from rich.table import Table
 from ...domain.music.search.search_service import SearchService
 from ...domain.music.download.download_service import DownloadService
 from ...domain.music.metadata.metadata_service import MetadataService
+from ...domain.music.common.date_utils import get_original_release_year
 from ...ui.display import DisplayManager
 from ...ui.handlers.base_handler import BaseHandler
 from ...models.song import SongData
@@ -202,7 +203,8 @@ class MetadataHandler(BaseHandler):
         table.add_column("Type", style="blue", width=12)
         
         for i, release in enumerate(releases[:10], 1):  # Show max 10 results
-            year = release.release_date[:4] if release.release_date and len(release.release_date) >= 4 else "N/A"
+            original_year = get_original_release_year(release)
+            year = str(original_year) if original_year else "N/A"
             release_type = release.release_type or "N/A"
             table.add_row(
                 str(i),

@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .base_strategy import BaseDownloadStrategy
 from ..download_service import DownloadRequest, DownloadResult
+from ..progress import ReleaseProgressCallback, emit_release_progress
 from .....models.releases import ReleaseInfo, Track
 from ...search.video_searcher import VideoSearcher
 from ...search.playlist_checker import PlaylistChecker
@@ -62,6 +63,7 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
         silent: bool = False,
         cover_art_data: Optional[bytes] = None,
         jobs: int = 1,
+        progress_callback: Optional[ReleaseProgressCallback] = None,
     ) -> Tuple[Optional[int], Optional[int]]:
         """
         Download individual tracks with bounded worker concurrency.
@@ -86,11 +88,19 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
                 folder_path=output_dir,
             )
 
+        emit_release_progress(
+            progress_callback,
+            stage="individual_search",
+            status="Finding tracks",
+            message=f"Finding videos for {len(track_numbers)} individual tracks…",
+            percent=0,
+        )
         prepared, failed_count = self._prepare_tracks(
             release_info,
             track_numbers,
             quality,
             silent,
+            progress_callback,
         )
         if not prepared:
             return 0, failed_count
@@ -128,6 +138,17 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
                         f"{track.title[:40]}"
                     ),
                 )
+                completed = 100 * failed_count + sum(percentages.values())
+                emit_release_progress(
+                    progress_callback,
+                    stage="individual_download",
+                    status="Downloading tracks",
+                    message=f"Downloading #{track_number}: {track.title}",
+                    percent=completed / len(track_numbers),
+                    speed=info.get("speed", ""),
+                    eta=info.get("eta", ""),
+                    download_status=info.get("status", "downloading"),
+                )
 
             results = self.download_service.download_many(
                 [item.request for item in prepared],
@@ -143,6 +164,13 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
 
         results_by_key = {result.key: result for result in results}
         downloaded_count = 0
+        emit_release_progress(
+            progress_callback,
+            stage="metadata",
+            status="Tagging",
+            message="Downloads finished; applying track metadata and artwork…",
+            percent=0,
+        )
         for item in prepared:
             result = results_by_key[item.track_number]
             if not result.succeeded:
@@ -186,6 +214,7 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
         track_numbers: List[int],
         quality: str,
         silent: bool,
+        progress_callback: Optional[ReleaseProgressCallback] = None,
     ) -> Tuple[List[_PreparedTrack], int]:
         """Resolve videos and metadata sequentially before starting workers."""
         prepared = []
@@ -195,7 +224,7 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
             track.position: track for track in release_info.tracks
         }
 
-        for track_number in track_numbers:
+        for search_number, track_number in enumerate(track_numbers, start=1):
             track = tracks_by_number.get(track_number)
             if track is None:
                 if not silent:
@@ -205,6 +234,17 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
                     )
                 failed += 1
                 continue
+
+            emit_release_progress(
+                progress_callback,
+                stage="individual_search",
+                status="Finding tracks",
+                message=(
+                    f"Finding video {search_number}/{len(track_numbers)}: "
+                    f"{track.title}"
+                ),
+                percent=(search_number - 1) * 100 / len(track_numbers),
+            )
 
             try:
                 selected_video = self._find_video(track, release_info, silent)

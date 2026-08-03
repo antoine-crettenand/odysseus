@@ -182,3 +182,20 @@ def test_session_refresh_preserves_registered_provider_headers():
     assert refreshed is not first
     assert refreshed.headers["User-Agent"] == "Odysseus/1.0"
     assert refreshed.headers["Authorization"] == "Discogs token=secret"
+
+
+def test_replacing_provider_headers_removes_cleared_authorization():
+    manager = SessionManager()
+    manager.register_headers(
+        "discogs",
+        {
+            "User-Agent": "Odysseus/1.0",
+            "Authorization": "Discogs token=secret",
+        },
+    )
+    session = manager.get_session("discogs")
+
+    manager.register_headers("discogs", {"User-Agent": "Odysseus/1.0"})
+
+    assert "Authorization" not in session.headers
+    assert session.headers["User-Agent"] == "Odysseus/1.0"

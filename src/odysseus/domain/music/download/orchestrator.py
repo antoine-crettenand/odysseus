@@ -15,6 +15,10 @@ from ....ui.display import DisplayManager
 from ..validation.video_validator import VideoValidator
 from ..validation.title_matcher import TitleMatcher
 from .path_manager import PathManager
+from .progress import (
+    ReleaseProgressCallback,
+    emit_release_progress,
+)
 from .strategies.base_strategy import BaseDownloadStrategy
 from .strategies.full_album_strategy import FullAlbumStrategy
 from .strategies.playlist_strategy import PlaylistStrategy
@@ -278,6 +282,7 @@ class DownloadOrchestrator:
         cover_art_data: Optional[bytes],
         existing_count: int,
         jobs: int,
+        progress_callback: Optional[ReleaseProgressCallback] = None,
     ) -> Tuple[int, int]:
         """Offer one final individual retry and return exact final counts."""
         remembered_failures = set(
@@ -320,13 +325,18 @@ class DownloadOrchestrator:
                 console.print(
                     "[cyan]🔁 Final retry: downloading failed tracks individually...[/cyan]"
                 )
+            retry_arguments = {
+                "silent": silent,
+                "cover_art_data": cover_art_data,
+                "jobs": jobs,
+            }
+            if progress_callback is not None:
+                retry_arguments["progress_callback"] = progress_callback
             self.individual_tracks_strategy.download(
                 release_info,
                 failed_track_numbers,
                 quality,
-                silent=silent,
-                cover_art_data=cover_art_data,
-                jobs=jobs,
+                **retry_arguments,
             )
             remembered_failures = set(
                 self.individual_tracks_strategy.failed_track_numbers
@@ -348,15 +358,31 @@ class DownloadOrchestrator:
         quality: str,
         silent: bool = False,
         jobs: int = 1,
+        progress_callback: Optional[ReleaseProgressCallback] = None,
     ) -> Tuple[int, int]:
         """Download selected tracks from a release using multi-strategy approach."""
         console = self.display_manager.console
         jobs = DownloadService.validate_worker_count(jobs)
         self.last_failed_track_numbers = []
 
+        emit_release_progress(
+            progress_callback,
+            stage="preparing",
+            status="Preparing",
+            message="Checking the local library for existing tracks…",
+            percent=0,
+        )
+
         # Check which tracks already exist (partial matches allowed)
         existing_tracks = self.path_manager.get_existing_tracks(release_info, track_numbers)
         missing_track_numbers = [tn for tn in track_numbers if tn not in existing_tracks]
+
+        emit_release_progress(
+            progress_callback,
+            stage="cover_art",
+            status="Artwork",
+            message="Fetching release artwork and metadata…",
+        )
 
         # Fetch cover art once for the entire release (before trying any strategies)
         output_dir = self.path_manager.get_release_folder_path(release_info)
@@ -368,6 +394,13 @@ class DownloadOrchestrator:
 
         # If all tracks exist, only apply metadata
         if not missing_track_numbers:
+            emit_release_progress(
+                progress_callback,
+                stage="metadata",
+                status="Tagging",
+                message="All tracks already exist; refreshing metadata…",
+                percent=0,
+            )
             if not silent:
                 styling = self.display_manager.styling
                 styling.log_info("All tracks already exist. Applying metadata only...")
@@ -422,6 +455,13 @@ class DownloadOrchestrator:
                         failed_count += 1
 
                     progress.update(task, advance=1)
+                    emit_release_progress(
+                        progress_callback,
+                        stage="metadata",
+                        status="Tagging",
+                        message=f"Applying metadata ({processed_count + failed_count}/{len(track_numbers)})…",
+                        percent=(processed_count + failed_count) * 100 / len(track_numbers),
+                    )
 
             # Summary
             if not silent:
@@ -505,8 +545,22 @@ class DownloadOrchestrator:
             console.print()
 
         # Strategy 1: Try full album video (only for missing tracks)
+        emit_release_progress(
+            progress_callback,
+            stage="full_album_search",
+            status="Full album",
+            message="Looking for a complete album video…",
+            percent=0,
+        )
+        full_album_arguments = {"cover_art_data": cover_art_data}
+        if progress_callback is not None:
+            full_album_arguments["progress_callback"] = progress_callback
         downloaded, failed = self.full_album_strategy.download(
-            release_info, missing_track_numbers, quality, silent, cover_art_data=cover_art_data
+            release_info,
+            missing_track_numbers,
+            quality,
+            silent,
+            **full_album_arguments,
         )
         if downloaded is not None:
             total_downloaded, failed = self._finish_release_attempt(
@@ -518,6 +572,7 @@ class DownloadOrchestrator:
                 cover_art_data,
                 len(existing_tracks),
                 jobs,
+                progress_callback,
             )
             # Success with full album - apply metadata to existing tracks too
             if existing_tracks:
@@ -534,13 +589,25 @@ class DownloadOrchestrator:
             return total_downloaded, failed
 
         # Strategy 2: Try playlist (only for missing tracks)
+        emit_release_progress(
+            progress_callback,
+            stage="playlist_search",
+            status="Playlist fallback",
+            message="No usable full-album video; looking for a playlist…",
+            percent=0,
+        )
+        playlist_arguments = {
+            "cover_art_data": cover_art_data,
+            "jobs": jobs,
+        }
+        if progress_callback is not None:
+            playlist_arguments["progress_callback"] = progress_callback
         downloaded, failed = self.playlist_strategy.download(
             release_info,
             missing_track_numbers,
             quality,
             silent,
-            cover_art_data=cover_art_data,
-            jobs=jobs,
+            **playlist_arguments,
         )
         if downloaded is not None:
             total_downloaded, failed = self._finish_release_attempt(
@@ -552,6 +619,7 @@ class DownloadOrchestrator:
                 cover_art_data,
                 len(existing_tracks),
                 jobs,
+                progress_callback,
             )
             # Success with playlist - apply metadata to existing tracks too
             if existing_tracks:
@@ -568,13 +636,25 @@ class DownloadOrchestrator:
             return total_downloaded, failed
 
         # Strategy 3: Fall back to individual tracks (only for missing tracks)
+        emit_release_progress(
+            progress_callback,
+            stage="individual_search",
+            status="Track fallback",
+            message="No usable playlist; finding individual track videos…",
+            percent=0,
+        )
+        individual_arguments = {
+            "cover_art_data": cover_art_data,
+            "jobs": jobs,
+        }
+        if progress_callback is not None:
+            individual_arguments["progress_callback"] = progress_callback
         downloaded, failed = self.individual_tracks_strategy.download(
             release_info,
             missing_track_numbers,
             quality,
             silent,
-            cover_art_data=cover_art_data,
-            jobs=jobs,
+            **individual_arguments,
         )
         total_downloaded, failed = self._finish_release_attempt(
             release_info,
@@ -585,6 +665,7 @@ class DownloadOrchestrator:
             cover_art_data,
             len(existing_tracks),
             jobs,
+            progress_callback,
         )
 
         # Apply metadata to existing tracks

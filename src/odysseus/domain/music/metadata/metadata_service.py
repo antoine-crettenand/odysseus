@@ -97,8 +97,20 @@ class MetadataService:
                 'artist': track_artist,
                 'album': release_info.title,
                 'year': year,
+                'date': date_to_use,
+                # Keep the global position for stable filenames and selection;
+                # final audio tags use the separate per-disc position below.
                 'track_number': track.position,
-                'total_tracks': len(release_info.tracks)
+                'disc_track_number': (
+                    track.disc_track_number or track.position
+                ),
+                'total_tracks': (
+                    track.disc_total_tracks or len(release_info.tracks)
+                ),
+                'disc_number': track.disc_number,
+                'total_discs': release_info.total_discs,
+                'genre': release_info.genre,
+                'isrc': track.isrc,
             })
 
         return metadata_list
@@ -162,10 +174,29 @@ class MetadataService:
                 album=album_name,  # Normalized album name for consistency
                 album_artist="Various Artists" if is_compilation else (release_info.artist.strip() if release_info.artist else "Unknown Artist"),  # Album artist for iTunes grouping
                 year=int(date_to_use[:4]) if date_to_use and len(date_to_use) >= 4 else None,
+                release_date=release_info.release_date,
+                original_release_date=release_info.original_release_date,
                 genre=release_info.genre,
-                track_number=track.position,
-                total_tracks=len(release_info.tracks),
-                compilation=is_compilation  # Set compilation flag for iTunes
+                track_number=track.disc_track_number or track.position,
+                total_tracks=(
+                    track.disc_total_tracks or len(release_info.tracks)
+                ),
+                disc_number=track.disc_number,
+                total_discs=release_info.total_discs,
+                publisher=release_info.label,
+                copyright=release_info.copyright,
+                isrc=track.isrc,
+                catalog_number=release_info.catalog_number,
+                barcode=release_info.barcode,
+                release_type=release_info.release_type,
+                release_status=release_info.release_status,
+                release_country=release_info.country,
+                media_format=release_info.media_format,
+                source_url=release_info.url,
+                release_id=release_info.mbid or None,
+                recording_id=track.mbid or track.source_id,
+                compilation=is_compilation,  # Set compilation flag for iTunes
+                source=release_info.source,
             )
 
             # Use provided cover art, or fetch it if not provided

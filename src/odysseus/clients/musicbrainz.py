@@ -10,7 +10,7 @@ from rich.console import Console
 from ..models.song import SongData
 from ..models.search_results import MusicBrainzSong
 from ..models.releases import Track, ReleaseInfo
-from ..core.config import MUSICBRAINZ_CONFIG, ERROR_MESSAGES, DOWNLOADS_DIR
+from ..core.config import ERROR_MESSAGES, MUSICBRAINZ_CONFIG, PROJECT_DOWNLOADS_DIR
 from ..utils.file_duration_reader import format_duration_ms
 from ..utils.string_utils import normalize_string
 from .base_api_client import BaseAPIClient
@@ -83,7 +83,7 @@ class MusicBrainzClient(BaseAPIClient):
             }
 
             # Get the expected folder path
-            expected_folder = self.path_utils.create_organized_path(DOWNLOADS_DIR, metadata)
+            expected_folder = self.path_utils.create_organized_path(PROJECT_DOWNLOADS_DIR, metadata)
 
             # Check if folder exists
             if not expected_folder.exists():
@@ -264,7 +264,10 @@ class MusicBrainzClient(BaseAPIClient):
         def fetch_func():
             url = f"{self.base_url}/release/{release_mbid}"
             params = {
-                'inc': 'recordings+artist-credits+media+release-groups',
+                'inc': (
+                    'recordings+artist-credits+media+release-groups+'
+                    'labels+isrcs+genres'
+                ),
                 'fmt': 'json'
             }
 
@@ -416,7 +419,8 @@ class MusicBrainzClient(BaseAPIClient):
 
                             if year:
                                 try:
-                                    release_year = int(release_date[:4]) if release_date and len(release_date) >= 4 else None
+                                    date_to_use = original_release_date or release_date
+                                    release_year = int(date_to_use[:4]) if date_to_use and len(date_to_use) >= 4 else None
                                     if release_year != year:
                                         continue
                                 except ValueError:
@@ -508,6 +512,7 @@ class MusicBrainzClient(BaseAPIClient):
             mbid = release.get('id', '')
             score = release.get('score', 0)
             release_date = release.get('date', '')
+            edition_metadata = self._parse_edition_metadata(release)
 
             artist = self._parse_artist_credit(release.get('artist-credit', []))
 
@@ -531,12 +536,57 @@ class MusicBrainzClient(BaseAPIClient):
                 original_release_date=original_release_date,
                 genre=None,
                 release_type=release_type,
+                **edition_metadata,
                 mbid=mbid,
                 score=score,
                 url=f"https://musicbrainz.org/release/{mbid}"
             ))
 
         return results
+
+    @staticmethod
+    def _parse_edition_metadata(release: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract identifiers and edition details common to search and lookup."""
+        label = None
+        catalog_number = None
+        for label_info in release.get('label-info', []):
+            if not isinstance(label_info, dict):
+                continue
+            label_data = label_info.get('label') or {}
+            if not label and isinstance(label_data, dict):
+                label = label_data.get('name')
+            if not catalog_number:
+                catalog_number = label_info.get('catalog-number')
+            if label or catalog_number:
+                break
+
+        formats = []
+        for medium in release.get('media', []):
+            if not isinstance(medium, dict):
+                continue
+            medium_format = medium.get('format')
+            if medium_format and medium_format not in formats:
+                formats.append(medium_format)
+
+        track_count = release.get('track-count')
+        if track_count is None:
+            medium_counts = [
+                medium.get('track-count')
+                for medium in release.get('media', [])
+                if isinstance(medium, dict) and medium.get('track-count') is not None
+            ]
+            if medium_counts:
+                track_count = sum(medium_counts)
+
+        return {
+            'release_status': release.get('status'),
+            'country': release.get('country'),
+            'label': label,
+            'catalog_number': catalog_number,
+            'barcode': release.get('barcode'),
+            'media_format': ', '.join(formats) or None,
+            'track_count': track_count,
+        }
 
     def _parse_artist_credit(self, artist_credits: List[Any]) -> str:
         """
@@ -584,6 +634,7 @@ class MusicBrainzClient(BaseAPIClient):
             title = data.get('title', '')
             mbid = data.get('id', '')
             release_date = data.get('date', '')
+            edition_metadata = self._parse_edition_metadata(data)
 
             artist = self._parse_artist_credit(data.get('artist-credit', []))
 
@@ -606,8 +657,14 @@ class MusicBrainzClient(BaseAPIClient):
             tracks = []
             current_position = 1
 
-            for medium in data.get('media', []):
-                for track_data in medium.get('tracks', []):
+            media = data.get('media', [])
+            total_discs = len(media) or None
+            for medium_index, medium in enumerate(media, start=1):
+                medium_tracks = medium.get('tracks', [])
+                disc_number = medium.get('position') or medium_index
+                for disc_track_index, track_data in enumerate(
+                    medium_tracks, start=1
+                ):
                     recording = track_data.get('recording', {})
                     track_title = recording.get('title', '')
                     track_mbid = recording.get('id', '')
@@ -626,7 +683,13 @@ class MusicBrainzClient(BaseAPIClient):
                         title=track_title,
                         artist=track_artist,
                         duration=duration,
-                        mbid=track_mbid
+                        mbid=track_mbid,
+                        isrc=(recording.get('isrcs') or [None])[0],
+                        disc_number=disc_number,
+                        disc_track_number=(
+                            track_data.get('position') or disc_track_index
+                        ),
+                        disc_total_tracks=len(medium_tracks),
                     ))
                     current_position += 1
 
@@ -637,9 +700,17 @@ class MusicBrainzClient(BaseAPIClient):
                 original_release_date=original_release_date,
                 genre=genre,
                 release_type=release_type,
+                release_status=edition_metadata['release_status'],
+                country=edition_metadata['country'],
+                label=edition_metadata['label'],
+                catalog_number=edition_metadata['catalog_number'],
+                barcode=edition_metadata['barcode'],
+                media_format=edition_metadata['media_format'],
                 mbid=mbid,
                 url=f"https://musicbrainz.org/release/{mbid}",
-                tracks=tracks
+                tracks=tracks,
+                total_discs=total_discs,
+                source="musicbrainz",
             )
 
         except Exception as e:

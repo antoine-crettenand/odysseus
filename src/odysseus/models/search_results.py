@@ -29,7 +29,15 @@ class MusicBrainzSong(SearchResult):
     release_date: Optional[str] = None
     original_release_date: Optional[str] = None  # Original release date from release-group (first-release-date)
     genre: Optional[str] = None
+    cover_art_url: Optional[str] = None
     release_type: Optional[str] = None  # e.g., "Album", "Single", "EP", "Compilation", "Live", etc.
+    release_status: Optional[str] = None
+    country: Optional[str] = None
+    label: Optional[str] = None
+    catalog_number: Optional[str] = None
+    barcode: Optional[str] = None
+    media_format: Optional[str] = None
+    track_count: Optional[int] = None
     mbid: str = ""
     source: str = "musicbrainz"
 
@@ -66,6 +74,7 @@ class DiscogsRelease(SearchResult):
     """Discogs release search result."""
     album: Optional[str] = None
     year: Optional[int] = None
+    master_year: Optional[int] = None
     genre: Optional[str] = None
     style: Optional[str] = None
     label: Optional[str] = None
@@ -74,6 +83,7 @@ class DiscogsRelease(SearchResult):
     release_type: Optional[str] = None  # Logical type (Album, Single, EP, ...)
     cover_art_url: Optional[str] = None
     discogs_id: str = ""
+    master_id: str = ""
     source: str = "discogs"
 
     def get_display_name(self) -> str:

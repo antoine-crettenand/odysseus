@@ -2,6 +2,7 @@
 Year validator module for validating and retrieving release years from external sources.
 """
 
+import re
 from typing import List, Optional, Dict, Tuple
 from ....utils.string_utils import normalize_string
 
@@ -26,6 +27,27 @@ class YearValidator:
         if self._spotify_client_getter:
             return self._spotify_client_getter()
         return None
+
+    @staticmethod
+    def _normalize_artist(artist: str) -> str:
+        """Normalize provider-specific artist disambiguation suffixes."""
+        without_discogs_suffix = re.sub(r"\s*\(\d+\)\s*$", "", artist or "")
+        return normalize_string(without_discogs_suffix)
+
+    @classmethod
+    def _matches_release(
+        cls,
+        candidate_artist: str,
+        candidate_album: str,
+        artist: str,
+        album: str,
+    ) -> bool:
+        """Require an exact normalized identity before trusting a year."""
+        return (
+            cls._normalize_artist(candidate_artist) == cls._normalize_artist(artist)
+            and normalize_string(candidate_album or "")
+            == normalize_string(album or "")
+        )
 
     def _get_release_year_from_spotify(self, artist: str, album: str) -> Optional[int]:
         """
@@ -55,34 +77,28 @@ class YearValidator:
                 self._year_validation_cache[cache_key] = None
                 return None
 
-            # Find the best matching album (exact match preferred)
+            # Spotify exposes edition dates, so only use exact matches and
+            # choose the earliest matching edition as a low-authority fallback.
+            matching_years = []
             for album_data in albums:
                 album_name = album_data.get('name', '')
                 artists = album_data.get('artists', [])
                 artist_name = artists[0].get('name', '') if artists else ''
 
-                # Check if this matches (normalized comparison)
-                if (normalize_string(album_name) == normalize_string(album) and
-                    normalize_string(artist_name) == normalize_string(artist)):
+                if self._matches_release(
+                    artist_name, album_name, artist, album
+                ):
                     release_date = album_data.get('release_date', '')
                     if release_date and len(release_date) >= 4:
                         try:
-                            year = int(release_date[:4])
-                            self._year_validation_cache[cache_key] = year
-                            return year
+                            matching_years.append(int(release_date[:4]))
                         except ValueError:
                             continue
 
-            # If no exact match, try first result
-            if albums:
-                release_date = albums[0].get('release_date', '')
-                if release_date and len(release_date) >= 4:
-                    try:
-                        year = int(release_date[:4])
-                        self._year_validation_cache[cache_key] = year
-                        return year
-                    except ValueError:
-                        pass
+            if matching_years:
+                year = min(matching_years)
+                self._year_validation_cache[cache_key] = year
+                return year
 
             self._year_validation_cache[cache_key] = None
             return None
@@ -132,18 +148,10 @@ class YearValidator:
                 self._year_validation_cache[cache_key] = None
                 return None
 
-            # Find the best matching release (exact match preferred)
-            for result in discogs_results:
-                # Check if this matches (normalized comparison)
-                if (normalize_string(result.album or "") == normalize_string(album) and
-                    normalize_string(result.artist or "") == normalize_string(artist)):
-                    if result.year:
-                        self._year_validation_cache[cache_key] = result.year
-                        return result.year
-
-            # If no exact match, use first result's year
-            if discogs_results and discogs_results[0].year:
-                year = discogs_results[0].year
+            year = self.resolve_discogs_year(
+                artist, album, discogs_results
+            )
+            if year:
                 self._year_validation_cache[cache_key] = year
                 return year
 
@@ -153,6 +161,61 @@ class YearValidator:
         except Exception:
             self._year_validation_cache[cache_key] = None
             return None
+
+    def resolve_discogs_year(
+        self,
+        artist: str,
+        album: str,
+        discogs_results: list,
+    ) -> Optional[int]:
+        """Resolve and annotate the original year from fetched Discogs rows."""
+        matching_results = [
+            result
+            for result in discogs_results
+            if self._matches_release(
+                result.artist or "",
+                result.album or "",
+                artist,
+                album,
+            )
+        ]
+        if not matching_results:
+            return None
+
+        # A Discogs master represents the release family and is a better
+        # original-year signal than any particular physical edition.
+        master_years_by_id: Dict[str, int] = {}
+        get_master_year = getattr(self.discogs_client, "get_master_year", None)
+        if callable(get_master_year):
+            for result in matching_results:
+                master_id = str(getattr(result, "master_id", "") or "")
+                if not master_id:
+                    continue
+                if master_id not in master_years_by_id:
+                    try:
+                        master_year = get_master_year(master_id)
+                    except Exception:
+                        master_year = None
+                    if master_year:
+                        master_years_by_id[master_id] = master_year
+                if master_id in master_years_by_id:
+                    result.master_year = master_years_by_id[master_id]
+
+        if master_years_by_id:
+            return min(master_years_by_id.values())
+
+        # Without master metadata, the earliest exact Discogs edition is a
+        # safer fallback than an unrelated first search result. Do not label
+        # that fallback as a confirmed master year.
+        edition_years = []
+        for result in matching_results:
+            try:
+                year = int(result.year or 0)
+            except (TypeError, ValueError):
+                continue
+            if year > 0:
+                edition_years.append(year)
+        return min(edition_years) if edition_years else None
 
     def validate_year(
         self,
@@ -173,22 +236,25 @@ class YearValidator:
         Returns:
             Validated year if found, None otherwise
         """
-        # Try Spotify first
-        spotify_year = self._get_release_year_from_spotify(artist, album)
-        if spotify_year and spotify_year in candidate_years:
-            return spotify_year
-
-        # Try Discogs (with release_type filter)
+        # Discogs masters describe the original release family. Spotify only
+        # describes the particular digital edition returned by search.
         discogs_year = self._get_release_year_from_discogs(artist, album, release_type)
+        spotify_year = self._get_release_year_from_spotify(artist, album)
+
+        if spotify_year and discogs_year and spotify_year == discogs_year:
+            return discogs_year if discogs_year in candidate_years else None
+
         if discogs_year and discogs_year in candidate_years:
             return discogs_year
 
-        # If both agree (even if not in candidates), prefer that
-        if spotify_year and discogs_year and spotify_year == discogs_year:
+        # A conflicting Spotify edition year must not override Discogs.
+        if discogs_year and spotify_year and discogs_year != spotify_year:
+            return None
+
+        if spotify_year and spotify_year in candidate_years:
             return spotify_year
 
-        # Return the most authoritative source (Spotify preferred)
-        return spotify_year or discogs_year
+        return None
 
     def get_release_year(
         self,
@@ -207,11 +273,9 @@ class YearValidator:
         Returns:
             Release year if found, None otherwise
         """
-        # Try Spotify first
-        spotify_year = self._get_release_year_from_spotify(artist, album)
-        if spotify_year:
-            return spotify_year
-
-        # Try Discogs
+        # Prefer Discogs master/earliest-edition metadata. Spotify is a
+        # last-resort edition-year fallback.
         discogs_year = self._get_release_year_from_discogs(artist, album, release_type)
-        return discogs_year
+        if discogs_year:
+            return discogs_year
+        return self._get_release_year_from_spotify(artist, album)

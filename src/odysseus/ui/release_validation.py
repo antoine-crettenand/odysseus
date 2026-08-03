@@ -5,6 +5,7 @@ Unified release validator for consistent release matching.
 from typing import Optional
 from ..models.releases import ReleaseInfo
 from ..models.search_results import MusicBrainzSong
+from ..domain.music.common.date_utils import get_original_release_year
 from ..domain.music.identity import compare_release
 from .display import DisplayManager
 from rich.prompt import Confirm, Prompt
@@ -44,7 +45,7 @@ class ReleaseValidator:
             fetched_release_info,
             expected_album=expected_release.album or expected_release.title or "",
             expected_artist=expected_release.artist or "",
-            expected_year=self.extract_release_year(expected_release.release_date),
+            expected_year=get_original_release_year(expected_release),
             expected_type=expected_release.release_type,
         )
 

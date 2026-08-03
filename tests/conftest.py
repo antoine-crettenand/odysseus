@@ -175,10 +175,14 @@ def reset_environment(monkeypatch):
     """Reset environment variables before each test."""
     # Store original values
     env_vars = [
-        "ODYSSEUS_DOWNLOADS_DIR",
         "ODYSSEUS_CONFIG_DIR",
         "SPOTIFY_CLIENT_ID",
         "SPOTIFY_CLIENT_SECRET",
+        "YOUTUBE_API_KEY",
+        "DISCOGS_USER_TOKEN",
+        "APPLE_MUSIC_DEVELOPER_TOKEN",
+        "APPLE_MUSIC_STOREFRONT",
+        "ACOUSTID_API_KEY",
         "MUSICBRAINZ_BASE_URL",
         "MUSICBRAINZ_REQUEST_DELAY",
     ]

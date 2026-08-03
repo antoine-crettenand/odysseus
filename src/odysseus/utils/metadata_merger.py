@@ -5,7 +5,7 @@ to apply to audio files.
 """
 
 from typing import Dict, Any, Optional, List
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 import logging
 from ..models.song import AudioMetadata
@@ -32,7 +32,9 @@ class MetadataSource:
         fields = [
             self.metadata.title, self.metadata.artist, self.metadata.album,
             self.metadata.year, self.metadata.genre, self.metadata.track_number,
-            self.metadata.composer, self.metadata.publisher
+            self.metadata.composer, self.metadata.publisher,
+            self.metadata.isrc, self.metadata.disc_number,
+            self.metadata.catalog_number, self.metadata.barcode,
         ]
         filled_fields = sum(1 for field in fields if field is not None)
         return filled_fields / len(fields)
@@ -72,7 +74,9 @@ class MetadataMerger:
 
         # Start with the best source as base
         best_source = sorted_sources[0]
-        merged_metadata = replace(best_source.metadata, source=f"merged_from_{best_source.source_name}")
+        # Keep the provider identity so provider-specific IDs can be written
+        # using their established tag names after fields are merged.
+        merged_metadata = replace(best_source.metadata)
 
         # Fill in missing fields from other sources
         for source in sorted_sources[1:]:
@@ -96,16 +100,15 @@ class MetadataMerger:
         confidence_threshold = 0.5
 
         if confidence >= confidence_threshold:
-            if target.title is None and source.title is not None:
-                target.title = source.title
-            if target.artist is None and source.artist is not None:
-                target.artist = source.artist
-            if target.album is None and source.album is not None:
-                target.album = source.album
-            if target.year is None and source.year is not None:
-                target.year = source.year
-            if target.genre is None and source.genre is not None:
-                target.genre = source.genre
+            for metadata_field in fields(AudioMetadata):
+                field_name = metadata_field.name
+                if field_name in {"source", "cover_art_data", "cover_art_url"}:
+                    continue
+                if (
+                    getattr(target, field_name) is None
+                    and getattr(source, field_name) is not None
+                ):
+                    setattr(target, field_name, getattr(source, field_name))
 
     def get_metadata_summary(self) -> Dict[str, Any]:
         """Get a summary of all metadata sources and the final merged result."""

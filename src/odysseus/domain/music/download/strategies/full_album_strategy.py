@@ -7,6 +7,7 @@ import threading
 from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
 from .base_strategy import BaseDownloadStrategy
+from ..progress import ReleaseProgressCallback, emit_release_progress
 from .....clients.file_splitter import FileSplitter
 from .....models.releases import ReleaseInfo
 
@@ -350,7 +351,8 @@ class FullAlbumStrategy(BaseDownloadStrategy):
         track_numbers: List[int],
         quality: str,
         silent: bool = False,
-        cover_art_data: Optional[bytes] = None
+        cover_art_data: Optional[bytes] = None,
+        progress_callback: Optional[ReleaseProgressCallback] = None,
     ) -> Tuple[Optional[int], Optional[int]]:
         """
         Strategy 1: Download full album video and split into tracks.
@@ -368,6 +370,12 @@ class FullAlbumStrategy(BaseDownloadStrategy):
 
         # Check if strategy should be skipped
         if self._should_skip_strategy(release_info, silent):
+            emit_release_progress(
+                progress_callback,
+                stage="full_album_skipped",
+                status="Full album skipped",
+                message="A full-album video does not apply to this playlist source.",
+            )
             return None, None
 
         console = self.display_manager.console
@@ -383,14 +391,39 @@ class FullAlbumStrategy(BaseDownloadStrategy):
         # Search for full album videos
         full_album_videos = self._search_full_album_videos(release_info, silent)
         if not full_album_videos:
+            emit_release_progress(
+                progress_callback,
+                stage="full_album_not_found",
+                status="No full album",
+                message="No full-album video was found.",
+            )
             if not silent:
                 styling.log_warning("No full album video found. Trying next strategy...")
             return None, None
 
+        emit_release_progress(
+            progress_callback,
+            stage="full_album_found",
+            status="Full album found",
+            message=(
+                f"Found {len(full_album_videos)} full-album candidate"
+                f"{'s' if len(full_album_videos) != 1 else ''}; validating…"
+            ),
+        )
+
         # Try each full album video until one works
-        for video in full_album_videos:
+        for candidate_number, video in enumerate(full_album_videos, start=1):
             try:
                 # Validate video
+                emit_release_progress(
+                    progress_callback,
+                    stage="full_album_validating",
+                    status="Validating",
+                    message=(
+                        f"Validating full-album candidate {candidate_number}/"
+                        f"{len(full_album_videos)}: {video.title}"
+                    ),
+                )
                 if not self._validate_video(video, release_info, track_numbers, silent, styling, console):
                     continue
 
@@ -402,6 +435,12 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                     continue
 
                 # Prepare track timestamps
+                emit_release_progress(
+                    progress_callback,
+                    stage="full_album_timestamps",
+                    status="Track timing",
+                    message="Full-album video accepted; locating track boundaries…",
+                )
                 track_timestamps = self._prepare_track_timestamps(
                     youtube_url, selected_tracks, release_info, track_numbers, silent, styling
                 )
@@ -414,7 +453,13 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                 # Download full album video
                 album_metadata = self._prepare_album_metadata(release_info)
                 full_video_path = self._download_full_album_video(
-                    video, youtube_url, album_metadata, silent, styling, console
+                    video,
+                    youtube_url,
+                    album_metadata,
+                    silent,
+                    styling,
+                    console,
+                    progress_callback,
                 )
                 if not full_video_path:
                     if not silent:
@@ -433,7 +478,12 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                     metadata_list = self._prepare_metadata_list(track_timestamps, release_info)
 
                     split_files = self._split_video_into_tracks(
-                        full_video_path, track_timestamps, output_dir, metadata_list, silent
+                        full_video_path,
+                        track_timestamps,
+                        output_dir,
+                        metadata_list,
+                        silent,
+                        progress_callback,
                     )
 
                     successful_splits = [
@@ -450,6 +500,13 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                             )
 
                         # Apply metadata to split files (index-aligned; None = failed)
+                        emit_release_progress(
+                            progress_callback,
+                            stage="metadata",
+                            status="Tagging",
+                            message="Split complete; applying track metadata and artwork…",
+                            percent=0,
+                        )
                         return self._apply_metadata_to_split_files(
                             split_files, track_timestamps, release_info, cover_art_data,
                             existing_files_before_split, youtube_url, silent, styling, console
@@ -465,6 +522,12 @@ class FullAlbumStrategy(BaseDownloadStrategy):
         # If we get here, all full album videos failed
         if not silent:
             styling.log_warning("All full album videos failed. Trying next strategy...")
+        emit_release_progress(
+            progress_callback,
+            stage="full_album_rejected",
+            status="Full album unusable",
+            message="Full-album candidates were found, but none could be used.",
+        )
         return None, None
 
     def _should_skip_strategy(self, release_info: ReleaseInfo, silent: bool) -> bool:
@@ -645,7 +708,8 @@ class FullAlbumStrategy(BaseDownloadStrategy):
         album_metadata: Dict[str, Any],
         silent: bool,
         styling,
-        console
+        console,
+        progress_callback: Optional[ReleaseProgressCallback] = None,
     ) -> Optional[Path]:
         """Download full album video with progress tracking."""
         if not silent:
@@ -672,6 +736,23 @@ class FullAlbumStrategy(BaseDownloadStrategy):
             current_status = progress_info.get('status', 'downloading')
             current_speed = progress_info.get('speed', '')
             current_eta = progress_info.get('eta', '')
+
+            raw_status = str(current_status or "downloading")
+            status_message = {
+                "extracting": "Extracting audio from the full-album video…",
+                "merging": "Merging the full-album audio stream…",
+                "finished": "Finalizing the full-album download…",
+            }.get(raw_status, f"Downloading full-album video: {video.title}")
+            emit_release_progress(
+                progress_callback,
+                stage="full_album_download",
+                status="Downloading album",
+                message=status_message,
+                percent=current_percent,
+                speed=current_speed,
+                eta=current_eta,
+                download_status=raw_status,
+            )
 
             _update_progress_display()
 
@@ -733,6 +814,13 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                 )
                 download_complete = True
                 file_progress.update(file_task_id, completed=100, description=f"Complete: {video.title[:35]}")
+                emit_release_progress(
+                    progress_callback,
+                    stage="full_album_download",
+                    status="Album downloaded",
+                    message="Full-album video downloaded; preparing to split tracks…",
+                    percent=100,
+                )
         finally:
             download_complete = True
 
@@ -753,7 +841,8 @@ class FullAlbumStrategy(BaseDownloadStrategy):
         track_timestamps: List[Dict[str, Any]],
         output_dir: Path,
         metadata_list: List[Dict[str, Any]],
-        silent: bool
+        silent: bool,
+        progress_callback: Optional[ReleaseProgressCallback] = None,
     ) -> List[Optional[Path]]:
         """Split video into tracks."""
         if not silent:
@@ -767,6 +856,17 @@ class FullAlbumStrategy(BaseDownloadStrategy):
         def update_split_progress(progress_info: Dict[str, Any]):
             percent = progress_info.get('percent', 0)
             split_progress.update(split_task_id, completed=percent)
+            emit_release_progress(
+                progress_callback,
+                stage="splitting",
+                status="Splitting tracks",
+                message=str(
+                    progress_info.get("message")
+                    or progress_info.get("status")
+                    or "Splitting the full-album audio into tracks…"
+                ),
+                percent=percent,
+            )
 
         with split_progress:
             split_files = self.download_service.split_video_into_tracks(
@@ -777,6 +877,13 @@ class FullAlbumStrategy(BaseDownloadStrategy):
                 progress_callback=update_split_progress
             )
             split_progress.update(split_task_id, completed=100)
+            emit_release_progress(
+                progress_callback,
+                stage="splitting",
+                status="Split complete",
+                message=f"Created {len([path for path in split_files if path])} track files.",
+                percent=100,
+            )
 
         return split_files
 

@@ -47,6 +47,64 @@ class FormatMetadataApplier(ABC):
             return f"{self.metadata.track_number}/{self.metadata.total_tracks}" if self.metadata.total_tracks else str(self.metadata.track_number)
         return ""
 
+    def _format_disc_number(self) -> str:
+        if self.metadata.disc_number:
+            return f"{self.metadata.disc_number}/{self.metadata.total_discs}" if self.metadata.total_discs else str(self.metadata.disc_number)
+        return ""
+
+    def _date_value(self) -> Optional[str]:
+        return (
+            self.metadata.original_release_date
+            or self.metadata.release_date
+            or (str(self.metadata.year) if self.metadata.year else None)
+        )
+
+    def _extended_tag_values(self) -> dict:
+        """Return portable names for edition and provider identifiers."""
+        values = {
+            "ORIGINALDATE": self.metadata.original_release_date,
+            "RELEASEDATE": self.metadata.release_date,
+            "CATALOGNUMBER": self.metadata.catalog_number,
+            "BARCODE": self.metadata.barcode,
+            "RELEASETYPE": self.metadata.release_type,
+            "RELEASESTATUS": self.metadata.release_status,
+            "RELEASECOUNTRY": self.metadata.release_country,
+            "MEDIA": self.metadata.media_format,
+            "SOURCEURL": self.metadata.source_url,
+            "METADATA_SOURCE": (
+                self.metadata.source
+                if self.metadata.source and self.metadata.source != "unknown"
+                else None
+            ),
+        }
+        source = (self.metadata.source or "").casefold()
+        if source == "musicbrainz":
+            values["MUSICBRAINZ_ALBUMID"] = self.metadata.release_id
+            values["MUSICBRAINZ_TRACKID"] = self.metadata.recording_id
+        elif source == "discogs":
+            values["DISCOGS_RELEASE_ID"] = self.metadata.release_id
+        elif source == "spotify":
+            release_type = (self.metadata.release_type or "").casefold()
+            if release_type == "playlist":
+                values["SPOTIFY_PLAYLIST_ID"] = self.metadata.release_id
+            elif release_type == "track":
+                values["SPOTIFY_TRACK_ID"] = self.metadata.release_id
+            else:
+                values["SPOTIFY_ALBUM_ID"] = self.metadata.release_id
+            if self.metadata.recording_id:
+                values["SPOTIFY_TRACK_ID"] = self.metadata.recording_id
+        elif source == "applemusic":
+            values["APPLE_MUSIC_ALBUM_ID"] = self.metadata.release_id
+        return {key: value for key, value in values.items() if value}
+
+    @staticmethod
+    def _friendly_tag_description(name: str) -> str:
+        """Use the established Picard names for MusicBrainz freeform tags."""
+        return {
+            "MUSICBRAINZ_ALBUMID": "MusicBrainz Album Id",
+            "MUSICBRAINZ_TRACKID": "MusicBrainz Track Id",
+        }.get(name, name)
+
     def _apply_common_tags(self, audio_file) -> None:
         """Apply common tags shared by most formats."""
         if self.metadata.title:
@@ -57,17 +115,43 @@ class FormatMetadataApplier(ABC):
             audio_file['albumartist'] = self.metadata.album_artist
         if self.metadata.album:
             audio_file['album'] = self.metadata.album
-        if self.metadata.year:
-            audio_file['date'] = str(self.metadata.year)
+        date_value = self._date_value()
+        if date_value:
+            audio_file['date'] = date_value
         if self.metadata.genre:
             audio_file['genre'] = self.metadata.genre
         if self.metadata.track_number:
-            track_str = self._format_track_number()
-            audio_file['tracknumber'] = track_str
-            audio_file['TRCK'] = track_str
+            audio_file['tracknumber'] = str(self.metadata.track_number)
+            audio_file['TRCK'] = self._format_track_number()
+        if self.metadata.total_tracks:
+            audio_file['tracktotal'] = str(self.metadata.total_tracks)
+            audio_file['totaltracks'] = str(self.metadata.total_tracks)
+        if self.metadata.disc_number:
+            audio_file['discnumber'] = str(self.metadata.disc_number)
+        if self.metadata.total_discs:
+            audio_file['disctotal'] = str(self.metadata.total_discs)
+            audio_file['totaldiscs'] = str(self.metadata.total_discs)
         if self.metadata.compilation is not None:
             audio_file['compilation'] = "1" if self.metadata.compilation else "0"
             audio_file['TCMP'] = "1" if self.metadata.compilation else "0"
+        common_values = {
+            'comment': self.metadata.comment,
+            'composer': self.metadata.composer,
+            'conductor': self.metadata.conductor,
+            'performer': self.metadata.performer,
+            'publisher': self.metadata.publisher,
+            'label': self.metadata.publisher,
+            'copyright': self.metadata.copyright,
+            'isrc': self.metadata.isrc,
+            'bpm': self.metadata.bpm,
+            'initialkey': self.metadata.key,
+            'mood': self.metadata.mood,
+        }
+        for key, value in common_values.items():
+            if value is not None:
+                audio_file[key] = str(value)
+        for key, value in self._extended_tag_values().items():
+            audio_file[key.lower()] = str(value)
 
     @staticmethod
     def _detect_mime_type(cover_art_data: bytes) -> str:
@@ -84,7 +168,27 @@ class FormatMetadataApplier(ABC):
 
 class MP3MetadataApplier(FormatMetadataApplier):
     def apply_tags(self, audio_file) -> None:
-        from mutagen.id3 import TIT2, TPE1, TPE2, TALB, TYER, TCON, TRCK, TCMP
+        from mutagen.id3 import (
+            COMM,
+            TALB,
+            TBPM,
+            TCOM,
+            TCON,
+            TCOP,
+            TDRC,
+            TIT2,
+            TKEY,
+            TMOO,
+            TPE1,
+            TPE2,
+            TPE3,
+            TPOS,
+            TPUB,
+            TRCK,
+            TSRC,
+            TCMP,
+            TXXX,
+        )
         try:
             try:
                 audio_file.add_tags()
@@ -98,14 +202,53 @@ class MP3MetadataApplier(FormatMetadataApplier):
                 audio_file.tags['TPE2'] = TPE2(encoding=3, text=self.metadata.album_artist)
             if self.metadata.album:
                 audio_file.tags['TALB'] = TALB(encoding=3, text=self.metadata.album)
-            if self.metadata.year:
-                audio_file.tags['TYER'] = TYER(encoding=3, text=str(self.metadata.year))
+            date_value = self._date_value()
+            if date_value:
+                audio_file.tags['TDRC'] = TDRC(encoding=3, text=date_value)
             if self.metadata.genre:
                 audio_file.tags['TCON'] = TCON(encoding=3, text=self.metadata.genre)
             if self.metadata.track_number:
                 audio_file.tags['TRCK'] = TRCK(encoding=3, text=self._format_track_number())
+            if self.metadata.disc_number:
+                audio_file.tags['TPOS'] = TPOS(encoding=3, text=self._format_disc_number())
             if self.metadata.compilation is not None:
                 audio_file.tags['TCMP'] = TCMP(encoding=3, text="1" if self.metadata.compilation else "0")
+            if self.metadata.comment:
+                audio_file.tags['COMM::eng'] = COMM(
+                    encoding=3, lang='eng', desc='', text=self.metadata.comment
+                )
+            if self.metadata.composer:
+                audio_file.tags['TCOM'] = TCOM(encoding=3, text=self.metadata.composer)
+            if self.metadata.conductor:
+                audio_file.tags['TPE3'] = TPE3(encoding=3, text=self.metadata.conductor)
+            if self.metadata.publisher:
+                audio_file.tags['TPUB'] = TPUB(encoding=3, text=self.metadata.publisher)
+            if self.metadata.copyright:
+                audio_file.tags['TCOP'] = TCOP(encoding=3, text=self.metadata.copyright)
+            if self.metadata.isrc:
+                audio_file.tags['TSRC'] = TSRC(encoding=3, text=self.metadata.isrc)
+            if self.metadata.bpm:
+                audio_file.tags['TBPM'] = TBPM(encoding=3, text=str(self.metadata.bpm))
+            if self.metadata.key:
+                audio_file.tags['TKEY'] = TKEY(encoding=3, text=self.metadata.key)
+            if self.metadata.mood:
+                audio_file.tags['TMOO'] = TMOO(encoding=3, text=self.metadata.mood)
+            if self.metadata.performer:
+                audio_file.tags.add(
+                    TXXX(
+                        encoding=3,
+                        desc='PERFORMER',
+                        text=self.metadata.performer,
+                    )
+                )
+            for description, value in self._extended_tag_values().items():
+                audio_file.tags.add(
+                    TXXX(
+                        encoding=3,
+                        desc=self._friendly_tag_description(description),
+                        text=str(value),
+                    )
+                )
         except Exception as e:
             logger.warning(f"Error setting ID3 tags: {e}")
             self._apply_fallback(audio_file)
@@ -163,16 +306,46 @@ class M4AMetadataApplier(FormatMetadataApplier):
             tags['aART'] = [self.metadata.album_artist]
         if self.metadata.album:
             tags['\xa9alb'] = [self.metadata.album]
-        if self.metadata.year:
-            tags['\xa9day'] = [str(self.metadata.year)]
+        date_value = self._date_value()
+        if date_value:
+            tags['\xa9day'] = [date_value]
         if self.metadata.genre:
             tags['\xa9gen'] = [self.metadata.genre]
         if self.metadata.track_number:
             tags['trkn'] = [
                 (self.metadata.track_number, self.metadata.total_tracks or 0)
             ]
+        if self.metadata.disc_number:
+            tags['disk'] = [
+                (self.metadata.disc_number, self.metadata.total_discs or 0)
+            ]
         if self.metadata.compilation is not None:
             tags['cpil'] = self.metadata.compilation
+        if self.metadata.comment:
+            tags['\xa9cmt'] = [self.metadata.comment]
+        if self.metadata.composer:
+            tags['\xa9wrt'] = [self.metadata.composer]
+        if self.metadata.copyright:
+            tags['cprt'] = [self.metadata.copyright]
+        if self.metadata.bpm:
+            tags['tmpo'] = [self.metadata.bpm]
+        freeform_values = {
+            'ISRC': self.metadata.isrc,
+            'LABEL': self.metadata.publisher,
+            'CONDUCTOR': self.metadata.conductor,
+            'PERFORMER': self.metadata.performer,
+            'INITIALKEY': self.metadata.key,
+            'MOOD': self.metadata.mood,
+            **self._extended_tag_values(),
+        }
+        for description, value in freeform_values.items():
+            if value is not None:
+                friendly_description = self._friendly_tag_description(
+                    description
+                )
+                tags[f'----:com.apple.iTunes:{friendly_description}'] = [
+                    str(value).encode('utf-8')
+                ]
 
     def apply_cover_art(self, audio_file, file_path: Path, mime_type: str, quiet: bool) -> None:
         try:

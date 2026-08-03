@@ -74,6 +74,26 @@ def register_all_services(container: Container) -> None:
         return SpotifyClient(http_client=container.get("http_client"))
     _register_simple(container, "spotify_client", create_spotify_client)
 
+    def create_apple_music_client():
+        from ...clients.apple_music import AppleMusicClient
+        return AppleMusicClient(http_client=container.get("http_client"))
+    _register_simple(container, "apple_music_client", create_apple_music_client)
+
+    def create_acoustid_client():
+        from ...clients.acoustid import AcoustIDClient
+        return AcoustIDClient(http_client=container.get("http_client"))
+    _register_simple(container, "acoustid_client", create_acoustid_client)
+
+    def create_api_settings_service():
+        from ...application.api_settings import ApiSettingsService
+        return ApiSettingsService(
+            discogs_client=container.get("discogs_client"),
+            spotify_client=container.get("spotify_client"),
+            apple_music_client=container.get("apple_music_client"),
+            acoustid_client=container.get("acoustid_client"),
+        )
+    _register_simple(container, "api_settings_service", create_api_settings_service)
+
     def create_download_service():
         from ...domain.music.download.download_service import DownloadService
         return DownloadService()
@@ -101,6 +121,7 @@ def register_all_services(container: Container) -> None:
             discogs_client=container.get("discogs_client"),
             youtube_client_factory=container.get("youtube_client_factory"),
             spotify_client=container.get("spotify_client"),
+            apple_music_client=container.get("apple_music_client"),
         )
     container.register("search_service", create_search_service, singleton=True)
 
@@ -121,6 +142,16 @@ def register_all_services(container: Container) -> None:
         return MetadataService(cover_art_fetcher=container.get("cover_art_fetcher"))
     container.register("metadata_service", create_metadata_service, singleton=True)
 
+    def create_recording_workflow():
+        from ...application.recording_workflow import RecordingWorkflow
+        return RecordingWorkflow(
+            search_service=container.get("search_service"),
+            download_service=container.get("download_service"),
+            metadata_service=container.get("metadata_service"),
+            acoustid_client=container.get("acoustid_client"),
+        )
+    container.register("recording_workflow", create_recording_workflow, singleton=True)
+
     def create_download_orchestrator():
         from ...domain.music.download.orchestrator import DownloadOrchestrator
         return DownloadOrchestrator(download_service=container.get("download_service"),
@@ -128,6 +159,16 @@ def register_all_services(container: Container) -> None:
                                    search_service=container.get("search_service"),
                                    display_manager=container.get("display_manager"))
     container.register("download_orchestrator", create_download_orchestrator, singleton=True)
+
+    def create_release_workflow():
+        from ...application.release_workflow import ReleaseWorkflow
+        return ReleaseWorkflow(
+            search_service=container.get("search_service"),
+            download_service=container.get("download_service"),
+            download_orchestrator=container.get("download_orchestrator"),
+            acoustid_client=container.get("acoustid_client"),
+        )
+    container.register("release_workflow", create_release_workflow, singleton=True)
 
     def _handler_kwargs():
         return dict(

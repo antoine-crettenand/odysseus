@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 from ..models.releases import ReleaseInfo
 from ..models.search_results import MusicBrainzSong
 from ..models.song import SongData
+from ..domain.music.common.date_utils import get_original_release_year
 from ..domain.music.search.search_service import SearchService
 from .display import DisplayManager
 from ..domain.music.identity import select_best_release_match
@@ -93,13 +94,7 @@ class ReleaseInfoFetcher:
         self.console.print(f"{progress_prefix}[yellow]⚠[/yellow] Primary source failed, trying Spotify fallback...")
 
         try:
-            # Extract year from release_date
-            release_year = None
-            if release.release_date and len(release.release_date) >= 4:
-                try:
-                    release_year = int(release.release_date[:4])
-                except (ValueError, TypeError):
-                    pass
+            release_year = get_original_release_year(release)
 
             # Create SongData for Spotify search
             song_data = SongData(
@@ -150,3 +145,7 @@ class ReleaseInfoFetcher:
         """
         if not release_info.artist and release.artist:
             release_info.artist = release.artist
+        if not release_info.release_date:
+            release_info.release_date = release.release_date
+        if not release_info.original_release_date:
+            release_info.original_release_date = release.original_release_date

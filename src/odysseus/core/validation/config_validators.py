@@ -9,9 +9,9 @@ from ..config import (
     CONFIG_DIR,
     DISCOGS_CONFIG,
     DOWNLOAD_CONFIG,
-    DOWNLOADS_DIR,
     LOGGING_CONFIG,
     MUSICBRAINZ_CONFIG,
+    PROJECT_DOWNLOADS_DIR,
     VALIDATION_RULES,
 )
 from ..exceptions import ConfigurationError
@@ -57,7 +57,7 @@ def check_dependencies() -> Tuple[bool, List[str]]:
 
 def _validate_directories(errors: List[str]) -> None:
     """Create configured directories and verify that each is writable."""
-    for directory in (DOWNLOADS_DIR, CONFIG_DIR):
+    for directory in (PROJECT_DOWNLOADS_DIR, CONFIG_DIR):
         try:
             directory.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(

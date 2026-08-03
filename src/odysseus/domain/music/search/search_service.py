@@ -3,8 +3,13 @@ Search service that coordinates searches across multiple sources.
 """
 
 import concurrent.futures
+from copy import deepcopy
+from dataclasses import dataclass
 import re
 from typing import List, Optional, Dict, Any, Tuple
+from ....core.cache.cache_backends import TTLCache
+from ....core.cache.cache_keys import generate_cache_key
+from ....core.config import CACHE_CONFIG
 from ....models.song import SongData
 from ....models.search_results import SearchResult, MusicBrainzSong, YouTubeVideo, DiscogsRelease
 from ....utils.pattern_matcher import PatternMatcher
@@ -17,6 +22,23 @@ from ..common.date_utils import (
 )
 
 
+@dataclass
+class _ReleaseSearchSnapshot:
+    """Unpaginated provider candidates retained for local refinements."""
+
+    fetch_limit: int
+    musicbrainz: List[MusicBrainzSong]
+    discogs: List[MusicBrainzSong]
+    spotify: List[MusicBrainzSong]
+    apple_music: List[MusicBrainzSong]
+
+    def has_results(self) -> bool:
+        """Return whether at least one provider supplied a candidate."""
+        return any(
+            (self.musicbrainz, self.discogs, self.spotify, self.apple_music)
+        )
+
+
 class SearchService:
     """Service for searching music across multiple sources."""
 
@@ -27,8 +49,10 @@ class SearchService:
         youtube_client=None,
         youtube_client_factory=None,
         spotify_client=None,
+        apple_music_client=None,
         year_validator=None,
-        deduplicator=None
+        deduplicator=None,
+        release_search_cache=None,
     ):
         """
         Initialize search service with dependencies.
@@ -39,8 +63,10 @@ class SearchService:
             youtube_client: Optional YouTubeClient instance
             youtube_client_factory: Callable used to construct YouTube clients
             spotify_client: Optional authenticated Spotify client
+            apple_music_client: Optional authenticated Apple Music catalog client
             year_validator: Optional YearValidator instance
             deduplicator: Optional ResultDeduplicator instance
+            release_search_cache: Optional cache for reusable release snapshots
         """
         if musicbrainz_client is None or discogs_client is None:
             raise ValueError(
@@ -65,12 +91,20 @@ class SearchService:
         self.deduplicator = deduplicator or ResultDeduplicator(year_validator=self.year_validator)
 
         self._spotify_client = spotify_client
+        self._apple_music_client = apple_music_client
+        self._release_search_cache = release_search_cache or TTLCache(
+            ttl_seconds=CACHE_CONFIG["SEARCH_TTL"]
+        )
 
 
 
     def _get_spotify_client(self):
         """Return the injected Spotify client when available."""
         return self._spotify_client
+
+    def _get_apple_music_client(self):
+        """Return the injected Apple Music client when configured."""
+        return getattr(self, "_apple_music_client", None)
 
     def _deduplicate_results(self, results: List[MusicBrainzSong], release_type: Optional[str] = None) -> List[MusicBrainzSong]:
         """Delegate to ResultDeduplicator."""
@@ -118,68 +152,141 @@ class SearchService:
             print(f"{provider} search failed: {error}")
             return []
 
-    def search_recordings(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None) -> List[MusicBrainzSong]:
-        """Search for recordings in MusicBrainz."""
-        results = self.musicbrainz_client.search_recording(song_data, offset=offset, limit=limit)
-        return self.deduplicator.deduplicate_results(
-            results,
-            release_type=None,
-            recordings=True,
+    @staticmethod
+    def _normalize_release_search_term(value: Any) -> str:
+        """Normalize user-entered terms so harmless casing changes share a cache."""
+        return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
+
+    @staticmethod
+    def _client_is_authenticated(client) -> bool:
+        """Safely report whether an optional catalog client can be queried."""
+        if client is None:
+            return False
+        try:
+            return bool(client.is_authenticated())
+        except Exception:
+            return False
+
+    def _release_search_provider_signature(self) -> tuple:
+        """Separate snapshots when optional providers or storefronts change."""
+        spotify_client = self._get_spotify_client()
+        apple_music_client = self._get_apple_music_client()
+        return (
+            id(self.musicbrainz_client),
+            id(self.discogs_client),
+            id(spotify_client)
+            if self._client_is_authenticated(spotify_client)
+            else None,
+            (
+                id(apple_music_client),
+                getattr(apple_music_client, "storefront", None),
+            )
+            if self._client_is_authenticated(apple_music_client)
+            else None,
         )
 
-    def search_releases(
+    def _release_search_cache_key(
         self,
         song_data: SongData,
-        offset: int = 0,
-        limit: Optional[int] = None,
-        release_type: Optional[str] = None,
-        year_from: Optional[int] = None,
-        year_to: Optional[int] = None,
-    ) -> List[MusicBrainzSong]:
-        """Search for releases, prioritizing Spotify if API key is available, then MusicBrainz and Discogs.
+        release_type: Optional[str],
+    ) -> str:
+        """Build a cache key for either an exact type or the all-types scope."""
+        return generate_cache_key(
+            "release_search_snapshot_v1",
+            self._normalize_release_search_term(song_data.title),
+            self._normalize_release_search_term(song_data.album),
+            self._normalize_release_search_term(song_data.artist),
+            song_data.release_year,
+            self._normalize_release_search_term(release_type) or "*",
+            self._release_search_provider_signature(),
+        )
 
-        Args:
-            song_data: Song information to search for
-            offset: Offset for pagination
-            limit: Maximum number of results
-            release_type: Optional release type filter (e.g., "Album", "Single", "EP", "Compilation", "Live", etc.)
-            year_from: Optional inclusive lower release-year bound
-            year_to: Optional inclusive upper release-year bound
-        """
-        exact_year = song_data.release_year
-        effective_year_from = exact_year if exact_year is not None else year_from
-        effective_year_to = exact_year if exact_year is not None else year_to
+    def _get_release_search_cache(self):
+        """Return the snapshot cache, including for legacy test constructions."""
+        cache = getattr(self, "_release_search_cache", None)
+        if cache is None:
+            cache = TTLCache(ttl_seconds=CACHE_CONFIG["SEARCH_TTL"])
+            self._release_search_cache = cache
+        cleanup_expired = getattr(cache, "cleanup_expired", None)
+        if callable(cleanup_expired):
+            cleanup_expired()
+        return cache
 
-        # Fetch a bounded candidate pool before deduplication and pagination.
-        default_max = self.musicbrainz_client.max_results if hasattr(self.musicbrainz_client, 'max_results') else 3
-        requested_limit = max(1, limit or default_max)
-        # Start with enough candidates for deduplication without asking every
-        # provider for 50 records when the UI normally displays only a few.
-        page_end = max(0, offset) + requested_limit
-        fetch_limit = min(max(page_end * 3, page_end), 50)
-        if year_from is not None or year_to is not None:
-            fetch_limit = 50
+    def _get_cached_release_snapshot(
+        self,
+        song_data: SongData,
+        release_type: Optional[str],
+        fetch_limit: int,
+    ) -> Optional[_ReleaseSearchSnapshot]:
+        """Return a defensive copy when the snapshot covers the fetch window."""
+        key = self._release_search_cache_key(song_data, release_type)
+        snapshot = self._get_release_search_cache().get(key)
+        if snapshot is None or snapshot.fetch_limit < fetch_limit:
+            return None
+        return deepcopy(snapshot)
 
-        # Check if Spotify is available and search it first
-        spotify_client = self._get_spotify_client()
+    def _cache_release_snapshot(
+        self,
+        song_data: SongData,
+        release_type: Optional[str],
+        snapshot: _ReleaseSearchSnapshot,
+    ) -> None:
+        """Retain successful provider candidates without exposing mutable state."""
+        if not snapshot.has_results():
+            return
+        key = self._release_search_cache_key(song_data, release_type)
+        self._get_release_search_cache().set(key, deepcopy(snapshot))
+
+    def _fetch_release_candidates(
+        self,
+        song_data: SongData,
+        fetch_limit: int,
+        release_type: Optional[str],
+    ) -> _ReleaseSearchSnapshot:
+        """Fetch and normalize unpaginated candidates from all active providers."""
         spotify_results = []
+        apple_music_results = []
 
-        if spotify_client and spotify_client.is_authenticated():
+        spotify_client = self._get_spotify_client()
+        if self._client_is_authenticated(spotify_client):
             try:
-                print(f"Searching Spotify releases: {song_data.album} by {song_data.artist}")
+                print(
+                    f"Searching Spotify releases: {song_data.album} "
+                    f"by {song_data.artist}"
+                )
                 spotify_data = spotify_client.search_release(
                     album=song_data.album or "",
                     artist=song_data.artist or "",
                     release_year=song_data.release_year,
-                    limit=fetch_limit
+                    limit=fetch_limit,
                 )
-                # Convert Spotify results to MusicBrainzSong format
-                spotify_results = self._convert_spotify_to_mb_format(spotify_data)
-            except Exception as e:
-                # If Spotify search fails, continue with other sources
-                print(f"Spotify search failed: {e}")
+                spotify_results = self._convert_spotify_to_mb_format(
+                    spotify_data
+                )
+            except Exception as error:
+                print(f"Spotify search failed: {error}")
 
-        # Search MusicBrainz and Discogs in parallel - always start from 0 to get all results for proper deduplication
+        apple_music_client = self._get_apple_music_client()
+        if self._client_is_authenticated(apple_music_client):
+            try:
+                print(
+                    f"Searching Apple Music releases: "
+                    f"{song_data.album} by {song_data.artist}"
+                )
+                apple_music_data = apple_music_client.search_release(
+                    album=song_data.album or "",
+                    artist=song_data.artist or "",
+                    release_year=song_data.release_year,
+                    limit=fetch_limit,
+                )
+                apple_music_results = self._convert_apple_music_to_mb_format(
+                    apple_music_data
+                )
+            except Exception as error:
+                print(f"Apple Music search failed: {error}")
+
+        # Always start from zero so pagination happens after cross-source
+        # deduplication. MusicBrainz and Discogs can run concurrently.
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             mb_future = executor.submit(
                 self._safe_provider_search,
@@ -203,76 +310,180 @@ class SearchService:
             mb_results = mb_future.result()
             discogs_results = discogs_future.result()
 
-        # Convert Discogs to MusicBrainz format
-        discogs_formatted = self._convert_discogs_to_mb_format(discogs_results)
-
-        # Filter each provider before deduplication. Otherwise a higher-priority
-        # result of the wrong type or year can discard an eligible result from
-        # another provider that shares the same album/artist identity.
-        spotify_results = self._filter_release_type(spotify_results, release_type)
-        mb_results = self._filter_release_type(mb_results, release_type)
-        discogs_formatted = self._filter_release_type(
-            discogs_formatted,
-            release_type,
+        # Resolve Discogs master years once, before storing a reusable snapshot.
+        resolve_discogs_year = getattr(
+            getattr(self, "year_validator", None),
+            "resolve_discogs_year",
+            None,
         )
-        spotify_results = self._filter_release_years(
-            spotify_results,
-            effective_year_from,
-            effective_year_to,
-        )
-        mb_results = self._filter_release_years(
-            mb_results,
-            effective_year_from,
-            effective_year_to,
-        )
-        discogs_formatted = self._filter_release_years(
-            discogs_formatted,
-            effective_year_from,
-            effective_year_to,
-        )
-
-        # Use priority-based deduplication: Spotify first (if available), then MusicBrainz, then Discogs
-        # This deduplicates ALL results to find the best (earliest) release
-        if spotify_results:
-            # Spotify results first, then MusicBrainz, then Discogs
-            all_results = self._deduplicate_with_priority(spotify_results, mb_results)
-            all_results = self._deduplicate_with_priority(all_results, discogs_formatted)
-        else:
-            # No Spotify, use MusicBrainz and Discogs
-            all_results = self._deduplicate_with_priority(mb_results, discogs_formatted)
-
-        # Sort results to prioritize original releases:
-        # 1. By original release date (earliest first) - this is the most important factor
-        # 2. True originals before re-releases (if same original date)
-        # 3. Then by score (highest first)
-        # This ensures original releases from the earliest year (1971) appear first
-        def sort_key(r):
-            # Use original_release_date for sorting (earliest first) - this is the key!
-            # For re-releases, original_release_date should be the original year (e.g., 1971)
-            # For true originals, original_release_date == release_date
-            original_date_tuple = parse_release_date(r.original_release_date) or (9999, 12, 31)
-            release_date_tuple = parse_release_date(r.release_date) or (9999, 12, 31)
-
-            # Use the earlier of original_release_date or release_date for primary sorting
-            # This ensures 1971 (original) sorts before 2021 (re-release)
-            primary_date = original_date_tuple if original_date_tuple < release_date_tuple else release_date_tuple
-
-            # Check if this is a true original (release_date matches original_release_date)
-            is_true_original = (
-                r.original_release_date and
-                r.release_date and
-                r.original_release_date == r.release_date
+        if (
+            callable(resolve_discogs_year)
+            and discogs_results
+            and song_data.album
+            and song_data.artist
+        ):
+            resolve_discogs_year(
+                song_data.artist, song_data.album, discogs_results
             )
 
-            # Sort key: date (earliest first), then is_original (True=0, False=1), then score (highest first)
-            # This ensures 1971 comes before 2021 regardless of whether they're true originals or re-releases
+        return _ReleaseSearchSnapshot(
+            fetch_limit=fetch_limit,
+            musicbrainz=mb_results,
+            discogs=self._convert_discogs_to_mb_format(discogs_results),
+            spotify=spotify_results,
+            apple_music=apple_music_results,
+        )
+
+    def _rank_release_candidates(
+        self,
+        snapshot: _ReleaseSearchSnapshot,
+        release_type: Optional[str],
+        year_from: Optional[int],
+        year_to: Optional[int],
+    ) -> List[MusicBrainzSong]:
+        """Apply local refinements, provider priority, deduplication, and sort."""
+        spotify_results = self._filter_release_type(
+            snapshot.spotify, release_type
+        )
+        apple_music_results = self._filter_release_type(
+            snapshot.apple_music, release_type
+        )
+        mb_results = self._filter_release_type(
+            snapshot.musicbrainz, release_type
+        )
+        discogs_results = self._filter_release_type(
+            snapshot.discogs, release_type
+        )
+
+        spotify_results = self._filter_release_years(
+            spotify_results, year_from, year_to
+        )
+        apple_music_results = self._filter_release_years(
+            apple_music_results, year_from, year_to
+        )
+        mb_results = self._filter_release_years(
+            mb_results, year_from, year_to
+        )
+        discogs_results = self._filter_release_years(
+            discogs_results, year_from, year_to
+        )
+
+        # MusicBrainz is the metadata authority, followed by Discogs, Apple
+        # Music, and Spotify for editions absent from the preceding catalogs.
+        all_results = self._deduplicate_with_priority(
+            mb_results, discogs_results
+        )
+        all_results = self._deduplicate_with_priority(
+            all_results, apple_music_results
+        )
+        all_results = self._deduplicate_with_priority(
+            all_results, spotify_results
+        )
+
+        def sort_key(result):
+            original_date = parse_release_date(
+                result.original_release_date
+            ) or (9999, 12, 31)
+            edition_date = parse_release_date(
+                result.release_date
+            ) or (9999, 12, 31)
+            primary_date = min(original_date, edition_date)
+            is_true_original = bool(
+                result.original_release_date
+                and result.release_date
+                and result.original_release_date == result.release_date
+            )
             return (
-                primary_date,  # Primary sort: earliest original date first - 1971 before 2021
-                0 if is_true_original else 1,  # Then true originals before re-releases
-                -(r.score if r.score else 0)  # Then by score (highest first)
+                primary_date,
+                0 if is_true_original else 1,
+                -(result.score or 0),
             )
 
         all_results.sort(key=sort_key)
+        return all_results
+
+    def search_recordings(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None) -> List[MusicBrainzSong]:
+        """Search for recordings in MusicBrainz."""
+        results = self.musicbrainz_client.search_recording(song_data, offset=offset, limit=limit)
+        return self.deduplicator.deduplicate_results(
+            results,
+            release_type=None,
+            recordings=True,
+        )
+
+    def search_releases(
+        self,
+        song_data: SongData,
+        offset: int = 0,
+        limit: Optional[int] = None,
+        release_type: Optional[str] = None,
+        year_from: Optional[int] = None,
+        year_to: Optional[int] = None,
+    ) -> List[MusicBrainzSong]:
+        """Search releases with MusicBrainz-first metadata authority.
+
+        Args:
+            song_data: Song information to search for
+            offset: Offset for pagination
+            limit: Maximum number of results
+            release_type: Optional release type filter (e.g., "Album", "Single", "EP", "Compilation", "Live", etc.)
+            year_from: Optional inclusive lower release-year bound
+            year_to: Optional inclusive upper release-year bound
+        """
+        exact_year = song_data.release_year
+        effective_year_from = exact_year if exact_year is not None else year_from
+        effective_year_to = exact_year if exact_year is not None else year_to
+
+        # Fetch a bounded candidate pool before deduplication and pagination.
+        default_max = self.musicbrainz_client.max_results if hasattr(self.musicbrainz_client, 'max_results') else 3
+        requested_limit = max(1, limit or default_max)
+        # Start with enough candidates for deduplication without asking every
+        # provider for 50 records when the UI normally displays only a few.
+        page_end = max(0, offset) + requested_limit
+        fetch_limit = min(max(page_end * 3, page_end), 50)
+        if year_from is not None or year_to is not None:
+            fetch_limit = 50
+
+        # Prefer an exact cached scope. A broader all-types snapshot may also
+        # serve a type refinement, but only when it contains the complete page
+        # requested after local filtering and deduplication.
+        all_results = None
+        snapshot = self._get_cached_release_snapshot(
+            song_data, release_type, fetch_limit
+        )
+        if snapshot is not None:
+            all_results = self._rank_release_candidates(
+                snapshot,
+                release_type,
+                effective_year_from,
+                effective_year_to,
+            )
+        elif release_type:
+            broad_snapshot = self._get_cached_release_snapshot(
+                song_data, None, fetch_limit
+            )
+            if broad_snapshot is not None:
+                broad_results = self._rank_release_candidates(
+                    broad_snapshot,
+                    release_type,
+                    effective_year_from,
+                    effective_year_to,
+                )
+                if len(broad_results) >= page_end:
+                    snapshot = broad_snapshot
+                    all_results = broad_results
+
+        if all_results is None:
+            snapshot = self._fetch_release_candidates(
+                song_data, fetch_limit, release_type
+            )
+            self._cache_release_snapshot(song_data, release_type, snapshot)
+            all_results = self._rank_release_candidates(
+                snapshot,
+                release_type,
+                effective_year_from,
+                effective_year_to,
+            )
 
         # Apply pagination AFTER deduplication and sorting
         if offset > 0:
@@ -342,12 +553,12 @@ class SearchService:
         return all_results
 
     def get_release_info(self, release_mbid: str, batch_progress: Optional[Tuple[int, int]] = None, source: str = "musicbrainz") -> Optional[Any]:
-        """Get detailed release information from MusicBrainz, Discogs, or Spotify.
+        """Get detailed release information from a configured catalog provider.
 
         Args:
             release_mbid: Release ID (MBID for MusicBrainz, Discogs ID for Discogs, Spotify ID for Spotify)
             batch_progress: Optional tuple (current, total) for batch operations
-            source: Source to query ("musicbrainz", "discogs", or "spotify")
+            source: Source to query
         """
         # Handle Spotify source
         if source == "spotify":
@@ -368,6 +579,19 @@ class SearchService:
                     print("Spotify API not authenticated")
                 return None
 
+        if source == "applemusic":
+            apple_music_client = self._get_apple_music_client()
+            if apple_music_client and apple_music_client.is_authenticated():
+                try:
+                    return apple_music_client.get_album_tracks(release_mbid)
+                except Exception as e:
+                    prefix = (
+                        f"[{batch_progress[0]}/{batch_progress[1]}] "
+                        if batch_progress else ""
+                    )
+                    print(f"{prefix}Apple Music release fetch failed: {e}")
+            return None
+
         # Handle Discogs source
         if source == "discogs":
             return self.discogs_client.get_release_info(release_mbid, batch_progress=batch_progress)
@@ -380,14 +604,25 @@ class SearchService:
         mb_results = []
         for discogs_result in discogs_results:
             release_date = str(discogs_result.year) if discogs_result.year else None
+            original_release_date = (
+                str(discogs_result.master_year)
+                if discogs_result.master_year
+                else None
+            )
 
             mb_result = MusicBrainzSong(
                 title=discogs_result.title or discogs_result.album or "",
                 artist=discogs_result.artist,
                 album=discogs_result.album,
                 release_date=release_date,
+                original_release_date=original_release_date,
                 genre=discogs_result.genre,
+                cover_art_url=discogs_result.cover_art_url,
                 release_type=discogs_result.release_type,
+                release_status="Official",
+                country=discogs_result.country,
+                label=discogs_result.label,
+                media_format=discogs_result.format,
                 mbid=discogs_result.discogs_id,
                 score=discogs_result.score,
                 url=discogs_result.url,
@@ -396,20 +631,49 @@ class SearchService:
             mb_results.append(mb_result)
         return mb_results
 
+    def _convert_apple_music_to_mb_format(
+        self, apple_music_data: List[Dict[str, Any]]
+    ) -> List[MusicBrainzSong]:
+        """Convert Apple Music catalog editions to the shared result model."""
+        return [
+            MusicBrainzSong(
+                title="",
+                artist=item.get("artist", ""),
+                album=item.get("album", ""),
+                release_date=item.get("release_date"),
+                original_release_date=None,
+                genre=item.get("genre"),
+                cover_art_url=item.get("cover_art_url"),
+                release_type=item.get("release_type") or "Album",
+                release_status="Official",
+                label=item.get("label"),
+                barcode=item.get("barcode"),
+                media_format="Digital Media",
+                track_count=item.get("track_count"),
+                mbid=item.get("id", ""),
+                score=0,
+                url=item.get("url", ""),
+                source="applemusic",
+            )
+            for item in apple_music_data
+        ]
+
     def _convert_spotify_to_mb_format(self, spotify_data: List[Dict[str, Any]]) -> List[MusicBrainzSong]:
         """Convert Spotify search results to MusicBrainzSong format for consistency."""
         mb_results = []
         for spotify_item in spotify_data:
             release_date = spotify_item.get("release_date")
-            release_year = spotify_item.get("release_year")
 
             mb_result = MusicBrainzSong(
                 title="",  # No title for releases
                 artist=spotify_item.get("artist", ""),
                 album=spotify_item.get("album", ""),
                 release_date=release_date,
-                original_release_date=release_date,  # Spotify doesn't distinguish original vs re-release
+                # Spotify exposes the selected digital edition date, not a
+                # trustworthy original release-group date.
+                original_release_date=None,
                 genre=None,
+                cover_art_url=spotify_item.get("cover_art_url"),
                 release_type=spotify_item.get("release_type") or "Album",
                 mbid=spotify_item.get("spotify_id", ""),
                 score=spotify_item.get("popularity", 0),  # Use popularity as score

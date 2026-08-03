@@ -8,6 +8,8 @@ from .base_config import (
     PROJECT_NAME,
     PROJECT_VERSION,
     PROJECT_DESCRIPTION,
+    PROJECT_ROOT,
+    PROJECT_DOWNLOADS_DIR,
     BASE_DIR,
     DOWNLOADS_DIR,
     CONFIG_DIR
@@ -20,6 +22,8 @@ from .youtube_config import YOUTUBE_CONFIG
 from .download_config import DOWNLOAD_CONFIG
 from .cache_config import CACHE_CONFIG
 from .retry_config import RETRY_CONFIG
+from .apple_music_config import APPLE_MUSIC_CONFIG
+from .acoustid_config import ACOUSTID_CONFIG
 
 # Import other configs
 from .base_config import (
@@ -33,6 +37,8 @@ __all__ = [
     'PROJECT_NAME',
     'PROJECT_VERSION',
     'PROJECT_DESCRIPTION',
+    'PROJECT_ROOT',
+    'PROJECT_DOWNLOADS_DIR',
     'BASE_DIR',
     'DOWNLOADS_DIR',
     'CONFIG_DIR',
@@ -42,6 +48,8 @@ __all__ = [
     'DOWNLOAD_CONFIG',
     'CACHE_CONFIG',
     'RETRY_CONFIG',
+    'APPLE_MUSIC_CONFIG',
+    'ACOUSTID_CONFIG',
     'ERROR_MESSAGES',
     'LOGGING_CONFIG',
     'VALIDATION_RULES',

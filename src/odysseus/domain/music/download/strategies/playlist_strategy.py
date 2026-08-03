@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .base_strategy import BaseDownloadStrategy
 from ..download_service import DownloadRequest, DownloadResult
+from ..progress import ReleaseProgressCallback, emit_release_progress
 from .....models.releases import ReleaseInfo, Track
 from .....models.search_results import YouTubeVideo
 
@@ -29,6 +30,7 @@ class PlaylistStrategy(BaseDownloadStrategy):
         silent: bool = False,
         cover_art_data: Optional[bytes] = None,
         jobs: int = 1,
+        progress_callback: Optional[ReleaseProgressCallback] = None,
     ) -> Tuple[Optional[int], Optional[int]]:
         """
         Strategy 2: Download from YouTube playlist.
@@ -56,6 +58,12 @@ class PlaylistStrategy(BaseDownloadStrategy):
             if not silent:
                 console = self.display_manager.console
                 console.print("[cyan]ℹ[/cyan] Skipping YouTube playlist strategy for Spotify playlist (not applicable)...")
+            emit_release_progress(
+                progress_callback,
+                stage="playlist_skipped",
+                status="Playlist skipped",
+                message="YouTube playlist matching does not apply to this source.",
+            )
             return None, None
 
         console = self.display_manager.console
@@ -78,6 +86,13 @@ class PlaylistStrategy(BaseDownloadStrategy):
         track_titles = [track.title for track in release_info.tracks[:5]]  # Use first 5 tracks
 
         # Search for playlists
+        emit_release_progress(
+            progress_callback,
+            stage="playlist_search",
+            status="Playlist search",
+            message="Searching YouTube playlists for the selected release…",
+            percent=0,
+        )
         playlists = self.display_manager.show_loading_spinner(
             f"Searching for playlist: {release_info.title}",
             self.search_service.search_playlist,
@@ -88,15 +103,40 @@ class PlaylistStrategy(BaseDownloadStrategy):
         )
 
         if not playlists:
+            emit_release_progress(
+                progress_callback,
+                stage="playlist_not_found",
+                status="No playlist",
+                message="No matching YouTube playlist was found.",
+            )
             if not silent:
                 styling = self.display_manager.styling
                 styling.log_warning("No playlist found. Trying next strategy...")
             return None, None
 
+        emit_release_progress(
+            progress_callback,
+            stage="playlist_found",
+            status="Playlist found",
+            message=(
+                f"Found {len(playlists)} playlist candidate"
+                f"{'s' if len(playlists) != 1 else ''}; inspecting tracks…"
+            ),
+        )
+
         # Try downloading from playlist
-        for playlist_info in playlists:
+        for playlist_number, playlist_info in enumerate(playlists, start=1):
             try:
                 playlist_url = playlist_info['url']
+                emit_release_progress(
+                    progress_callback,
+                    stage="playlist_inspecting",
+                    status="Inspecting playlist",
+                    message=(
+                        f"Inspecting playlist {playlist_number}/{len(playlists)}: "
+                        f"{playlist_info['title']}"
+                    ),
+                )
                 if not silent:
                     console.print(f"[cyan]📥 Found playlist: {playlist_info['title']}[/cyan]")
 
@@ -254,6 +294,14 @@ class PlaylistStrategy(BaseDownloadStrategy):
                     jobs,
                     release_info,
                     silent,
+                    progress_callback,
+                )
+                emit_release_progress(
+                    progress_callback,
+                    stage="metadata",
+                    status="Tagging",
+                    message="Downloads finished; applying track metadata and artwork…",
+                    percent=0,
                 )
                 downloaded_count, result_failures = self._apply_results(
                     prepared,
@@ -281,6 +329,12 @@ class PlaylistStrategy(BaseDownloadStrategy):
         if not silent:
             styling = self.display_manager.styling
             styling.log_warning("All playlists failed. Trying next strategy...")
+        emit_release_progress(
+            progress_callback,
+            stage="playlist_rejected",
+            status="Playlist unusable",
+            message="Playlist candidates were found, but none supplied usable tracks.",
+        )
         return None, None
 
     def _prepare_downloads(
@@ -378,6 +432,7 @@ class PlaylistStrategy(BaseDownloadStrategy):
         jobs: int,
         release_info: ReleaseInfo,
         silent: bool,
+        progress_callback: Optional[ReleaseProgressCallback] = None,
     ) -> List[DownloadResult]:
         """Download validated playlist tracks with caller-thread progress."""
         if not prepared:
@@ -416,6 +471,17 @@ class PlaylistStrategy(BaseDownloadStrategy):
                     task,
                     completed=100 * failed_count + sum(percentages.values()),
                     description=f"[cyan]Downloading: {track.title[:40]}",
+                )
+                completed = 100 * failed_count + sum(percentages.values())
+                emit_release_progress(
+                    progress_callback,
+                    stage="playlist_download",
+                    status="Downloading playlist",
+                    message=f"Downloading #{track_number}: {track.title}",
+                    percent=completed / total_matches,
+                    speed=info.get("speed", ""),
+                    eta=info.get("eta", ""),
+                    download_status=info.get("status", "downloading"),
                 )
 
             results = self.download_service.download_many(

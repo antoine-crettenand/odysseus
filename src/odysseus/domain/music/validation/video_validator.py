@@ -7,6 +7,7 @@ from typing import Optional, Tuple
 from ....models.search_results import YouTubeVideo
 from ....models.releases import ReleaseInfo, Track
 from ....core.config import DURATION_VALIDATION_THRESHOLDS
+from ..common.date_utils import get_original_release_year
 from .validation_keywords import (
     REMASTER_KEYWORDS,
     LIVE_WORD_BOUNDARY_KEYWORDS,
@@ -223,9 +224,8 @@ class VideoValidator:
             Tuple of (is_valid, reason_if_invalid)
         """
         # Check 1: Title must match album and artist (with year if available)
-        release_year = None
-        if release_info.release_date and len(release_info.release_date) >= 4:
-            release_year = release_info.release_date[:4]
+        original_year = get_original_release_year(release_info)
+        release_year = str(original_year) if original_year else None
 
         # Check title matches album
         if not title_matcher.title_matches_album(video.title, release_info.title, release_info.artist, release_year):

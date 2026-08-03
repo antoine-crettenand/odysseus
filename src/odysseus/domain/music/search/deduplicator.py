@@ -5,6 +5,7 @@ Result deduplicator module for removing duplicate search results.
 from typing import List, Optional, Dict, Tuple
 from ....models.search_results import MusicBrainzSong
 from ....utils.string_utils import normalize_string
+from ..common.date_utils import extract_year, parse_release_date
 
 
 class ResultDeduplicator:
@@ -52,21 +53,8 @@ class ResultDeduplicator:
         return (primary_key, artist)
 
     def _parse_release_date(self, release_date: Optional[str]) -> Optional[tuple]:
-        """
-        Parse release date to a comparable tuple (year, month, day).
-        Returns None if date is invalid or missing.
-        """
-        if not release_date or release_date.strip() == "":
-            return None
-
-        parts = release_date.strip().split('-')
-        if len(parts) >= 1 and parts[0].isdigit():
-            year = int(parts[0])
-            month = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 1
-            day = int(parts[2]) if len(parts) >= 3 and parts[2].isdigit() else 1
-            return (year, month, day)
-
-        return None
+        """Delegate release-date parsing to the shared domain utility."""
+        return parse_release_date(release_date)
 
     def _is_remaster_or_reissue(self, result: MusicBrainzSong) -> bool:
         """
@@ -140,35 +128,16 @@ class ResultDeduplicator:
                 re_releases = []
                 candidates_without_original_date = []
 
-                # First pass: collect all dates to find the earliest (likely the original)
-                all_dates = []
                 for result in candidates:
-                    if result.original_release_date:
-                        date_tuple = self._parse_release_date(result.original_release_date)
-                        if date_tuple:
-                            all_dates.append(date_tuple)
-                    elif result.release_date:
-                        date_tuple = self._parse_release_date(result.release_date)
-                        if date_tuple:
-                            all_dates.append(date_tuple)
-
-                earliest_date = min(all_dates) if all_dates else None
-
-                for result in candidates:
-                    # Check if this is the original release
-                    is_original_release = (
-                        result.original_release_date and
-                        result.release_date and
-                        result.original_release_date == result.release_date
+                    # Different date precision ("1971" vs "1971-03-19")
+                    # should not make an original edition look like a reissue.
+                    original_year = extract_year(result.original_release_date)
+                    edition_year = extract_year(result.release_date)
+                    is_original_release = bool(
+                        original_year
+                        and edition_year
+                        and original_year == edition_year
                     )
-
-                    # If original_release_date is missing but we have an earliest date from the group,
-                    # and this release's date is later, infer it's a re-release
-                    if not result.original_release_date and earliest_date and result.release_date:
-                        release_date_tuple = self._parse_release_date(result.release_date)
-                        if release_date_tuple and release_date_tuple > earliest_date:
-                            # This is likely a re-release - use the earliest date as original_release_date
-                            result.original_release_date = f"{earliest_date[0]}-{earliest_date[1]:02d}-{earliest_date[2]:02d}"[:10]
 
                     # Use original_release_date for comparison if available (this is the key!)
                     # For re-releases, original_release_date should be the original year (e.g., 1971)
