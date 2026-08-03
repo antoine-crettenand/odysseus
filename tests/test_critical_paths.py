@@ -95,7 +95,7 @@ def test_short_track_titles_do_not_fuzzy_match():
 
 def test_path_manager_does_not_reuse_unrelated_short_title(temp_dir):
     class FakeDownloadService:
-        def create_organized_path(self, metadata):
+        def get_organized_path(self, metadata):
             return temp_dir
 
         def sanitize_filename(self, filename):

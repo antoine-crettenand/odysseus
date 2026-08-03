@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from odysseus.clients.file_splitter import FileSplitter
+from odysseus.clients.musicbrainz import MusicBrainzClient
 from odysseus.clients.path_utils import PathUtils
 from odysseus.domain.music.download.strategies import full_album_strategy
 from odysseus.domain.music.download.strategies.full_album_strategy import (
@@ -12,6 +13,7 @@ from odysseus.domain.music.download.strategies.full_album_strategy import (
 from odysseus.domain.music.search.search_service import SearchService
 from odysseus.domain.music.search.video_searcher import VideoSearcher
 from odysseus.models.search_results import YouTubeVideo
+from odysseus.models.song import SongData
 from odysseus.ui.handlers.recording_handler import RecordingHandler
 
 
@@ -20,6 +22,52 @@ def test_safe_path_rejects_sibling_with_common_prefix(temp_dir):
     sibling = temp_dir / "downloads-escape" / "track.mp3"
 
     assert PathUtils._resolve_safe_path(sibling, base_dir) == base_dir
+
+
+def test_musicbrainz_release_check_does_not_create_search_folders(temp_dir):
+    downloads_dir = temp_dir / "downloads"
+    client = MusicBrainzClient.__new__(MusicBrainzClient)
+    client.path_utils = PathUtils()
+    query = SongData(
+        title="",
+        artist="Search Artist",
+        album="Search Release",
+        release_year=1999,
+    )
+
+    with patch(
+        "odysseus.clients.musicbrainz.PROJECT_DOWNLOADS_DIR",
+        downloads_dir,
+    ):
+        assert client._check_release_folder_exists(query) is False
+
+    assert not downloads_dir.exists()
+
+
+def test_download_path_uses_selected_metadata_not_search_query(temp_dir):
+    downloads_dir = temp_dir / "downloads"
+    query_path = PathUtils.get_organized_path(
+        downloads_dir,
+        {
+            "artist": "Search Artist",
+            "album": "Search Release",
+            "year": 1999,
+        },
+    )
+    selected_path = PathUtils.create_organized_path(
+        downloads_dir,
+        {
+            "artist": "Canonical Artist",
+            "album": "Canonical Release",
+            "year": 2001,
+        },
+    )
+
+    assert not query_path.exists()
+    assert selected_path.is_dir()
+    assert selected_path == (
+        downloads_dir / "Canonical Artist" / "Canonical Release (2001)"
+    )
 
 
 def test_full_album_strategy_resolves_file_splitter_from_clients_package():

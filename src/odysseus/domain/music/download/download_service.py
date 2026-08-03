@@ -290,6 +290,16 @@ class DownloadService:
             metadata,
         )
 
+    def get_organized_path(
+        self,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Path:
+        """Calculate the configured output path without creating it."""
+        return self.downloader.path_utils.get_organized_path(
+            self.downloads_dir,
+            metadata,
+        )
+
     def split_video_into_tracks(
         self,
         video_path: Path,

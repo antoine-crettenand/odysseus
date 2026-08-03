@@ -148,12 +148,16 @@ downloads, and artist discography browsing. Album downloads include release
 selection, track selection, parallel-job controls, cancellation, and the same
 full-album, playlist, and individual-track fallback chain as the CLI. Album and
 discography searches support either an exact year or an optional inclusive
-dual-slider year range. Spotify
-imports, batch jobs, and existing-file metadata operations remain available
-through the `odysseus` CLI while those screens are added. Recording and album
-requests are placed in a background queue, so searches and discography browsing
-remain available while downloads run. Open the queue drawer to inspect progress
-and persistent error details or to clear completed jobs.
+dual-slider year range. Release results are presented chronologically by their
+displayed release year, using the original year when known and the edition year
+as a fallback; undated releases appear last. Search controls collapse to a
+compact summary after submission, and the status card clears away once results
+arrive; choose **Edit search** to change the query. Spotify imports, batch jobs,
+and existing-file metadata operations remain available through the `odysseus`
+CLI while those screens are added. Recording and album requests are placed in a
+background queue, so searches and discography browsing remain available while
+downloads run. Open the queue drawer to inspect progress and persistent error
+details or to clear completed jobs.
 
 ### Command Line Interface
 

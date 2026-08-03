@@ -105,6 +105,17 @@ class PathUtils:
         Security: This method ensures paths stay within the download directory
         to prevent path traversal attacks.
         """
+        organized_dir = PathUtils.get_organized_path(download_dir, metadata)
+        if metadata:
+            organized_dir.mkdir(parents=True, exist_ok=True)
+        return organized_dir
+
+    @staticmethod
+    def get_organized_path(
+        download_dir: Path,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Path:
+        """Calculate an organized output path without creating directories."""
         if not metadata:
             return download_dir
 
@@ -115,9 +126,7 @@ class PathUtils:
             playlist_name = PathUtils.sanitize_filename(playlist_name)
 
             organized_dir = download_dir / "Playlists" / playlist_name
-            organized_dir = PathUtils._resolve_safe_path(organized_dir, download_dir)
-            organized_dir.mkdir(parents=True, exist_ok=True)
-            return organized_dir
+            return PathUtils._resolve_safe_path(organized_dir, download_dir)
 
         # Extract metadata fields for regular album structure
         # Treat empty strings as missing values (use defaults)
@@ -143,6 +152,4 @@ class PathUtils:
         lp_folder_name = PathUtils.sanitize_filename(lp_folder_name)
 
         organized_dir = artist_dir / lp_folder_name
-        organized_dir = PathUtils._resolve_safe_path(organized_dir, download_dir)
-        organized_dir.mkdir(parents=True, exist_ok=True)
-        return organized_dir
+        return PathUtils._resolve_safe_path(organized_dir, download_dir)

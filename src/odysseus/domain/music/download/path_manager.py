@@ -111,7 +111,7 @@ class PathManager:
                 'playlist_name': release_info.title,
                 'album': release_info.title,
             }
-            return self.download_service.create_organized_path(playlist_metadata)
+            return self.download_service.get_organized_path(playlist_metadata)
 
         # Regular album structure
         is_compilation = self.is_compilation(release_info)
@@ -128,7 +128,7 @@ class PathManager:
             'album': release_info.title,
             'year': year,
         }
-        return self.download_service.create_organized_path(album_metadata)
+        return self.download_service.get_organized_path(album_metadata)
 
     def get_existing_tracks(
         self,

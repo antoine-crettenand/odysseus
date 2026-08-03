@@ -74,7 +74,7 @@ class MusicBrainzClient(BaseAPIClient):
             True if folder exists and contains audio files, False otherwise
         """
         try:
-            # Create metadata dict similar to what PathUtils.create_organized_path expects
+            # Build the metadata used to locate an existing organized release.
             metadata = {
                 'artist': song_data.artist or 'Unknown Artist',
                 'album': song_data.album or 'Unknown Album',
@@ -82,8 +82,11 @@ class MusicBrainzClient(BaseAPIClient):
                 'title': song_data.album or 'Unknown Album'
             }
 
-            # Get the expected folder path
-            expected_folder = self.path_utils.create_organized_path(PROJECT_DOWNLOADS_DIR, metadata)
+            # Resolve the expected folder without creating it during search.
+            expected_folder = self.path_utils.get_organized_path(
+                PROJECT_DOWNLOADS_DIR,
+                metadata,
+            )
 
             # Check if folder exists
             if not expected_folder.exists():
