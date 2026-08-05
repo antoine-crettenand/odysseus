@@ -136,9 +136,6 @@ class FileSplitter:
         audio_extensions = ['.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav', '.aac', '.webm']
         system_files = {'.DS_Store', '.Thumbs.db', 'desktop.ini'}
 
-        # Get existing files before splitting
-        existing_files_before = FileSplitter._get_existing_files_before_split(track_timestamps, output_dir, audio_extensions)
-
         for i, (timestamp_info, metadata) in enumerate(zip(track_timestamps, metadata_list)):
             start_time = timestamp_info.get('start_time', 0)
             end_time = timestamp_info.get('end_time')
@@ -232,7 +229,7 @@ class FileSplitter:
                         'eta': None
                     })
 
-                result = subprocess.run(
+                subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,

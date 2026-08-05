@@ -15,6 +15,10 @@ from odysseus.utils.metadata_appliers import (
     FLACMetadataApplier,
     M4AMetadataApplier,
     MP3MetadataApplier,
+    OGGMetadataApplier,
+    SUPPORTED_METADATA_EXTENSIONS,
+    WAVMetadataApplier,
+    get_metadata_applier,
 )
 
 
@@ -293,3 +297,25 @@ def test_spotify_track_id_is_not_misrepresented_as_musicbrainz_id():
     assert track.isrc == "GBABC7100001"
     assert track.source_id == "spotify-track-id"
     assert track.mbid is None
+
+def test_metadata_appliers_route_wav_and_opus_to_valid_writers():
+    metadata = AudioMetadata(title="Title")
+
+    assert isinstance(get_metadata_applier(".wav", metadata), WAVMetadataApplier)
+    assert isinstance(get_metadata_applier(".opus", metadata), OGGMetadataApplier)
+    assert ".aac" not in SUPPORTED_METADATA_EXTENSIONS
+    assert ".webm" not in SUPPORTED_METADATA_EXTENSIONS
+
+def test_m4a_does_not_mislabel_webp_as_png():
+    audio = MagicMock()
+    audio.tags = {}
+    metadata = AudioMetadata(cover_art_data=b"RIFFxxxxWEBPpayload")
+
+    M4AMetadataApplier(metadata).apply_cover_art(
+        audio,
+        Path("track.m4a"),
+        "image/webp",
+        quiet=True,
+    )
+
+    assert "covr" not in audio.tags

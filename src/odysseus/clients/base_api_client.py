@@ -5,7 +5,7 @@ Provides common functionality for API clients like MusicBrainz and Discogs.
 
 import threading
 import weakref
-from typing import Dict, List, Optional, Any, Callable, Tuple
+from typing import Dict, Optional, Any, Callable, Tuple
 from ..core.cache.cache_keys import generate_cache_key
 
 

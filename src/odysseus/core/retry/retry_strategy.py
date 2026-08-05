@@ -3,7 +3,7 @@ Base retry strategy interface.
 """
 
 from abc import ABC, abstractmethod
-from typing import TypeVar, Generic, Optional, Any
+from typing import TypeVar, Generic, Optional
 from dataclasses import dataclass
 from enum import Enum
 

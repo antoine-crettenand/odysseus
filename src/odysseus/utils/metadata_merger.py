@@ -165,7 +165,7 @@ class MetadataMerger:
             if source.metadata.genre:
                 print(f"   Genre: {source.metadata.genre}")
             if source.metadata.cover_art_url:
-                print(f"   Cover Art: Available")
+                print("   Cover Art: Available")
             print("-" * 40)
 
     def _get_field_selection(self, field_name: str, getter_func) -> Optional[Any]:
@@ -214,7 +214,7 @@ class MetadataMerger:
                 break
 
         selected_metadata.source = "manual_selection"
-        print(f"\nSelected metadata:")
+        print("\nSelected metadata:")
         print(f"  Title: {selected_metadata.title or 'N/A'}")
         print(f"  Artist: {selected_metadata.artist or 'N/A'}")
         print(f"  Album: {selected_metadata.album or 'N/A'}")

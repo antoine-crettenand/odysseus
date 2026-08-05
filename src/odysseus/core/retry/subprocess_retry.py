@@ -6,7 +6,7 @@ import subprocess
 import threading
 import time
 from queue import Empty, Queue
-from typing import Optional, Tuple, Callable, Any
+from typing import Optional, Tuple, Callable
 from .retry_strategy import RetryStrategy, RetryContext
 
 
@@ -376,7 +376,6 @@ class SubprocessRetryStrategy(RetryStrategy):
 
             except subprocess.CalledProcessError as e:
                 last_exception = e
-                error_output = (e.stderr or e.stdout or str(e)).lower()
 
                 context = RetryContext(
                     attempt=attempt,

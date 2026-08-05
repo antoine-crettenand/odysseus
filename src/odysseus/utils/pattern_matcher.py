@@ -4,7 +4,6 @@ Consolidates pattern matching logic from search_service and video_validator.
 """
 
 import re
-from typing import List
 
 
 class PatternMatcher:

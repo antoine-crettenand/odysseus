@@ -162,7 +162,7 @@ class NetworkAgent:
                             return True
         
         # Check the underlying exception chain (__cause__)
-        current_error = error
+        current_error: BaseException = error
         depth = 0
         max_depth = 5  # Prevent infinite loops
         

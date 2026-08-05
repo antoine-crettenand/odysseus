@@ -2,9 +2,7 @@
 Tests for logging configuration.
 """
 
-import pytest
 import logging
-from unittest.mock import patch, MagicMock
 from odysseus.core.logger import setup_logging, get_logger
 
 

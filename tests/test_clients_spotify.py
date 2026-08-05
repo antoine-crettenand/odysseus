@@ -2,7 +2,6 @@
 Tests for Spotify client.
 """
 
-import pytest
 from unittest.mock import patch, MagicMock, Mock
 from odysseus.clients.spotify import SpotifyClient
 

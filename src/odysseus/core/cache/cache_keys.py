@@ -4,7 +4,6 @@ Cache key generation utilities.
 
 import hashlib
 import json
-from typing import Any
 
 
 def generate_cache_key(*args, **kwargs) -> str:

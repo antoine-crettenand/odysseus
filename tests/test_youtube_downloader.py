@@ -1,7 +1,8 @@
 """Regression tests for YouTube downloader initialization."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from odysseus.clients.download_strategies import DownloadStrategies, STRATEGIES
 from odysseus.clients.youtube_downloader import YouTubeDownloader
 from odysseus.core.config import DOWNLOAD_CONFIG, PROJECT_DOWNLOADS_DIR, PROJECT_ROOT
 
@@ -26,3 +27,31 @@ def test_initialization_does_not_spawn_subprocesses(temp_dir):
         YouTubeDownloader(download_dir=str(temp_dir))
 
     run.assert_not_called()
+
+def test_download_strategies_keep_certificate_verification_enabled():
+    strategies = DownloadStrategies(MagicMock())
+
+    command = strategies.build_strategy(
+        STRATEGIES[0],
+        "https://example.test/video",
+        "best",
+        True,
+        "%(title)s.%(ext)s",
+    )
+
+    assert "--no-check-certificate" not in command
+
+def test_download_strategy_honors_configured_audio_format():
+    strategies = DownloadStrategies(MagicMock(), audio_format="flac")
+
+    command = strategies.build_strategy(
+        STRATEGIES[0],
+        "https://example.test/video",
+        "audio",
+        True,
+        "%(title)s.%(ext)s",
+    )
+
+    format_index = command.index("--audio-format")
+    assert command[format_index + 1] == "flac"
+    assert "ffmpeg:-b:a 320k" not in command

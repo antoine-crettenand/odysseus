@@ -192,7 +192,7 @@ class MP3MetadataApplier(FormatMetadataApplier):
         try:
             try:
                 audio_file.add_tags()
-            except:
+            except Exception:
                 pass
             if self.metadata.title:
                 audio_file.tags['TIT2'] = TIT2(encoding=3, text=self.metadata.title)
@@ -263,7 +263,7 @@ class MP3MetadataApplier(FormatMetadataApplier):
         try:
             try:
                 audio_file.add_tags()
-            except:
+            except Exception:
                 pass
             if audio_file.tags:
                 while True:
@@ -273,7 +273,7 @@ class MP3MetadataApplier(FormatMetadataApplier):
                     for k in keys_to_remove:
                         try:
                             del audio_file.tags[k]
-                        except:
+                        except Exception:
                             pass
                 audio_file.tags.add(APIC(encoding=0, mime=mime_type, type=3, desc='Cover', data=self.metadata.cover_art_data))
                 if not quiet:
@@ -287,7 +287,7 @@ class MP3MetadataApplier(FormatMetadataApplier):
         if hasattr(audio_file, 'tags') and audio_file.tags is not None:
             try:
                 audio_file.tags.save(str(file_path), v2_version=3)
-            except:
+            except Exception:
                 audio_file.save()
         else:
             audio_file.save()

@@ -229,3 +229,70 @@ def test_bad_existing_split_is_marked_for_replacement(temp_dir):
             existing_file,
             timestamp,
         )
+
+def _tracks(count: int, duration: str = "03:00"):
+    return [
+        Track(position=index, title=f"Track {index}", artist="Artist", duration=duration)
+        for index in range(1, count + 1)
+    ]
+
+def test_chapter_alignment_scales_for_large_albums_with_extras():
+    aligner = _aligner()
+    tracks = _tracks(40)
+    chapters = [{"start_time": 0, "end_time": 10, "title": "Intro"}]
+    start = 10.0
+    for track in tracks:
+        chapters.append({
+            "start_time": start,
+            "end_time": start + 180,
+            "title": track.title,
+        })
+        start += 180
+
+    timestamps = aligner._align_chapters_to_tracks(
+        chapters,
+        tracks,
+        tracks,
+        silent=True,
+    )
+
+    assert len(timestamps) == 40
+    assert timestamps[0]["chapter_title"] == "Track 1"
+    assert timestamps[0]["start_time"] == 10
+
+def test_duration_fallback_rejects_unknown_preceding_offset():
+    aligner = ChapterAligner.__new__(ChapterAligner)
+    aligner.video_validator = MagicMock()
+    aligner.video_validator._parse_duration_to_seconds.side_effect = (
+        lambda value: None if value is None else 180
+    )
+    tracks = [
+        Track(1, "Unknown", "Artist", None),
+        Track(2, "Selected", "Artist", "03:00"),
+    ]
+
+    timestamps = aligner._calculate_track_timestamps_from_durations(
+        tracks,
+        [2],
+    )
+
+    assert timestamps == []
+
+def test_duration_fallback_ignores_missing_durations_after_selection():
+    aligner = ChapterAligner.__new__(ChapterAligner)
+    aligner.video_validator = MagicMock()
+    aligner.video_validator._parse_duration_to_seconds.side_effect = (
+        lambda value: None if value is None else 60
+    )
+    tracks = [
+        Track(1, "Selected", "Artist", "01:00"),
+        Track(2, "Later", "Artist", None),
+    ]
+
+    timestamps = aligner._calculate_track_timestamps_from_durations(
+        tracks,
+        [1],
+    )
+
+    assert timestamps[0]["start_time"] == 0
+    assert timestamps[0]["end_time"] == 60

@@ -3,6 +3,7 @@ Tests for configuration validation utilities.
 """
 
 import pytest
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -10,7 +11,7 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from odysseus.core.validation import check_dependencies, validate_configuration, validate_and_raise
-from odysseus.core.exceptions import ConfigurationError
+from odysseus.core.validation.input_validators import validate_year
 
 
 class TestCheckDependencies:
@@ -160,3 +161,26 @@ class TestValidateAndRaise:
 
             assert "Test error" in str(exc_info.value)
             mock_validate.assert_called_once()
+
+def test_validate_year_raises_for_out_of_range():
+    with pytest.raises(ValueError, match="between"):
+        validate_year(1800)
+
+def test_validate_year_can_coerce_out_of_range():
+    assert validate_year(1800, coerce=True) is None
+    assert validate_year(2020) == 2020
+
+def test_dependency_check_reports_missing_ffmpeg_only():
+    def run(command, **kwargs):
+        if command[0] == "ffmpeg":
+            raise FileNotFoundError("ffmpeg not found")
+        return subprocess.CompletedProcess(command, 0)
+
+    with patch.object(subprocess, "run", side_effect=run), patch(
+        "importlib.import_module",
+        return_value=MagicMock(),
+    ):
+        installed, missing = check_dependencies()
+
+    assert installed is False
+    assert missing == ["ffmpeg (audio transcoder)"]

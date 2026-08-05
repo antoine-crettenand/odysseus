@@ -2,7 +2,7 @@
 Unified search flow manager for consistent search behavior across handlers.
 """
 
-from typing import List, Optional, Callable, Union, Any, Tuple
+from typing import List, Optional, Callable
 from ..models.search_results import SearchResult
 from .display import DisplayManager
 from ..core.config import ERROR_MESSAGES

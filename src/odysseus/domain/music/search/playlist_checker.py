@@ -187,7 +187,7 @@ class PlaylistChecker:
 
                     if not playlist_videos:
                         if not silent:
-                            self.presenter.print(f"[yellow]⚠[/yellow] Could not fetch videos from playlist")
+                            self.presenter.print("[yellow]⚠[/yellow] Could not fetch videos from playlist")
                         continue
 
                     if not silent:
@@ -202,7 +202,7 @@ class PlaylistChecker:
                             self.presenter.print(f"[green]✓[/green] Found track in playlist: {track.title}")
                         return best_match
                     elif not silent:
-                        self.presenter.print(f"[yellow]⚠[/yellow] Track not found in this playlist")
+                        self.presenter.print("[yellow]⚠[/yellow] Track not found in this playlist")
 
                 except Exception as e:
                     if not silent:

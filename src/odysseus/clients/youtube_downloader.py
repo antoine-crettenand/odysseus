@@ -106,7 +106,7 @@ class YouTubeDownloader:
                 if result:
                     return result
 
-            print(f"Error getting video info: Failed with all client types")
+            print("Error getting video info: Failed with all client types")
             return None
         except FileNotFoundError:
             print("Error: yt-dlp command not found. Please install it with: pip install yt-dlp")

@@ -67,7 +67,7 @@ addopts = [
     "--cov=odysseus",
     "--cov-report=term-missing",
     "--cov-branch",
-    "--cov-fail-under=25",
+    "--cov-fail-under=45",
 ]
 markers = [
     "slow: marks tests as slow",
@@ -81,3 +81,39 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores = true
+check_untyped_defs = false
+pretty = true
+show_error_codes = true
+# Enforce typing on modules introduced or heavily touched by the layering refactor.
+files = [
+    "src/odysseus/domain/music/download/presenter.py",
+    "src/odysseus/ui/download_presenter.py",
+    "src/odysseus/domain/music/download/strategies/full_album",
+    "src/odysseus/domain/music/search/release_snapshot.py",
+    "src/odysseus/domain/music/search/release_candidate_fetcher.py",
+    "src/odysseus/domain/music/search/release_ranker.py",
+    "src/odysseus/domain/music/search/release_search_cache.py",
+    "src/odysseus/domain/music/search/youtube_catalog_search.py",
+    "src/odysseus/core/http/network_agent.py",
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "odysseus.domain.music.download.strategies.full_album.*",
+    "odysseus.domain.music.search.release_candidate_fetcher",
+    "odysseus.domain.music.search.youtube_catalog_search",
+]
+# Collaborators still use MagickMock-friendly dynamic attrs from legacy clients.
+disable_error_code = [
+    "attr-defined",
+    "arg-type",
+    "assignment",
+    "union-attr",
+    "return-value",
+    "call-overload",
+]

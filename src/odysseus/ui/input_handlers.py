@@ -257,8 +257,10 @@ class InputHandlers:
                         # Return None to signal we should go back to the main selection menu
                         return None
                 else:
-                    invalid = numbers - set(valid_numbers)
-                    self.console.print(f"[bold red]✗[/bold red] Invalid numbers: {', '.join(map(str, invalid))}. Available: 1-{len(releases)}")
+                    self.console.print(
+                        f"[bold red]✗[/bold red] Invalid selection '{choice}'. "
+                        f"Available: 1-{len(releases)}"
+                    )
 
             except (ValueError, KeyboardInterrupt):
                 self.console.print("[bold red]✗[/bold red] Invalid format. Use numbers separated by commas (e.g., 1,3,5) or ranges (e.g., 1-3,5)")

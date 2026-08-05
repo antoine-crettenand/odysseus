@@ -16,11 +16,11 @@ if _package is None:
     src_path = _script_path.parent.parent
     if str(src_path) not in sys.path:
         sys.path.insert(0, str(src_path))
-    from odysseus.core import setup_logging, get_logger
+    from odysseus.core import setup_logging
     from odysseus.core.validation import validate_and_raise
     from odysseus.ui.cli import OdysseusCLI
 else:
-    from .core import setup_logging, get_logger
+    from .core import setup_logging
     from .core.validation import validate_and_raise
     from .ui.cli import OdysseusCLI
 
@@ -61,7 +61,7 @@ def main(args=None):
     except KeyboardInterrupt:
         logger.debug("Application interrupted by user")
         raise
-    except Exception as e:
+    except Exception:
         logger.exception("Unhandled exception occurred")
         raise
     finally:

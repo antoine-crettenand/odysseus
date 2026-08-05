@@ -3,6 +3,8 @@
 import subprocess
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from odysseus.core.retry import SubprocessRetryStrategy
 
 
@@ -76,3 +78,30 @@ def test_total_time_budget_is_reset_for_each_operation():
             "eta": None,
         }
     )
+
+def test_unavailable_video_errors_are_not_retryable():
+    retryable, reason = SubprocessRetryStrategy.is_retryable_error(
+        "ERROR: [youtube] abc: Video unavailable"
+    )
+    assert retryable is False
+    assert reason == "Unavailable"
+
+    retryable, reason = SubprocessRetryStrategy.is_retryable_error(
+        "Private video. Sign in if you've been granted access"
+    )
+    assert retryable is False
+    assert reason == "Unavailable"
+
+def test_cancel_stops_subprocess_retries():
+    strategy = SubprocessRetryStrategy(max_retries=3, base_delay=10)
+    failure = subprocess.CalledProcessError(1, ["yt-dlp"], stderr="connection reset")
+
+    def fail_then_cancel(cmd, progress_callback=None):
+        strategy.cancel_active()
+        raise failure
+
+    with patch.object(strategy, "_run_attempt", side_effect=fail_then_cancel):
+        with pytest.raises(subprocess.CalledProcessError):
+            strategy.execute_with_progress(["yt-dlp"], quiet=True)
+
+    assert strategy.is_cancelled()

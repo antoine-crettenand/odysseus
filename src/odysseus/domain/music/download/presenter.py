@@ -6,8 +6,7 @@ Domain code talks to DownloadPresenter instead of Rich / DisplayManager.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple, TypeVar
 
 T = TypeVar("T")

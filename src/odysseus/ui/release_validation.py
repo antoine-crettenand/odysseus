@@ -51,13 +51,13 @@ class ReleaseValidator:
 
         if not match.accepted:
             if skip_on_mismatch:
-                self.console.print(f"[bold yellow]⚠[/bold yellow] Warning: Fetched release doesn't match expected release!")
+                self.console.print("[bold yellow]⚠[/bold yellow] Warning: Fetched release doesn't match expected release!")
                 self.console.print(f"  Expected: [yellow]{expected_release.album}[/yellow] by [green]{expected_release.artist}[/green]")
                 self.console.print(f"  Fetched:  [yellow]{fetched_release_info.title}[/yellow] by [green]{fetched_release_info.artist}[/green]")
                 self.console.print(f"  Release ID used: [cyan]{expected_release.mbid}[/cyan] (source: {source})")
-                self.console.print(f"[yellow]⚠[/yellow] Skipping this release due to mismatch.")
+                self.console.print("[yellow]⚠[/yellow] Skipping this release due to mismatch.")
             else:
-                self.console.print(f"[bold yellow]⚠[/bold yellow] Warning: Fetched release doesn't match expected release!")
+                self.console.print("[bold yellow]⚠[/bold yellow] Warning: Fetched release doesn't match expected release!")
                 self.console.print(f"  Expected: [yellow]{expected_release.album}[/yellow] by [green]{expected_release.artist}[/green]")
                 self.console.print(f"  Fetched:  [yellow]{fetched_release_info.title}[/yellow] by [green]{fetched_release_info.artist}[/green]")
                 self.console.print(f"  Release ID used: [cyan]{expected_release.mbid}[/cyan] (source: {source})")
@@ -85,10 +85,10 @@ class ReleaseValidator:
                 )
 
                 if not proceed:
-                    self.console.print(f"[bold red]✗[/bold red] Download cancelled by user.")
+                    self.console.print("[bold red]✗[/bold red] Download cancelled by user.")
                     return False
 
-                self.console.print(f"[green]✓[/green] Proceeding with download...")
+                self.console.print("[green]✓[/green] Proceeding with download...")
                 self.console.print()
             return False if skip_on_mismatch else True
 

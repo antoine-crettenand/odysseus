@@ -4,14 +4,10 @@ Handler for applying metadata to existing files.
 
 from pathlib import Path
 from typing import Optional, List
-from rich.prompt import Prompt, Confirm
+from rich.prompt import Prompt
 from rich.table import Table
 
-from ...domain.music.search.search_service import SearchService
-from ...domain.music.download.download_service import DownloadService
-from ...domain.music.metadata.metadata_service import MetadataService
 from ...domain.music.common.date_utils import get_original_release_year
-from ...ui.display import DisplayManager
 from ...ui.handlers.base_handler import BaseHandler
 from ...models.song import SongData
 from ...models.releases import ReleaseInfo, Track
@@ -252,9 +248,9 @@ class MetadataHandler(BaseHandler):
         # Check MBID availability for cover art
         if not is_musicbrainz or not release_info.mbid or not release_info.mbid.strip():
             if not is_musicbrainz:
-                console.print(f"[yellow]⚠[/yellow] Release is not from MusicBrainz. Cover art will not be available.")
+                console.print("[yellow]⚠[/yellow] Release is not from MusicBrainz. Cover art will not be available.")
             elif not release_info.mbid or not release_info.mbid.strip():
-                console.print(f"[yellow]⚠[/yellow] No MBID available for this release. Cover art will not be available.")
+                console.print("[yellow]⚠[/yellow] No MBID available for this release. Cover art will not be available.")
         else:
             console.print(f"[blue]ℹ[/blue] MBID: {release_info.mbid} (cover art will be fetched)")
         

@@ -190,7 +190,9 @@ class DownloadService:
         results: List[Optional[DownloadResult]] = [None] * len(requests)
 
         def run(index: int, request: DownloadRequest) -> Tuple[int, DownloadResult]:
-            callback = lambda info: event_queue.put((request.key, info))
+            def callback(info: Dict[str, Any]) -> None:
+                event_queue.put((request.key, info))
+
             return index, self._download_request(request, callback)
 
         executor = ThreadPoolExecutor(

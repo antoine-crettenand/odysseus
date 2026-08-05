@@ -101,7 +101,7 @@ class SpotifyHandler(BaseHandler):
         except Exception as e:
             error_msg = str(e)
             if "authentication required" in error_msg.lower():
-                console.print(f"[bold red]✗[/bold red] Spotify API authentication required.")
+                console.print("[bold red]✗[/bold red] Spotify API authentication required.")
                 console.print("[yellow]⚠[/yellow] Please set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET environment variables.")
                 console.print("[blue]ℹ[/blue] You can get these from: https://developer.spotify.com/dashboard")
                 console.print("[blue]ℹ[/blue] Create an app and add the credentials as environment variables.")
@@ -234,7 +234,7 @@ class SpotifyHandler(BaseHandler):
         except Exception as e:
             error_msg = str(e)
             if "authentication required" in error_msg.lower():
-                console.print(f"[bold red]✗[/bold red] Spotify API authentication required.")
+                console.print("[bold red]✗[/bold red] Spotify API authentication required.")
                 console.print("[yellow]⚠[/yellow] Please set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET environment variables.")
                 console.print("[blue]ℹ[/blue] You can get these from: https://developer.spotify.com/dashboard")
                 console.print("[blue]ℹ[/blue] Create an app and add the credentials as environment variables.")
@@ -283,9 +283,9 @@ class SpotifyHandler(BaseHandler):
         cancelled = False
         for idx, (artist, album, year) in enumerate(selected_releases, start=1):
             console.print()
-            console.print(f"[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
+            console.print("[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
             console.print(f"[bold]Processing [{idx}/{len(selected_releases)}]:[/bold] [yellow]{album}[/yellow] by [green]{artist}[/green]" + (f" ({year})" if year else ""))
-            console.print(f"[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
+            console.print("[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
 
             try:
                 outcome = self.release_handler.handle(
@@ -347,7 +347,7 @@ class SpotifyHandler(BaseHandler):
         while True:
             try:
                 selection = Prompt.ask(
-                    f"[cyan]Select releases to download (e.g., 1,3,5 or 1-5 or 'all')[/cyan]",
+                    "[cyan]Select releases to download (e.g., 1,3,5 or 1-5 or 'all')[/cyan]",
                     default="all"
                 ).strip().lower()
 

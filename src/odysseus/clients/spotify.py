@@ -8,7 +8,6 @@ import requests
 import base64
 from typing import List, Optional, Dict, Any
 from ..models.releases import Track, ReleaseInfo
-from ..models.search_results import SpotifyTrack
 from ..utils.file_duration_reader import format_duration_ms
 
 

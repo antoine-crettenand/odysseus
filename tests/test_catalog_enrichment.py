@@ -252,9 +252,10 @@ def test_acoustid_verifies_expected_musicbrainz_recording(monkeypatch):
             }
         ]
     )
-    runner = lambda *args, **kwargs: SimpleNamespace(
-        stdout='{"duration": 355, "fingerprint": "abc123"}'
-    )
+    def runner(*args, **kwargs):
+        return SimpleNamespace(
+            stdout='{"duration": 355, "fingerprint": "abc123"}'
+        )
     client = AcoustIDClient(
         http_client=http,
         api_key="client-key",

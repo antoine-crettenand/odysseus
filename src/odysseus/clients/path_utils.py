@@ -31,10 +31,6 @@ class PathUtils:
         # Remove sub-parts like "a) ... / b) ... / c) ..." to shorten filenames
         # Pattern matches: "a) Title / b) Title / c) Title" or "a) Title, b) Title, c) Title"
         # This handles cases like "Alan's Psychedelic Breakfast: a) Rise and Shine / b) Sunny Side Up / c) Morning Glory"
-        # Match pattern: colon (optional) followed by letter) followed by text, optionally repeated with / or ,
-        # The pattern captures: ": a) ... / b) ... / c) ..." or just "a) ... / b) ... / c) ..."
-        sub_part_pattern = r'(?::\s*)?[a-z]\)\s+[^/]+(?:\s*[/,]\s*[a-z]\)\s+[^/]+)*'
-
         # Try to match and remove sub-parts
         # First try with colon (most common case)
         if re.search(r':\s*[a-z]\)', sanitized, re.IGNORECASE):

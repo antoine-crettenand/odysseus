@@ -8,7 +8,6 @@ from ...domain.music.download.download_service import DownloadService
 from ...domain.music.metadata.metadata_service import MetadataService
 from ...ui.display import DisplayManager
 from ...utils.string_utils import normalize_string
-from ...core.exceptions import ValidationError
 from ...core.config import ERROR_MESSAGES
 
 

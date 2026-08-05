@@ -628,9 +628,9 @@ Examples:
 
         for idx, (artist, album, year) in enumerate(entries, start=1):
             console.print()
-            console.print(f"[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
+            console.print("[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
             console.print(f"[bold]Processing [{idx}/{len(entries)}]:[/bold] [yellow]{album}[/yellow] by [green]{artist}[/green]" + (f" ({year})" if year else ""))
-            console.print(f"[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
+            console.print("[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
 
             try:
                 outcome = self.release_handler.handle(
@@ -670,7 +670,7 @@ Examples:
                 continue
 
         console.print()
-        console.print(f"[bold green]✓[/bold green] Batch processing complete!")
+        console.print("[bold green]✓[/bold green] Batch processing complete!")
         console.print(f"  Successful: [green]{successful}[/green]")
         if skipped > 0:
             console.print(f"  Skipped: [yellow]{skipped}[/yellow]")

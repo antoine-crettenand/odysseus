@@ -4,10 +4,9 @@ Metadata service for handling and merging metadata from various sources.
 
 from typing import List, Optional, Dict, Any
 from pathlib import Path
-from ....models.song import AudioMetadata, SongData
+from ....models.song import AudioMetadata
 from ....models.releases import ReleaseInfo, Track
 from ....utils.metadata_merger import MetadataMerger
-from ...media.cover_art.fetcher import CoverArtFetcher
 
 
 class MetadataService:
@@ -210,7 +209,7 @@ class MetadataService:
                         console.print(f"[dim blue]ℹ[/dim blue] [dim]Using provided cover art ({len(cover_art_data)} bytes)[/dim]")
                 else:
                     if console:
-                        console.print(f"[yellow]⚠[/yellow] Provided cover art data is empty, will try to fetch")
+                        console.print("[yellow]⚠[/yellow] Provided cover art data is empty, will try to fetch")
             else:
                 # Fallback: fetch cover art (this will use cache if available)
                 cover_art_data = self.fetch_cover_art_for_release(release_info, console)
@@ -219,7 +218,7 @@ class MetadataService:
                     cover_art_fetched = True
 
             if not cover_art_fetched and console:
-                console.print(f"[yellow]⚠[/yellow] No cover art available for this release")
+                console.print("[yellow]⚠[/yellow] No cover art available for this release")
 
             # Apply metadata (quiet=True to suppress messages when progress bars are active)
             self.merger.set_final_metadata(metadata)

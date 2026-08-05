@@ -8,7 +8,7 @@ import os
 import tempfile
 import shutil
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 from typing import Generator
 
 # Add src to path for imports
@@ -211,3 +211,9 @@ def mock_logger():
     logger.error = MagicMock()
     logger.exception = MagicMock()
     return logger
+
+def pytest_collection_modifyitems(items):
+    for item in items:
+        if not any(m.name in {"integration", "slow", "unit"} for m in item.iter_markers()):
+            item.add_marker(pytest.mark.unit)
+

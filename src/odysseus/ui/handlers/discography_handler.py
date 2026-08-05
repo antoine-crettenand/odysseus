@@ -10,7 +10,7 @@ from ...ui.user_interaction import UserInteraction
 from ...core.config import PROJECT_NAME, ERROR_MESSAGES
 from ...core.validation import validate_year_range
 from ...models.outcomes import OperationOutcome
-from rich.prompt import Prompt, Confirm
+from rich.prompt import Prompt
 
 
 class DiscographyHandler(BaseHandler):

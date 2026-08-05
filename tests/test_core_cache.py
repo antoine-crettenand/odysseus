@@ -1,7 +1,9 @@
 """Tests for cache backends."""
 
-from odysseus.core.cache import MemoryCache, TTLCache
+from unittest.mock import MagicMock
+
 from odysseus.clients.base_api_client import BaseAPIClient
+from odysseus.core.cache import MemoryCache, TTLCache
 
 
 def test_memory_cache_update_does_not_evict_another_key():
@@ -54,3 +56,25 @@ def test_recently_expired_value_is_returned_when_refresh_fails():
     )
 
     assert result == ["cached"]
+
+def test_empty_search_results_are_not_cached():
+    cache = MagicMock()
+    cache.get.return_value = None
+    cache_manager = MagicMock()
+    cache_manager.get_cache.return_value = cache
+    client = BaseAPIClient(
+        {
+            "BASE_URL": "https://example.test",
+            "USER_AGENT": "test",
+            "REQUEST_DELAY": 0,
+            "MAX_RESULTS": 10,
+            "TIMEOUT": 5,
+        },
+        cache_manager=cache_manager,
+        http_client=MagicMock(),
+    )
+
+    result = client._get_cached_or_fetch("search", "key", lambda: [])
+
+    assert result == []
+    cache.set.assert_not_called()

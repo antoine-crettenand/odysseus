@@ -1,6 +1,5 @@
 """Regression tests for runtime-only import and path boundaries."""
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from odysseus.clients.file_splitter import FileSplitter

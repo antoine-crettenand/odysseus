@@ -1,11 +1,14 @@
 """Tests for shared HTTP client behavior."""
 
+import threading
 from unittest.mock import MagicMock, patch
 
+import pytest
 import requests
 
 from odysseus.clients.base_api_client import BaseAPIClient
 from odysseus.core.http import HttpClient, SessionManager
+from odysseus.core.http.network_agent import NetworkAgent
 
 
 def _response(status_code, headers=None):
@@ -199,3 +202,104 @@ def test_replacing_provider_headers_removes_cleared_authorization():
 
     assert "Authorization" not in session.headers
     assert session.headers["User-Agent"] == "Odysseus/1.0"
+
+def test_http_client_paces_successful_requests_between_calls():
+    first = MagicMock()
+    first.status_code = 200
+    first.raise_for_status = MagicMock()
+    second = MagicMock()
+    second.status_code = 200
+    second.raise_for_status = MagicMock()
+
+    session = MagicMock()
+    session.get.side_effect = [first, second]
+    session_manager = MagicMock()
+    session_manager.get_session.return_value = session
+    client = HttpClient(
+        session_manager=session_manager,
+        default_request_delay=0.5,
+    )
+
+    with patch(
+        "odysseus.core.http.http_client.time.monotonic",
+        side_effect=[
+            10.0,  # stamp after first request
+            10.1,  # pacing check before second request
+            10.6,  # stamp after second request
+        ],
+    ):
+        with patch("odysseus.core.http.http_client.time.sleep") as sleep:
+            client.get("https://example.test/a", max_retries=0)
+            client.get("https://example.test/b", max_retries=0)
+
+    sleep.assert_called_once()
+    assert sleep.call_args.args[0] == pytest.approx(0.4)
+
+def test_accepted_403_counts_toward_circuit_breaker():
+    response = MagicMock(spec=requests.Response)
+    response.status_code = 403
+    response.headers = {}
+    session = MagicMock()
+    session.get.return_value = response
+    session_manager = MagicMock()
+    session_manager.get_session.return_value = session
+    client = HttpClient(
+        session_manager=session_manager,
+        default_request_delay=0,
+        circuit_breaker_threshold=2,
+        circuit_breaker_cooldown=30,
+    )
+
+    first = client.get(
+        "https://example.test",
+        max_retries=0,
+        accepted_status_codes=(403,),
+        session_name="discogs",
+    )
+    second = client.get(
+        "https://example.test",
+        max_retries=0,
+        accepted_status_codes=(403,),
+        session_name="discogs",
+    )
+    third = client.get(
+        "https://example.test",
+        max_retries=0,
+        accepted_status_codes=(403,),
+        session_name="discogs",
+    )
+
+    assert first is response
+    assert second is response
+    assert third is None
+    assert client.get_provider_health("discogs")["cooldown_remaining"] > 0
+
+def test_session_request_delay_override_is_honored():
+    client = HttpClient(default_request_delay=1.0)
+    client.set_session_request_delay("spotify", 0.1)
+    client._last_request_times["spotify"] = 0.0
+
+    with patch("odysseus.core.http.http_client.time.monotonic", return_value=0.05), patch(
+        "odysseus.core.http.http_client.time.sleep"
+    ) as sleep:
+        client._apply_request_delay("spotify")
+
+    sleep.assert_called_once()
+    assert sleep.call_args.args[0] == pytest.approx(0.05)
+
+def test_network_agent_strategy_switch_is_thread_safe():
+    agent = NetworkAgent("TestAgent/1.0")
+
+    def switch_many():
+        for _ in range(50):
+            agent.switch_to_next_strategy(RuntimeError("boom"))
+
+    threads = [threading.Thread(target=switch_many) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert 0 <= agent.current_strategy_index < len(agent.strategies)
+    # Locking preserves one history entry per switch with no lost updates.
+    assert len(agent.error_history) == 200

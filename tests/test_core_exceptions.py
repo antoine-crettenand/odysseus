@@ -2,7 +2,6 @@
 Tests for custom exceptions.
 """
 
-import pytest
 from odysseus.core.exceptions import (
     OdysseusError,
     SearchError,

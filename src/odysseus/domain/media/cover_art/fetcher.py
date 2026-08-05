@@ -3,7 +3,7 @@ Cover art fetching service for retrieving cover art from various sources.
 """
 
 import requests
-from typing import Optional, Dict
+from typing import Optional
 from pathlib import Path
 from ....models.releases import ReleaseInfo
 from ....core.http.network_agent import NetworkAgent
@@ -194,7 +194,7 @@ class CoverArtFetcher:
         """
         if not mbid or not mbid.strip():
             if console:
-                console.print(f"[yellow]⚠[/yellow] No MBID provided for cover art fetch")
+                console.print("[yellow]⚠[/yellow] No MBID provided for cover art fetch")
             return None
 
         # Check cache first
@@ -353,7 +353,7 @@ class CoverArtFetcher:
                 if cached_url == "":  # Empty string means "not found"
                     return None
                 if console:
-                    console.print(f"[dim blue]ℹ[/dim blue] [dim]Using cached Discogs cover art URL[/dim]")
+                    console.print("[dim blue]ℹ[/dim blue] [dim]Using cached Discogs cover art URL[/dim]")
                 cover_art_data = self.fetch_cover_art_from_url(cached_url, console)
                 if cover_art_data:
                     if console:
@@ -363,7 +363,7 @@ class CoverArtFetcher:
 
             # Not in cache, need to search
             if console:
-                console.print(f"[dim blue]ℹ[/dim blue] [dim]Trying to find cover art from Discogs...[/dim]")
+                console.print("[dim blue]ℹ[/dim blue] [dim]Trying to find cover art from Discogs...[/dim]")
 
             discogs_client = self.discogs_client
             if discogs_client is None:
@@ -498,7 +498,7 @@ class CoverArtFetcher:
 
             if not existing_files:
                 if console:
-                    console.print(f"[yellow]⚠[/yellow] No audio files found in folder to extract cover art from")
+                    console.print("[yellow]⚠[/yellow] No audio files found in folder to extract cover art from")
                 return None
 
             # Try each file until we find one with cover art
@@ -608,12 +608,12 @@ class CoverArtFetcher:
                         except Exception:
                             pass
 
-                except Exception as e:
+                except Exception:
                     # Continue to next file if this one fails
                     continue
 
             if console:
-                console.print(f"[yellow]⚠[/yellow] No cover art found in existing audio files")
+                console.print("[yellow]⚠[/yellow] No cover art found in existing audio files")
             return None
 
         except Exception as e:
@@ -647,7 +647,7 @@ class CoverArtFetcher:
 
         # If no Spotify URL, try searching Spotify
         if console:
-            console.print(f"[dim blue]ℹ[/dim blue] [dim]Trying to find cover art from Spotify...[/dim]")
+            console.print("[dim blue]ℹ[/dim blue] [dim]Trying to find cover art from Spotify...[/dim]")
         cover_art_data = self._fetch_cover_art_from_spotify(release_info, console)
         if cover_art_data:
             return cover_art_data
@@ -660,25 +660,25 @@ class CoverArtFetcher:
 
         if mbid and is_musicbrainz_mbid:
             if console:
-                console.print(f"[dim blue]ℹ[/dim blue] [dim]Fetching cover art from MusicBrainz for release...[/dim]")
+                console.print("[dim blue]ℹ[/dim blue] [dim]Fetching cover art from MusicBrainz for release...[/dim]")
             cover_art_data = self.fetch_cover_art(mbid, console)
             if cover_art_data:
                 return cover_art_data
             elif console:
-                console.print(f"[yellow]⚠[/yellow] Cover art not available from MusicBrainz")
+                console.print("[yellow]⚠[/yellow] Cover art not available from MusicBrainz")
 
         # If MBID is a Discogs ID or we don't have a valid MusicBrainz MBID,
         # try searching MusicBrainz by artist/album to find a matching release
         if not mbid or not is_musicbrainz_mbid:
             if console:
                 if mbid and not is_musicbrainz_mbid:
-                    console.print(f"[dim blue]ℹ[/dim blue] [dim]MBID appears to be from Discogs. Searching MusicBrainz for matching release...[/dim]")
+                    console.print("[dim blue]ℹ[/dim blue] [dim]MBID appears to be from Discogs. Searching MusicBrainz for matching release...[/dim]")
                 else:
-                    console.print(f"[dim blue]ℹ[/dim blue] [dim]Trying to find MusicBrainz release for cover art...[/dim]")
+                    console.print("[dim blue]ℹ[/dim blue] [dim]Trying to find MusicBrainz release for cover art...[/dim]")
             musicbrainz_mbid = self._find_musicbrainz_mbid(release_info, console)
             if musicbrainz_mbid:
                 if console:
-                    console.print(f"[dim blue]ℹ[/dim blue] [dim]Found MusicBrainz release. Fetching cover art...[/dim]")
+                    console.print("[dim blue]ℹ[/dim blue] [dim]Found MusicBrainz release. Fetching cover art...[/dim]")
                 cover_art_data = self.fetch_cover_art(musicbrainz_mbid, console)
                 if cover_art_data:
                     return cover_art_data
@@ -691,7 +691,7 @@ class CoverArtFetcher:
         # Priority 4: Try to extract cover art from existing tracks in the folder
         if folder_path and folder_path.exists():
             if console:
-                console.print(f"[dim blue]ℹ[/dim blue] [dim]Trying to extract cover art from existing tracks in folder...[/dim]")
+                console.print("[dim blue]ℹ[/dim blue] [dim]Trying to extract cover art from existing tracks in folder...[/dim]")
             cover_art_data = self._extract_cover_art_from_folder(folder_path, console)
             if cover_art_data:
                 return cover_art_data
