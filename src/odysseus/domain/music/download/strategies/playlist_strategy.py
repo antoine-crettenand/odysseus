@@ -56,8 +56,7 @@ class PlaylistStrategy(BaseDownloadStrategy):
             "spotify.com" in release_info.url
         ):
             if not silent:
-                console = self.display_manager.console
-                console.print("[cyan]ℹ[/cyan] Skipping YouTube playlist strategy for Spotify playlist (not applicable)...")
+                self.presenter.print("[cyan]ℹ[/cyan] Skipping YouTube playlist strategy for Spotify playlist (not applicable)...")
             emit_release_progress(
                 progress_callback,
                 stage="playlist_skipped",
@@ -66,21 +65,17 @@ class PlaylistStrategy(BaseDownloadStrategy):
             )
             return None, None
 
-        console = self.display_manager.console
-
         if not silent:
-            console.print("[cyan]🎵 Strategy 2: Searching for playlist...[/cyan]")
+            self.presenter.print("[cyan]🎵 Strategy 2: Searching for playlist...[/cyan]")
 
         # Get folder path for cover art extraction from existing tracks
         output_dir = self.path_manager.get_release_folder_path(release_info)
 
         # Fetch cover art only if not provided (optimization to avoid redundant searches)
         if cover_art_data is None:
-            if not silent:
-                cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console, folder_path=output_dir)
-            else:
-                # Still fetch cover art in silent mode, just don't print messages
-                cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None, folder_path=output_dir)
+            cover_art_data = self.metadata_service.fetch_cover_art_for_release(
+                release_info, None, folder_path=output_dir
+            )
 
         # Extract track titles for more thorough playlist search
         track_titles = [track.title for track in release_info.tracks[:5]]  # Use first 5 tracks
@@ -93,7 +88,7 @@ class PlaylistStrategy(BaseDownloadStrategy):
             message="Searching YouTube playlists for the selected release…",
             percent=0,
         )
-        playlists = self.display_manager.show_loading_spinner(
+        playlists = self.presenter.show_loading_spinner(
             f"Searching for playlist: {release_info.title}",
             self.search_service.search_playlist,
             release_info.artist,
@@ -110,8 +105,7 @@ class PlaylistStrategy(BaseDownloadStrategy):
                 message="No matching YouTube playlist was found.",
             )
             if not silent:
-                styling = self.display_manager.styling
-                styling.log_warning("No playlist found. Trying next strategy...")
+                self.presenter.log_warning("No playlist found. Trying next strategy...")
             return None, None
 
         emit_release_progress(
@@ -138,35 +132,35 @@ class PlaylistStrategy(BaseDownloadStrategy):
                     ),
                 )
                 if not silent:
-                    console.print(f"[cyan]📥 Found playlist: {playlist_info['title']}[/cyan]")
+                    self.presenter.print(f"[cyan]📥 Found playlist: {playlist_info['title']}[/cyan]")
 
                 # Get playlist video information
                 if not silent:
-                    console.print("[cyan]📋 Fetching playlist information...[/cyan]")
+                    self.presenter.print("[cyan]📋 Fetching playlist information...[/cyan]")
 
                 try:
-                    playlist_videos = self.display_manager.show_loading_spinner(
+                    playlist_videos = self.presenter.show_loading_spinner(
                         "Fetching playlist videos",
                         self.download_service.get_playlist_info,
                         playlist_url
                     )
                 except Exception as e:
                     if not silent:
-                        console.print(f"[yellow]⚠[/yellow] Error fetching playlist: {e}. Trying next playlist...")
+                        self.presenter.print(f"[yellow]⚠[/yellow] Error fetching playlist: {e}. Trying next playlist...")
                     continue
 
                 if not playlist_videos:
                     if not silent:
-                        console.print(f"[yellow]⚠[/yellow] Could not fetch playlist videos from: {playlist_url}")
-                        console.print("[yellow]⚠[/yellow] This might be due to:")
-                        console.print("  - Playlist is private or unavailable")
-                        console.print("  - Playlist is empty")
-                        console.print("  - Network/API issues")
-                        console.print("[yellow]⚠[/yellow] Trying next playlist...")
+                        self.presenter.print(f"[yellow]⚠[/yellow] Could not fetch playlist videos from: {playlist_url}")
+                        self.presenter.print("[yellow]⚠[/yellow] This might be due to:")
+                        self.presenter.print("  - Playlist is private or unavailable")
+                        self.presenter.print("  - Playlist is empty")
+                        self.presenter.print("  - Network/API issues")
+                        self.presenter.print("[yellow]⚠[/yellow] Trying next playlist...")
                     continue
 
                 if not silent:
-                    console.print(f"[green]✓[/green] Found {len(playlist_videos)} videos in playlist")
+                    self.presenter.print(f"[green]✓[/green] Found {len(playlist_videos)} videos in playlist")
 
                 # Check if this is a Side 1 or Side 2 playlist
                 playlist_title = playlist_info.get('title', '').lower()
@@ -190,7 +184,7 @@ class PlaylistStrategy(BaseDownloadStrategy):
                         side_1_tracks = [t for t in selected_tracks if t.position <= (total_tracks + 1) // 2]
                         if side_1_tracks:
                             if not silent:
-                                console.print(f"[blue]ℹ[/blue] Detected Side 1 playlist - focusing on tracks 1-{(total_tracks + 1) // 2}")
+                                self.presenter.print(f"[blue]ℹ[/blue] Detected Side 1 playlist - focusing on tracks 1-{(total_tracks + 1) // 2}")
                             # Use side 1 tracks if we have them, otherwise use all selected tracks
                             if len(side_1_tracks) >= len(selected_tracks) * 0.5:
                                 selected_tracks = side_1_tracks
@@ -201,14 +195,14 @@ class PlaylistStrategy(BaseDownloadStrategy):
                         side_2_tracks = [t for t in selected_tracks if t.position >= side_2_start]
                         if side_2_tracks:
                             if not silent:
-                                console.print(f"[blue]ℹ[/blue] Detected Side 2 playlist - focusing on tracks {side_2_start}-{total_tracks}")
+                                self.presenter.print(f"[blue]ℹ[/blue] Detected Side 2 playlist - focusing on tracks {side_2_start}-{total_tracks}")
                             # Use side 2 tracks if we have them, otherwise use all selected tracks
                             if len(side_2_tracks) >= len(selected_tracks) * 0.5:
                                 selected_tracks = side_2_tracks
 
                 # Match playlist videos to tracks
                 if not silent:
-                    console.print("[cyan]🔍 Matching videos to tracks...[/cyan]")
+                    self.presenter.print("[cyan]🔍 Matching videos to tracks...[/cyan]")
 
                 # Create a mapping: track -> best matching video
                 track_to_video = {}
@@ -242,7 +236,7 @@ class PlaylistStrategy(BaseDownloadStrategy):
                 unmatched_tracks = [t for t in selected_tracks if t not in track_to_video]
                 if unmatched_tracks:
                     if not silent:
-                        console.print(f"[blue]ℹ[/blue] First pass matched {len(track_to_video)}/{len(selected_tracks)} tracks. Trying second pass with lower threshold...")
+                        self.presenter.print(f"[blue]ℹ[/blue] First pass matched {len(track_to_video)}/{len(selected_tracks)} tracks. Trying second pass with lower threshold...")
 
                     for track in unmatched_tracks:
                         best_match = None
@@ -267,7 +261,7 @@ class PlaylistStrategy(BaseDownloadStrategy):
                             track_to_video[track] = best_match
                             used_videos.add(best_match['id'])
                             if not silent:
-                                console.print(f"[blue]ℹ[/blue] Second pass matched: {track.title} (score: {best_score:.2f})")
+                                self.presenter.print(f"[blue]ℹ[/blue] Second pass matched: {track.title} (score: {best_score:.2f})")
 
                 # Check how many tracks we matched
                 matched_count = len(track_to_video)
@@ -275,11 +269,11 @@ class PlaylistStrategy(BaseDownloadStrategy):
                 min_required = max(1, int(len(selected_tracks) * 0.3))
                 if matched_count < min_required:
                     if not silent:
-                        console.print(f"[yellow]⚠[/yellow] Only matched {matched_count}/{len(selected_tracks)} tracks (minimum: {min_required}). Trying next playlist...")
+                        self.presenter.print(f"[yellow]⚠[/yellow] Only matched {matched_count}/{len(selected_tracks)} tracks (minimum: {min_required}). Trying next playlist...")
                     continue
 
                 if not silent:
-                    console.print(f"[green]✓[/green] Matched {matched_count}/{len(selected_tracks)} tracks")
+                    self.presenter.print(f"[green]✓[/green] Matched {matched_count}/{len(selected_tracks)} tracks")
 
                 prepared, failed_count = self._prepare_downloads(
                     release_info,
@@ -317,18 +311,17 @@ class PlaylistStrategy(BaseDownloadStrategy):
                     return downloaded_count, failed_count
                 else:
                     if not silent:
-                        console.print("[yellow]⚠[/yellow] No tracks downloaded from playlist. Trying next playlist...")
+                        self.presenter.print("[yellow]⚠[/yellow] No tracks downloaded from playlist. Trying next playlist...")
                     continue
 
             except Exception as e:
                 if not silent:
-                    console.print(f"[yellow]⚠[/yellow] Error with playlist: {e}. Trying next...")
+                    self.presenter.print(f"[yellow]⚠[/yellow] Error with playlist: {e}. Trying next...")
                 continue
 
         # If we get here, all playlists failed
         if not silent:
-            styling = self.display_manager.styling
-            styling.log_warning("All playlists failed. Trying next strategy...")
+            self.presenter.log_warning("All playlists failed. Trying next strategy...")
         emit_release_progress(
             progress_callback,
             stage="playlist_rejected",
@@ -347,7 +340,7 @@ class PlaylistStrategy(BaseDownloadStrategy):
         """Validate matches and build immutable worker requests."""
         prepared = []
         failed = 0
-        console = self.display_manager.console
+        console = None if silent else self.presenter
         date = release_info.original_release_date or release_info.release_date
         year = int(date[:4]) if date and len(date) >= 4 else None
 
@@ -357,17 +350,13 @@ class PlaylistStrategy(BaseDownloadStrategy):
                 video_id=video_info["id"],
                 url_suffix=f"watch?v={video_info['id']}",
             )
-            is_valid, reason = self.video_validator.validate_video_for_track(
+            is_valid, _reason = self.video_validator.validate_video_for_track(
                 video,
                 track,
                 silent,
+                console=console,
             )
             if not is_valid:
-                if not silent:
-                    self.display_manager.styling.log_warning(
-                        f"Skipping invalid video for {track.title}: {reason}"
-                    )
-                    console.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
                 failed += 1
                 continue
 
@@ -376,7 +365,7 @@ class PlaylistStrategy(BaseDownloadStrategy):
                 video_id = video_info.get("id") or video_info.get("url")
                 if not video_id:
                     if not silent:
-                        console.print(
+                        self.presenter.print(
                             "[yellow]⚠[/yellow] Could not determine video "
                             f"URL for {track.title}"
                         )
@@ -438,7 +427,7 @@ class PlaylistStrategy(BaseDownloadStrategy):
         if not prepared:
             return []
 
-        progress = self.display_manager.create_progress_bar(
+        progress = self.presenter.create_progress_bar(
             total_matches,
             "Downloading from playlist"
             if not silent
@@ -509,7 +498,6 @@ class PlaylistStrategy(BaseDownloadStrategy):
         results_by_key = {result.key: result for result in results}
         downloaded = 0
         failed = 0
-        console = self.display_manager.console
 
         for item in prepared:
             result = results_by_key.get(item.track.position)
@@ -525,26 +513,26 @@ class PlaylistStrategy(BaseDownloadStrategy):
 
             self._mark_track_downloaded(item.track.position)
             if not silent:
-                self.display_manager.display_track_download_result(
+                self.presenter.display_track_download_result(
                     item.track.title,
                     True,
                     str(result.path),
                     file_existed=result.file_existed,
                 )
-                console.print(f"  [dim]YouTube: {item.youtube_url}[/dim]")
+                self.presenter.print(f"  [dim]YouTube: {item.youtube_url}[/dim]")
             try:
                 self.metadata_service.apply_metadata_with_cover_art(
                     result.path,
                     item.track,
                     release_info,
-                    console if not silent else None,
+                    None,
                     cover_art_data=cover_art_data,
                     path_manager=self.path_manager,
                     file_existed_before=result.file_existed,
                 )
             except Exception as error:
                 if not silent:
-                    console.print(
+                    self.presenter.print(
                         f"[yellow]⚠[/yellow] Could not apply metadata to "
                         f"{item.track.title}: {error}"
                     )
@@ -558,13 +546,9 @@ class PlaylistStrategy(BaseDownloadStrategy):
         result: DownloadResult,
         silent: bool,
     ) -> None:
-        console = self.display_manager.console
         if silent:
-            console.print(f"[red]✗[/red] Failed: {track.title}")
+            self.presenter.print(f"[red]✗[/red] Failed: {track.title}")
             return
-
-        from rich import box
-        from rich.panel import Panel
 
         error = result.error or "Download service returned no file"
         if error.startswith("All download strategies failed. "):
@@ -577,12 +561,9 @@ class PlaylistStrategy(BaseDownloadStrategy):
                 "\n[yellow]Tip:[/yellow] YouTube may be blocking requests. "
                 "Try signing in to YouTube."
             )
-        console.print(
-            Panel(
-                details,
-                title=f"[bold red]✗ Track {track.position}[/bold red]",
-                border_style="red",
-                box=box.ROUNDED,
-                padding=(0, 1),
-            )
+        self.presenter.display_panel(
+            details,
+            title=f"[bold red]✗ Track {track.position}[/bold red]",
+            border_style="red",
+            padding=(0, 1),
         )

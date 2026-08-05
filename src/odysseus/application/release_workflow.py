@@ -117,6 +117,8 @@ class ReleaseWorkflow:
         *,
         quality: str = "audio",
         jobs: int = 1,
+        silent: bool = True,
+        presenter=None,
         progress_callback: Optional[ReleaseProgressCallback] = None,
     ) -> ReleaseDownloadResult:
         """Run the full album/playlist/individual fallback chain."""
@@ -127,51 +129,59 @@ class ReleaseWorkflow:
         if any(number not in available for number in selected):
             raise ValueError("The track selection contains an invalid track number")
 
-        download_arguments = {
-            "silent": True,
-            "jobs": jobs,
-        }
-        if progress_callback is not None:
-            download_arguments["progress_callback"] = progress_callback
-        processed, failed = self.download_orchestrator.download_release_tracks(
-            release_info,
-            selected,
-            quality,
-            **download_arguments,
-        )
-        verified = 0
-        mismatches = 0
-        inconclusive = 0
-        if self.acoustid_client and self.acoustid_client.is_available():
-            paths = self.download_orchestrator.path_manager.get_existing_tracks(
-                release_info, selected
+        previous_presenter = self.download_orchestrator.presenter
+        if presenter is not None:
+            self.download_orchestrator.set_presenter(presenter)
+
+        try:
+            download_arguments = {
+                "silent": silent,
+                "jobs": jobs,
+            }
+            if progress_callback is not None:
+                download_arguments["progress_callback"] = progress_callback
+            processed, failed = self.download_orchestrator.download_release_tracks(
+                release_info,
+                selected,
+                quality,
+                **download_arguments,
             )
-            tracks = {track.position: track for track in release_info.tracks}
-            for position, path in paths.items():
-                track = tracks.get(position)
-                if track is None or not track.mbid:
-                    continue
-                try:
-                    verification = self.acoustid_client.verify(path, track.mbid)
-                except Exception:
-                    inconclusive += 1
-                    continue
-                if verification.status == "verified":
-                    verified += 1
-                elif verification.status == "mismatch":
-                    mismatches += 1
-                elif verification.status == "inconclusive":
-                    inconclusive += 1
-        return ReleaseDownloadResult(
-            processed=processed,
-            failed=failed,
-            failed_track_numbers=list(
-                self.download_orchestrator.last_failed_track_numbers
-            ),
-            verified=verified,
-            verification_mismatches=mismatches,
-            verification_inconclusive=inconclusive,
-        )
+            verified = 0
+            mismatches = 0
+            inconclusive = 0
+            if self.acoustid_client and self.acoustid_client.is_available():
+                paths = self.download_orchestrator.path_manager.get_existing_tracks(
+                    release_info, selected
+                )
+                tracks = {track.position: track for track in release_info.tracks}
+                for position, path in paths.items():
+                    track = tracks.get(position)
+                    if track is None or not track.mbid:
+                        continue
+                    try:
+                        verification = self.acoustid_client.verify(path, track.mbid)
+                    except Exception:
+                        inconclusive += 1
+                        continue
+                    if verification.status == "verified":
+                        verified += 1
+                    elif verification.status == "mismatch":
+                        mismatches += 1
+                    elif verification.status == "inconclusive":
+                        inconclusive += 1
+            return ReleaseDownloadResult(
+                processed=processed,
+                failed=failed,
+                failed_track_numbers=list(
+                    self.download_orchestrator.last_failed_track_numbers
+                ),
+                verified=verified,
+                verification_mismatches=mismatches,
+                verification_inconclusive=inconclusive,
+            )
+        finally:
+            if presenter is not None:
+                self.download_orchestrator.set_presenter(previous_presenter)
 
     def cancel(self) -> None:
         """Cancel active release downloads."""

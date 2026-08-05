@@ -34,6 +34,8 @@ class SpotifyHandler(BaseHandler):
             self.metadata_service,
             self.display_manager,
             download_orchestrator=self.download_orchestrator,
+            recording_workflow=self.recording_workflow,
+            release_workflow=self.release_workflow,
         )
 
     def handle(
@@ -149,22 +151,31 @@ class SpotifyHandler(BaseHandler):
         ))
         console.print()
 
-        processed, failed = self.download_orchestrator.download_release_tracks(
+        from ..download_presenter import RichDownloadPresenter
+
+        presenter = RichDownloadPresenter(self.display_manager)
+        result = self.release_workflow.download(
             release_info,
             track_numbers,
-            quality,
-            silent=False,
+            quality=quality,
             jobs=jobs,
+            silent=False,
+            presenter=presenter,
         )
-        if failed:
+        if result.verification_mismatches:
+            console.print(
+                f"[yellow]⚠[/yellow] AcoustID mismatch: {result.verification_mismatches} track"
+                f"{'s' if result.verification_mismatches != 1 else ''}"
+            )
+        if result.failed:
             return OperationOutcome.failure(
-                f"{failed} track(s) failed",
-                processed=processed,
-                failed=failed,
+                f"{result.failed} track(s) failed",
+                processed=result.processed,
+                failed=result.failed,
             )
         return OperationOutcome.success(
             "Spotify tracks processed",
-            processed=processed,
+            processed=result.processed,
         )
 
     def _handle_releases_mode(

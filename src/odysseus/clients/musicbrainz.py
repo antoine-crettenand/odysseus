@@ -3,20 +3,18 @@ MusicBrainz Client Module
 A client for searching the MusicBrainz database for music information.
 """
 
+import logging
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from rich.console import Console
 from ..models.song import SongData
 from ..models.search_results import MusicBrainzSong
 from ..models.releases import Track, ReleaseInfo
-from ..core.config import ERROR_MESSAGES, MUSICBRAINZ_CONFIG, PROJECT_DOWNLOADS_DIR
+from ..core.config import ERROR_MESSAGES, MUSICBRAINZ_CONFIG
 from ..utils.file_duration_reader import format_duration_ms
 from ..utils.string_utils import normalize_string
 from .base_api_client import BaseAPIClient
-from .path_utils import PathUtils
 
-console = Console()
+logger = logging.getLogger(__name__)
 
 # Constants
 BASE_MAX_RETRIES = 3
@@ -39,9 +37,6 @@ class MusicBrainzClient(BaseAPIClient):
         """
         super().__init__(MUSICBRAINZ_CONFIG, cache_manager, http_client)
 
-        # Initialize path utils for checking existing releases
-        self.path_utils = PathUtils()
-
         # Ensure MusicBrainz requests use the configured User-Agent (contact required)
         if hasattr(self.http_client, "session_manager"):
             headers = {
@@ -55,57 +50,10 @@ class MusicBrainzClient(BaseAPIClient):
                 session_manager.get_session("musicbrainz").headers.update(headers)
 
     def _log(self, message: str, batch_progress: Optional[Tuple[int, int]] = None, dim: bool = False):
-        """Log message with optional batch progress prefix and dimming."""
+        """Log message with optional batch progress prefix."""
         prefix = f"[{batch_progress[0]}/{batch_progress[1]}] " if batch_progress else ""
-        # Add newline at start to ensure message appears on new line (important when spinner is active)
-        if dim:
-            console.print(f"\n{prefix}[dim]{message}[/dim]")
-        else:
-            console.print(f"\n{prefix}{message}")
-
-    def _check_release_folder_exists(self, song_data: SongData) -> bool:
-        """
-        Check if a release folder already exists for the given artist/album/year.
-
-        Args:
-            song_data: Song information with artist, album, and optional release_year
-
-        Returns:
-            True if folder exists and contains audio files, False otherwise
-        """
-        try:
-            # Build the metadata used to locate an existing organized release.
-            metadata = {
-                'artist': song_data.artist or 'Unknown Artist',
-                'album': song_data.album or 'Unknown Album',
-                'year': song_data.release_year,
-                'title': song_data.album or 'Unknown Album'
-            }
-
-            # Resolve the expected folder without creating it during search.
-            expected_folder = self.path_utils.get_organized_path(
-                PROJECT_DOWNLOADS_DIR,
-                metadata,
-            )
-
-            # Check if folder exists
-            if not expected_folder.exists():
-                return False
-
-            # Check if folder contains audio files
-            audio_extensions = ['.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav', '.aac', '.webm']
-            system_files = {'.DS_Store', '.Thumbs.db', 'desktop.ini'}
-
-            for ext in audio_extensions:
-                audio_files = list(expected_folder.glob(f"*{ext}"))
-                audio_files = [f for f in audio_files if f.is_file() and f.name not in system_files]
-                if audio_files:
-                    return True
-
-            return False
-        except Exception:
-            # If any error occurs during checking, assume folder doesn't exist
-            return False
+        log = logger.debug if dim else logger.info
+        log("%s%s", prefix, message)
 
     def _build_query(self, **kwargs) -> str:
         """Build MusicBrainz query string from keyword arguments."""
@@ -182,11 +130,11 @@ class MusicBrainzClient(BaseAPIClient):
         }
 
         try:
-            print(f"Searching MusicBrainz recordings with query: {query}")
+            logger.info("Searching MusicBrainz recordings with query: %s", query)
             data = self._make_request(url, params)
             return self._parse_recording_results(data) if data else []
         except Exception as e:
-            print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
+            logger.warning("%s: %s", ERROR_MESSAGES['NETWORK_ERROR'], e)
             return []
 
     def search_release(self, song_data: SongData, offset: int = 0, limit: Optional[int] = None, release_type: Optional[str] = None) -> List[MusicBrainzSong]:
@@ -231,23 +179,16 @@ class MusicBrainzClient(BaseAPIClient):
             }
 
             try:
-                # Check if release folder already exists - if so, use reduced retries for faster failure
-                release_exists = self._check_release_folder_exists(song_data)
-                reduced_retries = release_exists
-
-                if release_exists:
-                    print(f"Release folder already exists for: {song_data.album} by {song_data.artist}. Using faster failure mode for connection errors.")
-
-                print(f"Searching MusicBrainz releases with query: {query}")
-                data = self._make_request(url, params, reduced_retries=reduced_retries)
+                logger.info("Searching MusicBrainz releases with query: %s", query)
+                data = self._make_request(url, params)
                 return self._parse_release_results(data) if data else []
             except Exception as e:
-                print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
+                logger.warning("%s: %s", ERROR_MESSAGES['NETWORK_ERROR'], e)
                 return []
 
         cached_result = self._get_cached_or_fetch("search", key, fetch_func)
         if cached_result is not None and len(cached_result) > 0:
-            print(f"Using cached result for: {song_data.album} by {song_data.artist}")
+            logger.debug("Using cached result for: %s by %s", song_data.album, song_data.artist)
         return cached_result or []
 
     def get_release_info(self, release_mbid: str, batch_progress: Optional[Tuple[int, int]] = None) -> Optional[ReleaseInfo]:
@@ -276,11 +217,11 @@ class MusicBrainzClient(BaseAPIClient):
 
             try:
                 if not batch_progress:
-                    print(f"Fetching release details for MBID: {release_mbid}")
+                    logger.info("Fetching release details for MBID: %s", release_mbid)
                 data = self._make_request(url, params, batch_progress=batch_progress)
                 return self._parse_release_info(data) if data else None
             except Exception as e:
-                print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
+                logger.warning("%s: %s", ERROR_MESSAGES['NETWORK_ERROR'], e)
                 return None
 
         # Skip cache check for batch operations to show progress
@@ -288,7 +229,7 @@ class MusicBrainzClient(BaseAPIClient):
         result = self._get_cached_or_fetch("release_info", key, fetch_func, skip_cache=skip_cache)
 
         if result is not None and not skip_cache:
-            print(f"Using cached release info for MBID: {release_mbid}")
+            logger.debug("Using cached release info for MBID: %s", release_mbid)
 
         return result
 
@@ -344,7 +285,7 @@ class MusicBrainzClient(BaseAPIClient):
 
             return all_results
         except Exception as e:
-            print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
+            logger.warning("%s: %s", ERROR_MESSAGES['NETWORK_ERROR'], e)
             return all_results if all_results else []
 
     def search_artist_compilations(self, artist: str, year: Optional[int] = None, max_results: Optional[int] = None) -> List[MusicBrainzSong]:
@@ -457,7 +398,7 @@ class MusicBrainzClient(BaseAPIClient):
 
             return all_results
         except Exception as e:
-            print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
+            logger.warning("%s: %s", ERROR_MESSAGES['NETWORK_ERROR'], e)
             return all_results if all_results else []
 
     def _parse_recording_results(self, data: Dict[str, Any]) -> List[MusicBrainzSong]:
@@ -717,5 +658,5 @@ class MusicBrainzClient(BaseAPIClient):
             )
 
         except Exception as e:
-            print(f"Error parsing release info: {e}")
+            logger.warning("Error parsing release info: %s", e)
             return None

@@ -26,6 +26,8 @@ venv/
 env/
 ENV/
 .venv
+.pyside_site/
+.wheels/
 
 # IDEs
 .vscode/

@@ -124,29 +124,28 @@ class RecordingHandler(BaseHandler):
 
                 break
 
-            # Extract year from release_date using unified validator
-            release_year = self.release_validator.extract_release_year(
-                selected_song.original_release_date or selected_song.release_date
-            )
-
-            song_data = SongData(
-                title=selected_song.title,
-                artist=selected_song.artist,
-                album=selected_song.album,
-                release_year=release_year
-            )
-
-            downloaded_path = self.download_orchestrator.download_recording(
-                song_data, selected_video, selected_song, quality
-            )
-            if downloaded_path:
-                return OperationOutcome.success(
-                    "Recording downloaded",
-                    processed=1,
+            try:
+                result = self.recording_workflow.download(
+                    selected_song, selected_video, quality=quality
                 )
-            return OperationOutcome.failure(
-                "Recording download failed",
-                failed=1,
+            except Exception as e:
+                console.print(f"[bold red]✗[/bold red] Recording download failed: {e}")
+                return OperationOutcome.failure(str(e), failed=1, error=e)
+
+            console.print(
+                f"[bold green]✓[/bold green] Download completed: [green]{result.path}[/green]"
+            )
+            if result.warning:
+                console.print(f"[yellow]⚠[/yellow] {result.warning}")
+            if result.verification_status == "mismatch":
+                console.print(
+                    "[yellow]⚠[/yellow] AcoustID mismatch: downloaded audio may be a different recording."
+                )
+            elif result.verification_status == "verified":
+                console.print("[dim]AcoustID verified[/dim]")
+            return OperationOutcome.success(
+                "Recording downloaded",
+                processed=1,
             )
 
         except Exception as e:

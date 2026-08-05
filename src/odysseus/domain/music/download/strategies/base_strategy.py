@@ -15,7 +15,7 @@ class BaseDownloadStrategy(ABC):
         download_service,
         metadata_service,
         search_service,
-        display_manager,
+        presenter,
         video_validator,
         title_matcher,
         path_manager
@@ -27,7 +27,7 @@ class BaseDownloadStrategy(ABC):
             download_service: DownloadService instance
             metadata_service: MetadataService instance
             search_service: SearchService instance
-            display_manager: DisplayManager instance
+            presenter: DownloadPresenter instance
             video_validator: VideoValidator instance
             title_matcher: TitleMatcher instance
             path_manager: PathManager instance
@@ -35,7 +35,7 @@ class BaseDownloadStrategy(ABC):
         self.download_service = download_service
         self.metadata_service = metadata_service
         self.search_service = search_service
-        self.display_manager = display_manager
+        self.presenter = presenter
         self.video_validator = video_validator
         self.title_matcher = title_matcher
         self.path_manager = path_manager

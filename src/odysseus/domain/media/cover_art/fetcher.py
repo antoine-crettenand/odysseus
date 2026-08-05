@@ -6,7 +6,7 @@ import requests
 from typing import Optional, Dict
 from pathlib import Path
 from ....models.releases import ReleaseInfo
-from ....clients.network_agent import NetworkAgent
+from ....core.http.network_agent import NetworkAgent
 from ....core.cache import MemoryCache
 from ....core.http.http_client import HttpClient
 from ...music.common.date_utils import get_original_release_year

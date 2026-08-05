@@ -16,7 +16,7 @@ class PlaylistChecker:
         search_service,
         video_validator,
         title_matcher,
-        display_manager
+        presenter
     ):
         """
         Initialize playlist checker.
@@ -26,13 +26,13 @@ class PlaylistChecker:
             search_service: SearchService instance
             video_validator: VideoValidator instance
             title_matcher: TitleMatcher instance
-            display_manager: DisplayManager instance
+            presenter: DownloadPresenter instance
         """
         self.download_service = download_service
         self.search_service = search_service
         self.video_validator = video_validator
         self.title_matcher = title_matcher
-        self.display_manager = display_manager
+        self.presenter = presenter
 
     def _match_track_in_playlist(
         self,
@@ -57,6 +57,7 @@ class PlaylistChecker:
         """
         best_match = None
         best_score = min_score
+        console = None if silent else self.presenter
 
         for video_info in playlist_videos:
             score = self.title_matcher.match_playlist_video_to_track(
@@ -75,7 +76,7 @@ class PlaylistChecker:
                 )
 
                 is_valid, _ = self.video_validator.validate_video_for_track(
-                    video, track, silent
+                    video, track, silent, console=console
                 )
 
                 if is_valid:
@@ -105,13 +106,11 @@ class PlaylistChecker:
         Returns:
             Matched YouTubeVideo or None
         """
-        console = self.display_manager.console
-
         if not playlist_ids:
             return None
 
         if not silent:
-            console.print(f"[blue]ℹ[/blue] No direct match found. Checking {len(playlist_ids)} playlist(s) from search results...")
+            self.presenter.print(f"[blue]ℹ[/blue] No direct match found. Checking {len(playlist_ids)} playlist(s) from search results...")
 
         for playlist_id in list(playlist_ids)[:max_playlists]:
             try:
@@ -127,12 +126,12 @@ class PlaylistChecker:
 
                 if best_match:
                     if not silent:
-                        console.print(f"[green]✓[/green] Found track in playlist: {track.title}")
+                        self.presenter.print(f"[green]✓[/green] Found track in playlist: {track.title}")
                     return best_match
 
             except Exception as e:
                 if not silent:
-                    console.print(f"[yellow]⚠[/yellow] Error checking playlist: {e}")
+                    self.presenter.print(f"[yellow]⚠[/yellow] Error checking playlist: {e}")
                 continue
 
         return None
@@ -156,10 +155,8 @@ class PlaylistChecker:
         Returns:
             Matched YouTubeVideo or None
         """
-        console = self.display_manager.console
-
         if not silent:
-            console.print(f"[blue]ℹ[/blue] Searching for playlists containing: {track.title}...")
+            self.presenter.print(f"[blue]ℹ[/blue] Searching for playlists containing: {track.title}...")
 
         try:
             # Search for playlists that might contain this track
@@ -172,11 +169,11 @@ class PlaylistChecker:
 
             if not track_playlists:
                 if not silent:
-                    console.print(f"[yellow]⚠[/yellow] No playlists found containing: {track.title}")
+                    self.presenter.print(f"[yellow]⚠[/yellow] No playlists found containing: {track.title}")
                 return None
 
             if not silent:
-                console.print(f"[blue]ℹ[/blue] Found {len(track_playlists)} playlist(s). Checking for track...")
+                self.presenter.print(f"[blue]ℹ[/blue] Found {len(track_playlists)} playlist(s). Checking for track...")
 
             for idx, playlist_info in enumerate(track_playlists, 1):
                 try:
@@ -184,17 +181,17 @@ class PlaylistChecker:
                     playlist_title = playlist_info.get('title', 'Unknown')
 
                     if not silent:
-                        console.print(f"[blue]ℹ[/blue] Checking playlist {idx}/{len(track_playlists)}: {playlist_title[:60]}...")
+                        self.presenter.print(f"[blue]ℹ[/blue] Checking playlist {idx}/{len(track_playlists)}: {playlist_title[:60]}...")
 
                     playlist_videos = self.download_service.get_playlist_info(playlist_url)
 
                     if not playlist_videos:
                         if not silent:
-                            console.print(f"[yellow]⚠[/yellow] Could not fetch videos from playlist")
+                            self.presenter.print(f"[yellow]⚠[/yellow] Could not fetch videos from playlist")
                         continue
 
                     if not silent:
-                        console.print(f"[blue]ℹ[/blue] Checking {len(playlist_videos)} videos in playlist...")
+                        self.presenter.print(f"[blue]ℹ[/blue] Checking {len(playlist_videos)} videos in playlist...")
 
                     best_match = self._match_track_in_playlist(
                         playlist_videos, track, release_info, silent
@@ -202,18 +199,18 @@ class PlaylistChecker:
 
                     if best_match:
                         if not silent:
-                            console.print(f"[green]✓[/green] Found track in playlist: {track.title}")
+                            self.presenter.print(f"[green]✓[/green] Found track in playlist: {track.title}")
                         return best_match
                     elif not silent:
-                        console.print(f"[yellow]⚠[/yellow] Track not found in this playlist")
+                        self.presenter.print(f"[yellow]⚠[/yellow] Track not found in this playlist")
 
                 except Exception as e:
                     if not silent:
-                        console.print(f"[yellow]⚠[/yellow] Error checking playlist: {e}")
+                        self.presenter.print(f"[yellow]⚠[/yellow] Error checking playlist: {e}")
                     continue
 
         except Exception as e:
             if not silent:
-                console.print(f"[yellow]⚠[/yellow] Error searching for playlists: {e}")
+                self.presenter.print(f"[yellow]⚠[/yellow] Error searching for playlists: {e}")
 
         return None

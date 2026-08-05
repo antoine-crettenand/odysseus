@@ -9,12 +9,13 @@ import pytest
 import requests
 
 from odysseus.clients.file_splitter import FileSplitter
-from odysseus.clients.network_agent import NetworkAgent
+from odysseus.core.http.network_agent import NetworkAgent
 from odysseus.core.http import HttpClient
 from odysseus.core.retry import SubprocessRetryStrategy
 from odysseus.domain.media.cover_art.fetcher import CoverArtFetcher
-from odysseus.domain.music.download.strategies.full_album_strategy import (
-    FullAlbumStrategy,
+from odysseus.domain.music.download.strategies.full_album import (
+    ChapterAligner,
+    FullAlbumDownloadPipeline,
 )
 from odysseus.domain.music.search.deduplicator import ResultDeduplicator
 from odysseus.domain.music.validation.title_matcher import TitleMatcher
@@ -23,11 +24,11 @@ from odysseus.models.releases import ReleaseInfo, Track
 from odysseus.models.search_results import MusicBrainzSong
 
 
-def _strategy():
-    strategy = FullAlbumStrategy.__new__(FullAlbumStrategy)
-    strategy.title_matcher = TitleMatcher()
-    strategy.video_validator = VideoValidator(MagicMock())
-    return strategy
+def _aligner():
+    return ChapterAligner(
+        video_validator=VideoValidator(MagicMock()),
+        title_matcher=TitleMatcher(),
+    )
 
 
 def _tracks(count: int, duration: str = "03:00"):
@@ -74,14 +75,14 @@ def test_file_splitter_keeps_failed_slots_index_aligned(tmp_path):
 
 
 def test_metadata_application_skips_failed_split_slots():
-    strategy = FullAlbumStrategy.__new__(FullAlbumStrategy)
-    strategy.display_manager = MagicMock()
-    strategy.display_manager.create_download_progress_bar.return_value = (
+    pipeline = FullAlbumDownloadPipeline.__new__(FullAlbumDownloadPipeline)
+    pipeline.presenter = MagicMock()
+    pipeline.presenter.create_download_progress_bar.return_value = (
         MagicMock(),
         "task",
     )
-    strategy.metadata_service = MagicMock()
-    strategy.path_manager = MagicMock()
+    pipeline.metadata_service = MagicMock()
+    pipeline.path_manager = MagicMock()
     tracks = _tracks(3)
     timestamps = [{"track": track} for track in tracks]
     split_files = [
@@ -89,9 +90,8 @@ def test_metadata_application_skips_failed_split_slots():
         None,
         Path("/tmp/03.mp3"),
     ]
-    styling = MagicMock()
 
-    downloaded, failed = strategy._apply_metadata_to_split_files(
+    downloaded, failed = pipeline._apply_metadata_to_split_files(
         split_files,
         timestamps,
         ReleaseInfo(title="Album", artist="Artist", tracks=tracks),
@@ -99,21 +99,19 @@ def test_metadata_application_skips_failed_split_slots():
         existing_files_before_split=set(),
         youtube_url="https://youtube.test/v",
         silent=True,
-        styling=styling,
-        console=MagicMock(),
     )
 
     assert downloaded == 2
     assert failed == 1
     applied_paths = [
         call.args[0]
-        for call in strategy.metadata_service.apply_metadata_with_cover_art.call_args_list
+        for call in pipeline.metadata_service.apply_metadata_with_cover_art.call_args_list
     ]
     assert applied_paths == [Path("/tmp/01.mp3"), Path("/tmp/03.mp3")]
 
 
 def test_chapter_alignment_scales_for_large_albums_with_extras():
-    strategy = _strategy()
+    aligner = _aligner()
     tracks = _tracks(40)
     chapters = [{"start_time": 0, "end_time": 10, "title": "Intro"}]
     start = 10.0
@@ -125,12 +123,11 @@ def test_chapter_alignment_scales_for_large_albums_with_extras():
         })
         start += 180
 
-    timestamps = strategy._align_chapters_to_tracks(
+    timestamps = aligner._align_chapters_to_tracks(
         chapters,
         tracks,
         tracks,
         silent=True,
-        styling=MagicMock(),
     )
 
     assert len(timestamps) == 40

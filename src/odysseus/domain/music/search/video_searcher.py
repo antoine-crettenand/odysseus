@@ -17,7 +17,7 @@ class VideoSearcher:
         search_service,
         video_validator,
         title_matcher,
-        display_manager
+        presenter
     ):
         """
         Initialize video searcher.
@@ -26,12 +26,12 @@ class VideoSearcher:
             search_service: SearchService instance
             video_validator: VideoValidator instance
             title_matcher: TitleMatcher instance
-            display_manager: DisplayManager instance
+            presenter: DownloadPresenter instance
         """
         self.search_service = search_service
         self.video_validator = video_validator
         self.title_matcher = title_matcher
-        self.display_manager = display_manager
+        self.presenter = presenter
 
     def build_track_search_query(self, track, release_info: ReleaseInfo) -> str:
         """
@@ -152,8 +152,6 @@ class VideoSearcher:
         Returns:
             Tuple of (matched YouTubeVideo or None, set of playlist IDs found)
         """
-        console = self.display_manager.console
-
         # Build search query
         search_query = self.build_track_search_query(track, release_info)
 
@@ -178,17 +176,18 @@ class VideoSearcher:
         all_videos_checked = []
 
         search_display = f"{track.artist} - {track.title}" if track.artist else track.title
+        console = None if silent else self.presenter
 
         for attempt in range(max_attempts):
             current_max_results = min(initial_results + (attempt * results_increment), max_total_results)
 
             if attempt > 0:
                 if not silent:
-                    console.print(f"[blue]ℹ[/blue] Retry {attempt + 1}/{max_attempts}: Expanding search to {current_max_results} results...")
+                    self.presenter.print(f"[blue]ℹ[/blue] Retry {attempt + 1}/{max_attempts}: Expanding search to {current_max_results} results...")
 
             try:
                 # Search YouTube
-                videos = self.display_manager.show_loading_spinner(
+                videos = self.presenter.show_loading_spinner(
                     f"Searching YouTube for: {search_display}" if attempt == 0 else f"Searching (attempt {attempt + 1}): {search_display}",
                     self.search_service.search_youtube,
                     search_query,
@@ -198,7 +197,7 @@ class VideoSearcher:
                 if not videos:
                     if attempt == 0:
                         if not silent:
-                            console.print(f"[bold red]✗[/bold red] No YouTube results found for: [white]{track.title}[/white]")
+                            self.presenter.print(f"[bold red]✗[/bold red] No YouTube results found for: [white]{track.title}[/white]")
                         return None, playlist_ids_found
                     continue
 
@@ -207,7 +206,7 @@ class VideoSearcher:
 
                 if not new_videos:
                     if not silent:
-                        console.print(f"[blue]ℹ[/blue] All {len(videos)} results already checked. Expanding search...")
+                        self.presenter.print(f"[blue]ℹ[/blue] All {len(videos)} results already checked. Expanding search...")
                     continue
 
                 all_videos_checked.extend(new_videos)
@@ -218,17 +217,17 @@ class VideoSearcher:
                 # First pass: strict validation (exact matches, no live versions)
                 for video in new_videos:
                     is_valid, reason = self.video_validator.validate_video_for_track(
-                        video, track, silent
+                        video, track, silent, console=console
                     )
 
                     if is_valid:
                         selected_video = video
                         break
                     elif not silent and attempt == 0:
-                        console.print(
+                        self.presenter.print(
                             f"[yellow]⚠[/yellow] Skipping invalid video: {reason}"
                         )
-                        console.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
+                        self.presenter.print(f"  [dim]YouTube: {video.youtube_url}[/dim]")
 
                 # If found valid video, break retry loop
                 if selected_video:
@@ -237,18 +236,18 @@ class VideoSearcher:
                 # Second pass: fuzzy matching for close matches
                 if not selected_video and attempt < max_attempts - 1:
                     if not silent:
-                        console.print(f"[blue]ℹ[/blue] No exact match found. Trying fuzzy matching on {len(new_videos)} videos...")
+                        self.presenter.print(f"[blue]ℹ[/blue] No exact match found. Trying fuzzy matching on {len(new_videos)} videos...")
 
                     fuzzy_result = self._find_fuzzy_match(new_videos, track, release_info)
                     if fuzzy_result:
                         selected_video, best_fuzzy_score = fuzzy_result
                         if not silent:
-                            console.print(f"[green]✓[/green] Found fuzzy match (score: {best_fuzzy_score:.2f}): {selected_video.title}")
+                            self.presenter.print(f"[green]✓[/green] Found fuzzy match (score: {best_fuzzy_score:.2f}): {selected_video.title}")
                         break
 
             except Exception as e:
                 if not silent:
-                    console.print(f"[yellow]⚠[/yellow] Error during search attempt {attempt + 1}: {e}")
+                    self.presenter.print(f"[yellow]⚠[/yellow] Error during search attempt {attempt + 1}: {e}")
                 if attempt == max_attempts - 1:
                     break
                 continue

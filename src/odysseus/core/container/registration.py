@@ -5,7 +5,7 @@ Registers all services, clients, and handlers with their dependencies.
 
 from typing import Callable, Any
 from .container import Container
-from ...clients.network_agent import NetworkAgent
+from ..http.network_agent import NetworkAgent
 from ...core.config import MUSICBRAINZ_CONFIG
 
 
@@ -96,7 +96,8 @@ def register_all_services(container: Container) -> None:
 
     def create_download_service():
         from ...domain.music.download.download_service import DownloadService
-        return DownloadService()
+        from ...clients.youtube_downloader import YouTubeDownloader
+        return DownloadService(downloader=YouTubeDownloader())
     _register_simple(container, "download_service", create_download_service)
 
     def create_duration_recovery():
@@ -154,10 +155,11 @@ def register_all_services(container: Container) -> None:
 
     def create_download_orchestrator():
         from ...domain.music.download.orchestrator import DownloadOrchestrator
+        from ...domain.music.download.presenter import NullPresenter
         return DownloadOrchestrator(download_service=container.get("download_service"),
                                    metadata_service=container.get("metadata_service"),
                                    search_service=container.get("search_service"),
-                                   display_manager=container.get("display_manager"))
+                                   presenter=NullPresenter())
     container.register("download_orchestrator", create_download_orchestrator, singleton=True)
 
     def create_release_workflow():
@@ -177,6 +179,8 @@ def register_all_services(container: Container) -> None:
             metadata_service=container.get("metadata_service"),
             display_manager=container.get("display_manager"),
             download_orchestrator=container.get("download_orchestrator"),
+            recording_workflow=container.get("recording_workflow"),
+            release_workflow=container.get("release_workflow"),
         )
 
     # Handlers (all have same dependencies)

@@ -170,22 +170,41 @@ class ReleaseHandler(BaseHandler):
                 console.print("[yellow]⚠[/yellow] No tracks selected for download.")
             return OperationOutcome.skipped("No tracks selected")
 
-        processed, failed = self.download_orchestrator.download_release_tracks(
+        from ..download_presenter import RichDownloadPresenter
+
+        presenter = RichDownloadPresenter(self.display_manager)
+        result = self.release_workflow.download(
             release_info,
             track_numbers,
-            quality,
-            silent=False,
+            quality=quality,
             jobs=jobs,
+            silent=False,
+            presenter=presenter,
         )
-        if failed:
+        if result.verified:
+            console.print(
+                f"[dim]AcoustID verified: {result.verified} track"
+                f"{'s' if result.verified != 1 else ''}[/dim]"
+            )
+        if result.verification_mismatches:
+            console.print(
+                f"[yellow]⚠[/yellow] AcoustID mismatch: {result.verification_mismatches} track"
+                f"{'s' if result.verification_mismatches != 1 else ''} may differ from MusicBrainz."
+            )
+        if result.verification_inconclusive:
+            console.print(
+                f"[dim]AcoustID inconclusive: {result.verification_inconclusive} track"
+                f"{'s' if result.verification_inconclusive != 1 else ''}[/dim]"
+            )
+        if result.failed:
             return OperationOutcome.failure(
-                f"{failed} track(s) failed",
-                processed=processed,
-                failed=failed,
+                f"{result.failed} track(s) failed",
+                processed=result.processed,
+                failed=result.failed,
             )
         return OperationOutcome.success(
             "Release processed",
-            processed=processed,
+            processed=result.processed,
         )
 
     def _find_best_match(

@@ -37,7 +37,7 @@ class BaseAPIClient:
         if http_client is None:
             from ..core.http.http_client import HttpClient
             from ..core.http.session_manager import SessionManager
-            from .network_agent import NetworkAgent
+            from ..core.http.network_agent import NetworkAgent
             self.network_agent = NetworkAgent(self.user_agent)
             http_client = HttpClient(
                 session_manager=SessionManager(network_agent=self.network_agent),
@@ -49,7 +49,7 @@ class BaseAPIClient:
             # Extract network_agent from http_client if available
             self.network_agent = getattr(http_client, 'network_agent', None)
             if self.network_agent is None:
-                from .network_agent import NetworkAgent
+                from ..core.http.network_agent import NetworkAgent
                 self.network_agent = NetworkAgent(self.user_agent)
         self.http_client = http_client
         self._cache_fetch_locks = weakref.WeakValueDictionary()

@@ -1,8 +1,7 @@
 """Regression tests for the final failed-track retry flow."""
 
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from odysseus.domain.music.download.orchestrator import DownloadOrchestrator
 from odysseus.models.releases import ReleaseInfo, Track
@@ -66,10 +65,8 @@ def _release():
 
 def _orchestrator():
     orchestrator = DownloadOrchestrator.__new__(DownloadOrchestrator)
-    orchestrator.display_manager = SimpleNamespace(
-        console=MagicMock(),
-        styling=MagicMock(),
-    )
+    orchestrator.presenter = MagicMock()
+    orchestrator.presenter.confirm.return_value = True
     orchestrator.metadata_service = MagicMock()
     orchestrator.path_manager = MagicMock()
     orchestrator.path_manager.get_release_folder_path.return_value = Path("/tmp/album")
@@ -84,31 +81,24 @@ def _orchestrator():
 def test_release_retry_only_attempts_tracks_failed_by_album_strategy():
     orchestrator = _orchestrator()
 
-    with patch(
-        "odysseus.domain.music.download.orchestrator.Confirm.ask",
-        return_value=True,
-    ) as confirm:
-        downloaded, failed = orchestrator.download_release_tracks(
-            _release(), [1, 2, 3], "audio"
-        )
+    downloaded, failed = orchestrator.download_release_tracks(
+        _release(), [1, 2, 3], "audio"
+    )
 
     assert (downloaded, failed) == (2, 1)
     assert orchestrator.individual_tracks_strategy.calls == [[2, 3]]
     assert orchestrator.last_failed_track_numbers == [3]
     assert not orchestrator.playlist_strategy.calls
-    confirm.assert_called_once()
+    orchestrator.presenter.confirm.assert_called_once()
 
 
 def test_declining_final_retry_preserves_exact_failed_tracks():
     orchestrator = _orchestrator()
+    orchestrator.presenter.confirm.return_value = False
 
-    with patch(
-        "odysseus.domain.music.download.orchestrator.Confirm.ask",
-        return_value=False,
-    ):
-        downloaded, failed = orchestrator.download_release_tracks(
-            _release(), [1, 2, 3], "audio"
-        )
+    downloaded, failed = orchestrator.download_release_tracks(
+        _release(), [1, 2, 3], "audio"
+    )
 
     assert (downloaded, failed) == (1, 2)
     assert orchestrator.individual_tracks_strategy.calls == []
@@ -118,16 +108,13 @@ def test_declining_final_retry_preserves_exact_failed_tracks():
 def test_silent_mode_retries_without_prompting():
     orchestrator = _orchestrator()
 
-    with patch(
-        "odysseus.domain.music.download.orchestrator.Confirm.ask"
-    ) as confirm:
-        downloaded, failed = orchestrator.download_release_tracks(
-            _release(), [1, 2, 3], "audio", silent=True
-        )
+    downloaded, failed = orchestrator.download_release_tracks(
+        _release(), [1, 2, 3], "audio", silent=True
+    )
 
     assert (downloaded, failed) == (2, 1)
     assert orchestrator.individual_tracks_strategy.calls == [[2, 3]]
-    confirm.assert_not_called()
+    orchestrator.presenter.confirm.assert_not_called()
 
 
 def test_worker_count_is_forwarded_to_playlist_strategy():

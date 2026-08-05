@@ -3,6 +3,7 @@ Discogs Client Module
 A client for searching the Discogs database for music information.
 """
 
+import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 from ..models.song import SongData
@@ -10,6 +11,8 @@ from ..models.search_results import DiscogsRelease
 from ..models.releases import Track, ReleaseInfo
 from ..core.config import DISCOGS_CONFIG, ERROR_MESSAGES
 from .base_api_client import BaseAPIClient
+
+logger = logging.getLogger(__name__)
 
 # Discogs "format" search/filter tokens that mean release type, not physical medium
 _RELEASE_TYPE_ALIASES = {
@@ -134,10 +137,8 @@ class DiscogsClient(BaseAPIClient):
         """
         def log_callback(message: str, dim: bool = False):
             formatted = self._format_progress_message(message, batch_progress)
-            if dim:
-                print(f"\033[2m{formatted}\033[0m")
-            else:
-                print(formatted)
+            log = logger.debug if dim else logger.info
+            log("%s", formatted)
 
         # Use HttpClient.get() to get response object so we can check status code
         response = self._make_request_response(
@@ -155,12 +156,12 @@ class DiscogsClient(BaseAPIClient):
 
         # Check for 403 Forbidden (often User-Agent or authentication issue)
         if response.status_code == 403:
-            print(self._format_progress_message("403 Forbidden: Discogs API blocked the request", batch_progress))
-            print(self._format_progress_message("This usually means:", batch_progress))
-            print(self._format_progress_message("  1. User-Agent format issue (Discogs requires contact info)", batch_progress))
-            print(self._format_progress_message("  2. Rate limit exceeded (60 req/min without token, 300 with token)", batch_progress))
-            print(self._format_progress_message("  3. Missing or invalid authentication token", batch_progress))
-            print(self._format_progress_message("Note: Discogs search may be unavailable. MusicBrainz results will still work.", batch_progress))
+            logger.warning("%s", self._format_progress_message("403 Forbidden: Discogs API blocked the request", batch_progress))
+            logger.warning("%s", self._format_progress_message("This usually means:", batch_progress))
+            logger.warning("%s", self._format_progress_message("  1. User-Agent format issue (Discogs requires contact info)", batch_progress))
+            logger.warning("%s", self._format_progress_message("  2. Rate limit exceeded (60 req/min without token, 300 with token)", batch_progress))
+            logger.warning("%s", self._format_progress_message("  3. Missing or invalid authentication token", batch_progress))
+            logger.warning("%s", self._format_progress_message("Note: Discogs search may be unavailable. MusicBrainz results will still work.", batch_progress))
             return None
 
         # Parse JSON response
@@ -224,21 +225,16 @@ class DiscogsClient(BaseAPIClient):
                 params['format'] = (normalized or release_type).lower()
 
             try:
-                # Dimmed text for technical/log message - Discogs is used for deduplication
-                import sys
-                if sys.stdout.isatty():
-                    print(f"\033[2;36mℹ\033[0m \033[2mSearching Discogs (for deduplication): {query}\033[0m", flush=True)
-                else:
-                    print(f"Searching Discogs releases with query: {query}")
+                logger.info("Searching Discogs (for deduplication): %s", query)
                 data = self._make_request(url, params)
                 return self._parse_release_results(data) if data else []
             except Exception as e:
-                print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
+                logger.warning("%s: %s", ERROR_MESSAGES['NETWORK_ERROR'], e)
                 return []
 
         cached_result = self._get_cached_or_fetch("search", key, fetch_func)
         if cached_result is not None and len(cached_result) > 0:
-            print(f"Using cached Discogs result for: {song_data.album} by {song_data.artist}")
+            logger.debug("Using cached Discogs result for: %s by %s", song_data.album, song_data.artist)
         return cached_result or []
 
     def get_master_year(self, master_id: Union[str, int]) -> Optional[int]:
@@ -315,11 +311,11 @@ class DiscogsClient(BaseAPIClient):
             max_results = 500
 
         # Step 1: Find the artist ID (much faster than searching releases)
-        print(f"Searching for artist: {artist}")
+        logger.info("Searching for artist: %s", artist)
         artist_id = self._search_artist_id(artist)
 
         if not artist_id:
-            print(f"Artist '{artist}' not found on Discogs")
+            logger.info("Artist '%s' not found on Discogs", artist)
             return []
 
         # Step 2: Use the direct artist releases endpoint (much faster!)
@@ -441,12 +437,12 @@ class DiscogsClient(BaseAPIClient):
                 time.sleep(self.request_delay)
 
             if page > max_pages:
-                print(f"Reached maximum page limit ({max_pages}). Stopping pagination.")
+                logger.info("Reached maximum page limit (%s). Stopping pagination.", max_pages)
 
             return all_results
 
         except Exception as e:
-            print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
+            logger.warning("%s: %s", ERROR_MESSAGES['NETWORK_ERROR'], e)
             return all_results if all_results else []
 
     def get_release_info(self, release_id: str, batch_progress: Optional[Tuple[int, int]] = None) -> Optional[ReleaseInfo]:
@@ -467,15 +463,15 @@ class DiscogsClient(BaseAPIClient):
             url = f"{self.base_url}/releases/{release_id}"
             try:
                 if not batch_progress:
-                    print(f"Fetching release details for Discogs ID: {release_id}")
+                    logger.info("Fetching release details for Discogs ID: %s", release_id)
                 data = self._make_request(url, {}, batch_progress=batch_progress)
                 if data:
                     return self._parse_release_info(data)
                 else:
-                    print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: Failed to get data from Discogs")
+                    logger.warning("%s: Failed to get data from Discogs", ERROR_MESSAGES['NETWORK_ERROR'])
                     return None
             except Exception as e:
-                print(f"{ERROR_MESSAGES['NETWORK_ERROR']}: {e}")
+                logger.warning("%s: %s", ERROR_MESSAGES['NETWORK_ERROR'], e)
                 return None
 
         # Skip cache check for batch operations to show progress
@@ -483,7 +479,7 @@ class DiscogsClient(BaseAPIClient):
         result = self._get_cached_or_fetch("release_info", key, fetch_func, skip_cache=skip_cache)
 
         if result is not None and not skip_cache:
-            print(f"Using cached Discogs release info for ID: {release_id}")
+            logger.debug("Using cached Discogs release info for ID: %s", release_id)
 
         return result
 
@@ -712,5 +708,5 @@ class DiscogsClient(BaseAPIClient):
             )
 
         except Exception as e:
-            print(f"Error parsing release info: {e}")
+            logger.warning("Error parsing release info: %s", e)
             return None

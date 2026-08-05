@@ -160,9 +160,12 @@ def test_recording_reshuffle_wraps_when_offset_exhausted():
         "RESHUFFLE",
         selected_video,
     )
-    handler.release_validator = MagicMock()
-    handler.release_validator.extract_release_year.return_value = 2020
-    handler.download_orchestrator = MagicMock()
+    handler.recording_workflow = MagicMock()
+    handler.recording_workflow.download.return_value = MagicMock(
+        path="/tmp/track.flac",
+        warning=None,
+        verification_status="not_run",
+    )
 
     selected_song = MagicMock(
         artist="Artist",
@@ -178,7 +181,9 @@ def test_recording_reshuffle_wraps_when_offset_exhausted():
         (("Artist Title", 3, 1),),
         (("Artist Title", 3, 0),),
     ]
-    handler.download_orchestrator.download_recording.assert_called_once()
+    handler.recording_workflow.download.assert_called_once_with(
+        selected_song, selected_video, quality="audio"
+    )
 
 
 def test_release_pagination_fetches_enough_candidates_for_offset():

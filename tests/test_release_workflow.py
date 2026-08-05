@@ -42,11 +42,17 @@ class OrchestratorStub:
         self.calls = []
         self.last_failed_track_numbers = [2]
         self.path_manager = None
+        self.presenter = "default"
+        self.presenter_history = []
+
+    def set_presenter(self, presenter):
+        self.presenter_history.append(presenter)
+        self.presenter = presenter
 
     def download_release_tracks(
         self, info, numbers, quality, silent, jobs, progress_callback=None
     ):
-        self.calls.append((info, numbers, quality, silent, jobs))
+        self.calls.append((info, numbers, quality, silent, jobs, self.presenter))
         if progress_callback:
             progress_callback(
                 {
@@ -146,10 +152,28 @@ def test_release_workflow_loads_and_downloads_selected_tracks():
     result = workflow.download(info, [2, 1, 2], quality="audio", jobs=3)
 
     assert search.info_calls == [("release-id", "musicbrainz")]
-    assert orchestrator.calls == [(info, [1, 2], "audio", True, 3)]
+    assert orchestrator.calls == [(info, [1, 2], "audio", True, 3, "default")]
     assert result.processed == 1
     assert result.failed == 1
     assert result.failed_track_numbers == [2]
+
+
+def test_release_workflow_swaps_presenter_for_cli_downloads():
+    orchestrator = OrchestratorStub()
+    workflow = ReleaseWorkflow(SearchStub(), DownloadStub(), orchestrator)
+    info = make_info()
+
+    result = workflow.download(
+        info,
+        [1],
+        silent=False,
+        presenter="rich",
+    )
+
+    assert orchestrator.calls == [(info, [1], "audio", False, 1, "rich")]
+    assert orchestrator.presenter == "default"
+    assert orchestrator.presenter_history == ["rich", "default"]
+    assert result.processed == 1
 
 
 def test_release_workflow_forwards_structured_progress():

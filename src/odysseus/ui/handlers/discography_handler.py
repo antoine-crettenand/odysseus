@@ -123,9 +123,28 @@ class DiscographyHandler(BaseHandler):
             auto_download_all_tracks: If True, automatically download all tracks from all releases
                                      without prompting for each release
         """
+        from ..download_presenter import RichDownloadPresenter
+
         console = self.display_manager.console
         total_downloaded = 0
         total_failed = 0
+        presenter = RichDownloadPresenter(self.display_manager)
+
+        def _download_tracks(release_info, track_numbers):
+            result = self.release_workflow.download(
+                release_info,
+                track_numbers,
+                quality=quality,
+                jobs=jobs,
+                silent=False,
+                presenter=presenter,
+            )
+            if result.verification_mismatches:
+                console.print(
+                    f"[yellow]⚠[/yellow] AcoustID mismatch: {result.verification_mismatches} track"
+                    f"{'s' if result.verification_mismatches != 1 else ''}"
+                )
+            return result.processed, result.failed
 
         for i, release in enumerate(releases, 1):
             console.print()
@@ -163,13 +182,7 @@ class DiscographyHandler(BaseHandler):
                 console.print(f"[cyan]Auto-downloading all {len(release_info.tracks)} track{'s' if len(release_info.tracks) != 1 else ''}...[/cyan]")
                 console.print()
                 track_numbers = list(range(1, len(release_info.tracks) + 1))
-                downloaded, failed = self.download_orchestrator.download_release_tracks(
-                    release_info,
-                    track_numbers,
-                    quality,
-                    silent=False,
-                    jobs=jobs,
-                )
+                downloaded, failed = _download_tracks(release_info, track_numbers)
                 total_downloaded += downloaded
                 total_failed += failed
             else:
@@ -181,13 +194,7 @@ class DiscographyHandler(BaseHandler):
                     if choice == '1':
                         console.print()
                         track_numbers = list(range(1, len(release_info.tracks) + 1))
-                        downloaded, failed = self.download_orchestrator.download_release_tracks(
-                            release_info,
-                            track_numbers,
-                            quality,
-                            silent=False,
-                            jobs=jobs,
-                        )
+                        downloaded, failed = _download_tracks(release_info, track_numbers)
                         total_downloaded += downloaded
                         total_failed += failed
                         break
@@ -197,13 +204,7 @@ class DiscographyHandler(BaseHandler):
                             None, len(release_info.tracks)
                         )
                         if track_numbers:
-                            downloaded, failed = self.download_orchestrator.download_release_tracks(
-                                release_info,
-                                track_numbers,
-                                quality,
-                                silent=False,
-                                jobs=jobs,
-                            )
+                            downloaded, failed = _download_tracks(release_info, track_numbers)
                             total_downloaded += downloaded
                             total_failed += failed
                         break

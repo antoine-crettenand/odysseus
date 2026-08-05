@@ -4,20 +4,18 @@ from unittest.mock import MagicMock, patch
 
 from odysseus.clients.file_splitter import FileSplitter
 from odysseus.clients.youtube_downloader import YouTubeDownloader
-from odysseus.domain.music.download.strategies.full_album_strategy import (
-    FullAlbumStrategy,
-)
+from odysseus.domain.music.download.strategies.full_album import ChapterAligner
 from odysseus.domain.music.validation.title_matcher import TitleMatcher
 from odysseus.domain.music.validation.video_validator import VideoValidator
 from odysseus.models.releases import ReleaseInfo, Track
 from odysseus.utils.pattern_matcher import PatternMatcher
 
 
-def _strategy():
-    strategy = FullAlbumStrategy.__new__(FullAlbumStrategy)
-    strategy.title_matcher = TitleMatcher()
-    strategy.video_validator = VideoValidator(MagicMock())
-    return strategy
+def _aligner():
+    return ChapterAligner(
+        video_validator=VideoValidator(MagicMock()),
+        title_matcher=TitleMatcher(),
+    )
 
 
 def _black_focus_release():
@@ -72,16 +70,15 @@ def _chapters_with_intro(release):
 
 
 def test_extra_intro_chapter_is_skipped_instead_of_becoming_track_one():
-    strategy = _strategy()
+    aligner = _aligner()
     release = _black_focus_release()
     chapters = _chapters_with_intro(release)
 
-    timestamps = strategy._align_chapters_to_tracks(
+    timestamps = aligner._align_chapters_to_tracks(
         chapters,
         release.tracks,
         release.tracks,
         silent=True,
-        styling=MagicMock(),
     )
 
     assert len(timestamps) == 10
@@ -92,30 +89,29 @@ def test_extra_intro_chapter_is_skipped_instead_of_becoming_track_one():
 
 
 def test_implausibly_short_aligned_chapter_rejects_video():
-    strategy = _strategy()
+    aligner = _aligner()
     release = _black_focus_release()
     chapters = _chapters_with_intro(release)[1:]
     chapters[0]["end_time"] = chapters[0]["start_time"] + 15
 
-    timestamps = strategy._align_chapters_to_tracks(
+    timestamps = aligner._align_chapters_to_tracks(
         chapters,
         release.tracks,
         release.tracks,
         silent=True,
-        styling=MagicMock(),
     )
 
     assert timestamps == []
 
 
 def test_duration_fallback_keeps_full_album_offset_for_partial_selection():
-    strategy = _strategy()
+    aligner = _aligner()
     tracks = [
         Track(index, f"Track {index}", "Artist", "01:00")
         for index in range(1, 5)
     ]
 
-    timestamps = strategy._calculate_track_timestamps_from_durations(
+    timestamps = aligner._calculate_track_timestamps_from_durations(
         tracks,
         [3],
     )
@@ -161,22 +157,21 @@ def test_vinyl_and_listening_uploads_are_rejected():
 
 
 def test_vinyl_marker_hidden_in_chapters_rejects_video():
-    strategy = _strategy()
+    aligner = _aligner()
     release = _black_focus_release()
     chapters = _chapters_with_intro(release)
     chapters[0]["title"] = "Needle drop intro"
 
-    assert strategy._align_chapters_to_tracks(
+    assert aligner._align_chapters_to_tracks(
         chapters,
         release.tracks,
         release.tracks,
         silent=True,
-        styling=MagicMock(),
     ) == []
 
 
 def test_chapter_alignment_uses_dp_instead_of_combinatorial_blowup():
-    strategy = _strategy()
+    aligner = _aligner()
     tracks = [
         Track(index, f"Track {index}", "Artist", "02:00")
         for index in range(1, 51)
@@ -196,12 +191,11 @@ def test_chapter_alignment_uses_dp_instead_of_combinatorial_blowup():
         "title": "Outro",
     })
 
-    timestamps = strategy._align_chapters_to_tracks(
+    timestamps = aligner._align_chapters_to_tracks(
         chapters,
         tracks,
         tracks[:3],
         silent=True,
-        styling=MagicMock(),
     )
 
     assert len(timestamps) == 3

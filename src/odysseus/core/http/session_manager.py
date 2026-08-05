@@ -4,7 +4,7 @@ Session manager for HTTP requests.
 
 import requests
 from typing import Optional, Dict
-from ...clients.network_agent import NetworkAgent
+from .network_agent import NetworkAgent
 
 
 class SessionManager:

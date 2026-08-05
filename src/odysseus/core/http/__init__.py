@@ -4,5 +4,6 @@ Provides a centralized HTTP client with retry logic, network agent integration, 
 """
 
 from .http_client import HttpClient
+from .network_agent import HeaderStrategy, NetworkAgent
 from .session_manager import SessionManager
-__all__ = ['HttpClient', 'SessionManager']
+__all__ = ['HttpClient', 'HeaderStrategy', 'NetworkAgent', 'SessionManager']

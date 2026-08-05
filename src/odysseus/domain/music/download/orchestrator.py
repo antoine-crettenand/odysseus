@@ -2,19 +2,16 @@
 Download orchestrator service for coordinating downloads.
 """
 
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Tuple
 from pathlib import Path
-from rich.prompt import Confirm
-from ....models.song import SongData, AudioMetadata
-from ....models.search_results import MusicBrainzSong, YouTubeVideo
 from ....models.releases import ReleaseInfo
 from .download_service import DownloadService
 from ..metadata.metadata_service import MetadataService
 from ..search.search_service import SearchService
-from ....ui.display import DisplayManager
 from ..validation.video_validator import VideoValidator
 from ..validation.title_matcher import TitleMatcher
 from .path_manager import PathManager
+from .presenter import NullPresenter
 from .progress import (
     ReleaseProgressCallback,
     emit_release_progress,
@@ -33,12 +30,12 @@ class DownloadOrchestrator:
         download_service: DownloadService,
         metadata_service: MetadataService,
         search_service: SearchService,
-        display_manager: DisplayManager
+        presenter=None,
     ):
         self.download_service = download_service
         self.metadata_service = metadata_service
         self.search_service = search_service
-        self.display_manager = display_manager
+        self.presenter = presenter if presenter is not None else NullPresenter()
 
         # Initialize helper services
         self.video_validator = VideoValidator(download_service)
@@ -50,7 +47,7 @@ class DownloadOrchestrator:
             download_service,
             metadata_service,
             search_service,
-            display_manager,
+            self.presenter,
             self.video_validator,
             self.title_matcher,
             self.path_manager
@@ -59,7 +56,7 @@ class DownloadOrchestrator:
             download_service,
             metadata_service,
             search_service,
-            display_manager,
+            self.presenter,
             self.video_validator,
             self.title_matcher,
             self.path_manager
@@ -68,209 +65,37 @@ class DownloadOrchestrator:
             download_service,
             metadata_service,
             search_service,
-            display_manager,
+            self.presenter,
             self.video_validator,
             self.title_matcher,
             self.path_manager
         )
         self.last_failed_track_numbers: List[int] = []
 
-    def download_recording(
-        self,
-        song_data: SongData,
-        selected_video: YouTubeVideo,
-        metadata: MusicBrainzSong,
-        quality: str
-    ) -> Optional[Path]:
-        """Download a single recording."""
-        console = self.display_manager.console
-        video_id = selected_video.video_id
-        if not video_id:
-            console.print("[bold red]✗[/bold red] No video ID found.")
-            return None
-
-        youtube_url = selected_video.youtube_url
-        video_title = selected_video.title or 'Unknown'
-
-        # Warn if this appears to be a live version
-        if self.video_validator.is_live_version(video_title):
-            console.print(f"[yellow]⚠[/yellow] Warning: This video appears to be a live version: {video_title}")
-            console.print("[yellow]⚠[/yellow] If you want a studio version, consider selecting a different video.")
-            console.print()
-
-        # Warn if this appears to be a reaction/review video
-        if self.video_validator.is_reaction_or_review_video(video_title):
-            console.print(f"[yellow]⚠[/yellow] Warning: This video appears to be a reaction/review/non-album content: {video_title}")
-            console.print("[yellow]⚠[/yellow] This is not the actual album content. Consider selecting a different video.")
-            console.print()
-
-        # Validate duration if we have track duration info
-        if hasattr(metadata, 'duration') and metadata.duration:
-            video_info = self.download_service.get_video_info(youtube_url)
-            if video_info:
-                video_duration = self.video_validator._get_video_duration_seconds(video_info)
-                expected_duration = self.video_validator._parse_duration_to_seconds(metadata.duration)
-
-                if video_duration and expected_duration:
-                    if video_duration > expected_duration * 1.4:
-                        console.print(f"[yellow]⚠[/yellow] Warning: Video duration ({video_duration/60:.1f} min) is significantly longer than expected ({expected_duration/60:.1f} min)")
-                        console.print("[yellow]⚠[/yellow] This might be a live version with extended sections.")
-                        console.print()
-                    elif video_duration < expected_duration * 0.7:
-                        console.print(f"[yellow]⚠[/yellow] Warning: Video duration ({video_duration/60:.1f} min) is significantly shorter than expected ({expected_duration/60:.1f} min)")
-                        console.print("[yellow]⚠[/yellow] This might be incomplete or a different version.")
-                        console.print()
-
-        # Display download info
-        self.display_manager.display_download_info(
-            youtube_url,
-            quality,
-            quality == 'audio',
-            str(self.download_service.downloads_dir),
-            {
-                'title': song_data.title,
-                'artist': song_data.artist,
-                'album': song_data.album,
-                'year': song_data.release_year
-            }
-        )
-
-        # Create metadata for download
-        metadata_dict = {
-            'title': song_data.title,
-            'artist': song_data.artist,
-            'album': song_data.album,
-            'year': song_data.release_year
-        }
-
-        # Download with progress bar
-        console.print("[cyan]Starting download...[/cyan]")
-
-        # Create progress bar for file download
-        progress, task_id = self.display_manager.create_download_progress_bar(
-            f"Downloading: {video_title[:50]}"
-        )
-
-        # Progress callback to update the progress bar
-        def update_progress(progress_info: Dict[str, Any]):
-            """Update progress bar with download info."""
-            # Use percentage for progress (0-100)
-            percent = progress_info.get('percent', 0)
-            progress.update(task_id, completed=percent)
-
-            # Update description
-            desc = f"Downloading: {video_title[:40]}"
-            progress.update(task_id, description=desc)
-
-        # Download with progress tracking
-        download_error = None
-        try:
-            with progress:
-                if quality == 'audio':
-                    result = self.download_service.download_high_quality_audio(
-                        youtube_url,
-                        metadata=metadata_dict,
-                        quiet=True,
-                        progress_callback=update_progress
-                    )
-                else:
-                    result = self.download_service.download_video(
-                        youtube_url,
-                        quality=quality,
-                        audio_only=(quality == 'audio'),
-                        metadata=metadata_dict,
-                        quiet=True,
-                        progress_callback=update_progress
-                    )
-
-                # Ensure result is a tuple (handle case where download method might return None)
-                if result is None:
-                    downloaded_path, file_existed = None, False
-                    download_error = "Download service returned None (no file was downloaded)"
-                else:
-                    downloaded_path, file_existed = result
-
-                # Mark as complete
-                progress.update(task_id, completed=100, description=f"Completed: {video_title[:40]}")
-        except Exception as e:
-            # If download fails, ensure we have valid values
-            downloaded_path, file_existed = None, False
-            download_error = str(e)
-            # Update progress to show error
-            try:
-                progress.update(task_id, completed=100, description=f"[red]Failed: {video_title[:35]}[/red]")
-            except:
-                pass
-
-        if downloaded_path:
-            # Apply metadata (including cover art) to all downloaded files
-            # For newly downloaded files, we should apply metadata so they have proper tags
-            audio_metadata = AudioMetadata(
-                title=song_data.title,
-                artist=song_data.artist,
-                album=song_data.album,
-                year=song_data.release_year
-            )
-            # Try to get cover art from MusicBrainz if we have MBID
-            if hasattr(metadata, 'mbid') and metadata.mbid:
-                cover_art_data = self.metadata_service.fetch_cover_art(metadata.mbid, console)
-                if cover_art_data:
-                    audio_metadata.cover_art_data = cover_art_data
-
-            self.metadata_service.merger.set_final_metadata(audio_metadata)
-            self.metadata_service.apply_metadata_to_file(str(downloaded_path), quiet=True)
-            console.print(f"[bold green]✓[/bold green] Download completed: [green]{downloaded_path}[/green]")
-            return downloaded_path
-        else:
-            # Display concise error message
-            console.print()
-            from rich.panel import Panel
-            from rich import box
-
-            # Extract actual error message (remove "All download strategies failed. " prefix if present)
-            actual_error = download_error or "Download service returned no file"
-            if actual_error.startswith("All download strategies failed. "):
-                actual_error = actual_error.replace("All download strategies failed. ", "", 1)
-            # Truncate long errors
-            if len(actual_error) > 150:
-                actual_error = actual_error[:147] + "..."
-
-            error_details = f"[yellow]{song_data.title}[/yellow] — [red]{actual_error}[/red]"
-
-            # Add tip only for specific errors
-            if download_error and ("bot" in download_error.lower() or "sign in" in download_error.lower()):
-                error_details += f"\n[yellow]Tip:[/yellow] YouTube may be blocking requests. Try signing in to YouTube."
-
-            console.print(Panel(
-                error_details,
-                title="[bold red]✗ Download Failed[/bold red]",
-                border_style="red",
-                box=box.ROUNDED,
-                padding=(0, 1)
-            ))
-            return None
+    def set_presenter(self, presenter) -> None:
+        """Swap the presenter used by this orchestrator and its strategies."""
+        self.presenter = presenter
+        for strategy in (
+            self.full_album_strategy,
+            self.playlist_strategy,
+            self.individual_tracks_strategy,
+        ):
+            strategy.presenter = presenter
+        individual = self.individual_tracks_strategy
+        if hasattr(individual, "video_searcher"):
+            individual.video_searcher.presenter = presenter
+        if hasattr(individual, "playlist_checker"):
+            individual.playlist_checker.presenter = presenter
 
     def _display_summary(self, downloaded: int, failed: int, total: int, title: str = "DOWNLOAD SUMMARY", skipped: int = 0):
         """Display download summary."""
-        console = self.display_manager.console
-        console.print()
-        summary_content = f"[bold green]✓[/bold green] Successfully downloaded: [green]{downloaded}[/green] track{'s' if downloaded != 1 else ''}\n"
-        if skipped > 0:
-            summary_content += f"[yellow]⏭[/yellow] Skipped existing: [yellow]{skipped}[/yellow] track{'s' if skipped != 1 else ''}\n"
-        if failed > 0:
-            summary_content += f"[bold red]✗[/bold red] Failed downloads: [red]{failed}[/red] track{'s' if failed != 1 else ''}\n"
-        summary_content += f"[dim blue]ℹ[/dim blue] [dim]Total tracks processed: {total}[/dim]"
-
-        from rich.panel import Panel
-        from rich import box
-        console.print(Panel(
-            summary_content,
-            title=f"[bold cyan]📊 {title}[/bold cyan]",
-            border_style="cyan",
-            box=box.ROUNDED,
-            padding=(1, 2)
-        ))
-        console.print()
+        self.presenter.display_summary(
+            downloaded,
+            failed,
+            total,
+            skipped=skipped,
+            title=title,
+        )
 
     def _finish_release_attempt(
         self,
@@ -298,31 +123,30 @@ class DownloadOrchestrator:
 
         retry_failed_tracks = bool(failed_track_numbers and silent)
         if failed_track_numbers and not silent:
-            console = self.display_manager.console
             failed_tracks = {
                 track.position: track.title
                 for track in release_info.tracks
                 if track.position in failed_track_numbers
             }
 
-            console.print()
-            console.print(
+            self.presenter.print()
+            self.presenter.print(
                 "[yellow]The following tracks are still missing:[/yellow]"
             )
             for track_number in failed_track_numbers:
                 title = failed_tracks.get(track_number, "Unknown track")
-                console.print(f"  [red]#{track_number}[/red] {title}")
-            console.print()
+                self.presenter.print(f"  [red]#{track_number}[/red] {title}")
+            self.presenter.print()
 
-            retry_failed_tracks = Confirm.ask(
+            retry_failed_tracks = self.presenter.confirm(
                 "[bold]Retry these tracks one final time in individual mode?[/bold]",
                 default=True
             )
 
         if retry_failed_tracks:
             if not silent:
-                console.print()
-                console.print(
+                self.presenter.print()
+                self.presenter.print(
                     "[cyan]🔁 Final retry: downloading failed tracks individually...[/cyan]"
                 )
             retry_arguments = {
@@ -361,7 +185,6 @@ class DownloadOrchestrator:
         progress_callback: Optional[ReleaseProgressCallback] = None,
     ) -> Tuple[int, int]:
         """Download selected tracks from a release using multi-strategy approach."""
-        console = self.display_manager.console
         jobs = DownloadService.validate_worker_count(jobs)
         self.last_failed_track_numbers = []
 
@@ -386,11 +209,9 @@ class DownloadOrchestrator:
 
         # Fetch cover art once for the entire release (before trying any strategies)
         output_dir = self.path_manager.get_release_folder_path(release_info)
-        cover_art_data = None
-        if not silent:
-            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, console, folder_path=output_dir)
-        else:
-            cover_art_data = self.metadata_service.fetch_cover_art_for_release(release_info, None, folder_path=output_dir)
+        cover_art_data = self.metadata_service.fetch_cover_art_for_release(
+            release_info, None, folder_path=output_dir
+        )
 
         # If all tracks exist, only apply metadata
         if not missing_track_numbers:
@@ -402,16 +223,15 @@ class DownloadOrchestrator:
                 percent=0,
             )
             if not silent:
-                styling = self.display_manager.styling
-                styling.log_info("All tracks already exist. Applying metadata only...")
-                console.print()
+                self.presenter.log_info("All tracks already exist. Applying metadata only...")
+                self.presenter.print()
 
             # Apply metadata to all existing tracks
             processed_count = 0
             failed_count = 0
 
             # Create progress bar
-            progress = self.display_manager.create_progress_bar(
+            progress = self.presenter.create_progress_bar(
                 len(track_numbers),
                 "Applying metadata" if not silent else f"Applying metadata to {release_info.title}"
             )
@@ -441,17 +261,17 @@ class DownloadOrchestrator:
                     try:
                         # Display result first (file already exists, so it will show "Use existing file")
                         if not silent:
-                            self.display_manager.display_track_download_result(
+                            self.presenter.display_track_download_result(
                                 track.title, True, str(file_path), file_existed=True
                             )
                         # Apply metadata with cover art
                         self.metadata_service.apply_metadata_with_cover_art(
-                            file_path, track, release_info, console, cover_art_data=cover_art_data, path_manager=self.path_manager, file_existed_before=True
+                            file_path, track, release_info, None, cover_art_data=cover_art_data, path_manager=self.path_manager, file_existed_before=True
                         )
                         processed_count += 1
                     except Exception as e:
                         if not silent:
-                            console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
+                            self.presenter.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
                         failed_count += 1
 
                     progress.update(task, advance=1)
@@ -465,22 +285,19 @@ class DownloadOrchestrator:
 
             # Summary
             if not silent:
-                console.print()
+                self.presenter.print()
                 summary_content = f"[bold green]✓[/bold green] Successfully processed: [green]{processed_count}[/green] track{'s' if processed_count != 1 else ''}\n"
                 if failed_count > 0:
                     summary_content += f"[bold red]✗[/bold red] Failed: [red]{failed_count}[/red] track{'s' if failed_count != 1 else ''}\n"
                 summary_content += f"[dim blue]ℹ[/dim blue] [dim]Total tracks processed: {len(track_numbers)}[/dim]"
 
-                from rich.panel import Panel
-                from rich import box
-                console.print(Panel(
+                self.presenter.display_panel(
                     summary_content,
                     title="[bold cyan]📊 METADATA SUMMARY[/bold cyan]",
                     border_style="cyan",
-                    box=box.ROUNDED,
                     padding=(1, 2)
-                ))
-                console.print()
+                )
+                self.presenter.print()
 
             return processed_count, failed_count
 
@@ -498,18 +315,12 @@ class DownloadOrchestrator:
             if missing_track_titles:
                 missing_info += f" ({', '.join(missing_track_titles)})"
 
-            styling = self.display_manager.styling
-            styling.log_info(f"Found {len(existing_tracks)} existing track{'s' if len(existing_tracks) != 1 else ''}. Downloading {missing_info}...")
+            self.presenter.log_info(f"Found {len(existing_tracks)} existing track{'s' if len(existing_tracks) != 1 else ''}. Downloading {missing_info}...")
 
             # Display which tracks were found (helpful for debugging ordering issues)
-            tracks_with_wrong_numbers = []
             if len(existing_tracks) > 0:
-                from rich.table import Table
-                table = Table(title="[cyan]Existing Tracks Found[/cyan]", show_header=True, header_style="bold cyan")
-                table.add_column("Expected #", style="cyan", justify="right")
-                table.add_column("Track Title", style="green")
-                table.add_column("File", style="yellow")
-
+                rows = []
+                wrong_number_count = 0
                 for track_num in sorted(existing_tracks.keys()):
                     file_path = existing_tracks[track_num]
                     # Find track title
@@ -528,21 +339,15 @@ class DownloadOrchestrator:
                     file_display = filename
                     if not has_correct_number:
                         file_display = f"[yellow]{filename}[/yellow] [dim](wrong track #)[/dim]"
-                        tracks_with_wrong_numbers.append((track_num, file_path, track_title))
+                        wrong_number_count += 1
 
-                    table.add_row(str(track_num), track_title, file_display)
+                    rows.append((str(track_num), track_title, file_display))
 
-                console.print()
-                console.print(table)
-                console.print()
+                self.presenter.display_existing_tracks(
+                    rows, wrong_number_count=wrong_number_count
+                )
 
-                # Offer to reorder tracks with wrong numbers
-                if tracks_with_wrong_numbers and not silent:
-                    console.print(f"[yellow]⚠[/yellow] Found {len(tracks_with_wrong_numbers)} track{'s' if len(tracks_with_wrong_numbers) != 1 else ''} with incorrect track numbers.")
-                    console.print("[dim]These tracks will still be used, but you may want to rename them to match the correct order.[/dim]")
-                    console.print()
-
-            console.print()
+            self.presenter.print()
 
         # Strategy 1: Try full album video (only for missing tracks)
         emit_release_progress(
@@ -577,7 +382,7 @@ class DownloadOrchestrator:
             # Success with full album - apply metadata to existing tracks too
             if existing_tracks:
                 self._apply_metadata_to_existing_tracks(
-                    release_info, existing_tracks, cover_art_data, silent, console
+                    release_info, existing_tracks, cover_art_data, silent
                 )
             if not silent:
                 self._display_summary(
@@ -624,7 +429,7 @@ class DownloadOrchestrator:
             # Success with playlist - apply metadata to existing tracks too
             if existing_tracks:
                 self._apply_metadata_to_existing_tracks(
-                    release_info, existing_tracks, cover_art_data, silent, console
+                    release_info, existing_tracks, cover_art_data, silent
                 )
             if not silent:
                 self._display_summary(
@@ -671,7 +476,7 @@ class DownloadOrchestrator:
         # Apply metadata to existing tracks
         if existing_tracks:
             self._apply_metadata_to_existing_tracks(
-                release_info, existing_tracks, cover_art_data, silent, console
+                release_info, existing_tracks, cover_art_data, silent
             )
 
         # Summary (only if not silent)
@@ -691,15 +496,16 @@ class DownloadOrchestrator:
         existing_tracks: Dict[int, Path],
         cover_art_data: Optional[bytes],
         silent: bool,
-        console
     ) -> None:
         """Apply metadata to existing tracks."""
         if not existing_tracks:
             return
 
         if not silent:
-            styling = self.display_manager.styling
-            styling.log_info(f"Applying metadata to {len(existing_tracks)} existing track{'s' if len(existing_tracks) != 1 else ''}...", icon="📝")
+            self.presenter.log_info(
+                f"Applying metadata to {len(existing_tracks)} existing track{'s' if len(existing_tracks) != 1 else ''}...",
+                icon="📝",
+            )
 
         for track_num, file_path in existing_tracks.items():
             # Find the track
@@ -715,14 +521,14 @@ class DownloadOrchestrator:
             try:
                 # Display result first
                 if not silent:
-                    self.display_manager.display_track_download_result(
+                    self.presenter.display_track_download_result(
                         track.title, True, str(file_path), file_existed=True
                     )
                 # Apply metadata with cover art
                 self.metadata_service.apply_metadata_with_cover_art(
-                    file_path, track, release_info, console if not silent else None,
+                    file_path, track, release_info, None,
                     cover_art_data=cover_art_data, path_manager=self.path_manager, file_existed_before=True
                 )
             except Exception as e:
                 if not silent:
-                    console.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")
+                    self.presenter.print(f"[yellow]⚠[/yellow] Could not apply metadata to {track.title}: {e}")

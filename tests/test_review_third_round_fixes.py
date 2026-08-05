@@ -11,17 +11,15 @@ from odysseus.clients.download_strategies import DownloadStrategies, STRATEGIES
 from odysseus.clients.file_splitter import FileSplitter
 from odysseus.clients.musicbrainz import MusicBrainzClient
 from odysseus.core.validation import check_dependencies
-from odysseus.domain.music.download.strategies.full_album_strategy import (
-    FullAlbumStrategy,
-)
+from odysseus.domain.music.download.strategies.full_album import ChapterAligner
 from odysseus.models.releases import Track
 from odysseus.ui.cli import OdysseusCLI
 
 
 def test_duration_fallback_rejects_unknown_preceding_offset():
-    strategy = FullAlbumStrategy.__new__(FullAlbumStrategy)
-    strategy.video_validator = MagicMock()
-    strategy.video_validator._parse_duration_to_seconds.side_effect = (
+    aligner = ChapterAligner.__new__(ChapterAligner)
+    aligner.video_validator = MagicMock()
+    aligner.video_validator._parse_duration_to_seconds.side_effect = (
         lambda value: None if value is None else 180
     )
     tracks = [
@@ -29,7 +27,7 @@ def test_duration_fallback_rejects_unknown_preceding_offset():
         Track(2, "Selected", "Artist", "03:00"),
     ]
 
-    timestamps = strategy._calculate_track_timestamps_from_durations(
+    timestamps = aligner._calculate_track_timestamps_from_durations(
         tracks,
         [2],
     )
@@ -38,9 +36,9 @@ def test_duration_fallback_rejects_unknown_preceding_offset():
 
 
 def test_duration_fallback_ignores_missing_durations_after_selection():
-    strategy = FullAlbumStrategy.__new__(FullAlbumStrategy)
-    strategy.video_validator = MagicMock()
-    strategy.video_validator._parse_duration_to_seconds.side_effect = (
+    aligner = ChapterAligner.__new__(ChapterAligner)
+    aligner.video_validator = MagicMock()
+    aligner.video_validator._parse_duration_to_seconds.side_effect = (
         lambda value: None if value is None else 60
     )
     tracks = [
@@ -48,7 +46,7 @@ def test_duration_fallback_ignores_missing_durations_after_selection():
         Track(2, "Later", "Artist", None),
     ]
 
-    timestamps = strategy._calculate_track_timestamps_from_durations(
+    timestamps = aligner._calculate_track_timestamps_from_durations(
         tracks,
         [1],
     )

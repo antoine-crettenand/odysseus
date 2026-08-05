@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Dict, Any, Optional, Callable, Tuple
 from .session_manager import SessionManager
-from ...clients.network_agent import NetworkAgent
+from .network_agent import NetworkAgent
 from ..config import RETRY_CONFIG
 from ..retry import HttpRetryStrategy
 

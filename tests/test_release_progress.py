@@ -4,6 +4,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from odysseus.domain.music.download.strategies.full_album import (
+    FullAlbumDownloadPipeline,
+)
 from odysseus.domain.music.download.strategies.full_album_strategy import (
     FullAlbumStrategy,
 )
@@ -21,8 +24,8 @@ class ProgressStub:
 
 
 def test_full_album_forwards_downloader_and_splitter_progress(tmp_path):
-    strategy = FullAlbumStrategy.__new__(FullAlbumStrategy)
-    strategy.display_manager = SimpleNamespace(
+    pipeline = FullAlbumDownloadPipeline.__new__(FullAlbumDownloadPipeline)
+    pipeline.presenter = SimpleNamespace(
         create_download_progress_bar=lambda description: (ProgressStub(), 1),
     )
     source = tmp_path / "album.webm"
@@ -50,22 +53,20 @@ def test_full_album_forwards_downloader_and_splitter_progress(tmp_path):
         )
         return [split_file]
 
-    strategy.download_service = SimpleNamespace(
+    pipeline.download_service = SimpleNamespace(
         download_high_quality_audio=download_audio,
         split_video_into_tracks=split_audio,
     )
     events = []
 
-    path = strategy._download_full_album_video(
+    path = pipeline._download_full_album_video(
         SimpleNamespace(title="Artist - Album"),
         "https://example.test/album",
         {},
         True,
-        MagicMock(),
-        MagicMock(),
         events.append,
     )
-    split_paths = strategy._split_video_into_tracks(
+    split_paths = pipeline._split_video_into_tracks(
         path,
         [{}],
         tmp_path,
@@ -91,9 +92,10 @@ def test_full_album_forwards_downloader_and_splitter_progress(tmp_path):
 
 def test_full_album_reports_when_no_complete_video_is_found():
     strategy = FullAlbumStrategy.__new__(FullAlbumStrategy)
-    strategy.display_manager = SimpleNamespace(
-        console=MagicMock(),
-        styling=MagicMock(),
+    strategy.presenter = SimpleNamespace(
+        print=MagicMock(),
+        log_warning=MagicMock(),
+        log_info=MagicMock(),
     )
     strategy.path_manager = SimpleNamespace(
         get_release_folder_path=lambda release: Path("/tmp/release")

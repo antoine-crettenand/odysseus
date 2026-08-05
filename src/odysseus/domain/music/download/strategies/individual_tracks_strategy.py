@@ -27,7 +27,7 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
         download_service,
         metadata_service,
         search_service,
-        display_manager,
+        presenter,
         video_validator,
         title_matcher,
         path_manager,
@@ -36,7 +36,7 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
             download_service,
             metadata_service,
             search_service,
-            display_manager,
+            presenter,
             video_validator,
             title_matcher,
             path_manager,
@@ -45,14 +45,14 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
             search_service,
             video_validator,
             title_matcher,
-            display_manager,
+            presenter,
         )
         self.playlist_checker = PlaylistChecker(
             download_service,
             search_service,
             video_validator,
             title_matcher,
-            display_manager,
+            presenter,
         )
 
     def download(
@@ -72,11 +72,10 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
         file downloads run in the worker pool.
         """
         self._start_attempt(track_numbers)
-        console = self.display_manager.console
 
         if not silent:
             suffix = f" with {jobs} workers" if jobs > 1 else ""
-            console.print(
+            self.presenter.print(
                 f"[cyan]🎵 Strategy 3: Downloading individual tracks{suffix}...[/cyan]"
             )
 
@@ -84,7 +83,7 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
         if cover_art_data is None:
             cover_art_data = self.metadata_service.fetch_cover_art_for_release(
                 release_info,
-                console if not silent else None,
+                None,
                 folder_path=output_dir,
             )
 
@@ -105,7 +104,7 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
         if not prepared:
             return 0, failed_count
 
-        progress = self.display_manager.create_progress_bar(
+        progress = self.presenter.create_progress_bar(
             len(track_numbers),
             "Downloading tracks"
             if not silent
@@ -180,27 +179,27 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
 
             self._mark_track_downloaded(item.track_number)
             if not silent:
-                self.display_manager.display_track_download_result(
+                self.presenter.display_track_download_result(
                     item.track.title,
                     True,
                     str(result.path),
                     file_existed=result.file_existed,
                 )
-                console.print(f"  [dim]YouTube: {item.youtube_url}[/dim]")
+                self.presenter.print(f"  [dim]YouTube: {item.youtube_url}[/dim]")
 
             try:
                 self.metadata_service.apply_metadata_with_cover_art(
                     result.path,
                     item.track,
                     release_info,
-                    console if not silent else None,
+                    None,
                     cover_art_data=cover_art_data,
                     path_manager=self.path_manager,
                     file_existed_before=result.file_existed,
                 )
             except Exception as error:
                 if not silent:
-                    console.print(
+                    self.presenter.print(
                         f"[yellow]⚠[/yellow] Could not apply metadata to "
                         f"{item.track.title}: {error}"
                     )
@@ -219,7 +218,6 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
         """Resolve videos and metadata sequentially before starting workers."""
         prepared = []
         failed = 0
-        console = self.display_manager.console
         tracks_by_number = {
             track.position: track for track in release_info.tracks
         }
@@ -228,7 +226,7 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
             track = tracks_by_number.get(track_number)
             if track is None:
                 if not silent:
-                    console.print(
+                    self.presenter.print(
                         f"[bold red]✗[/bold red] Track "
                         f"[bold]{track_number}[/bold] not found."
                     )
@@ -250,7 +248,7 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
                 selected_video = self._find_video(track, release_info, silent)
             except Exception as error:
                 if not silent:
-                    console.print(
+                    self.presenter.print(
                         f"[yellow]⚠[/yellow] Error searching for "
                         f"{track.title}: {error}"
                     )
@@ -259,7 +257,7 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
 
             if selected_video is None:
                 if not silent:
-                    console.print(
+                    self.presenter.print(
                         "[bold red]✗[/bold red] No valid (non-live) video "
                         f"found for: [white]{track.title}[/white]"
                     )
@@ -358,13 +356,9 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
         result: DownloadResult,
         silent: bool,
     ) -> None:
-        console = self.display_manager.console
         if silent:
-            console.print(f"[red]✗[/red] Failed: {track.title}")
+            self.presenter.print(f"[red]✗[/red] Failed: {track.title}")
             return
-
-        from rich import box
-        from rich.panel import Panel
 
         error = result.error or "Download service returned no file"
         if error.startswith("All download strategies failed. "):
@@ -377,12 +371,9 @@ class IndividualTracksStrategy(BaseDownloadStrategy):
                 "\n[yellow]Tip:[/yellow] YouTube may be blocking requests. "
                 "Try signing in to YouTube."
             )
-        console.print(
-            Panel(
-                details,
-                title=f"[bold red]✗ Track {track.position}[/bold red]",
-                border_style="red",
-                box=box.ROUNDED,
-                padding=(0, 1),
-            )
+        self.presenter.display_panel(
+            details,
+            title=f"[bold red]✗ Track {track.position}[/bold red]",
+            border_style="red",
+            padding=(0, 1),
         )

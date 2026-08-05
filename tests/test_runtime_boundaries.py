@@ -4,7 +4,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from odysseus.clients.file_splitter import FileSplitter
-from odysseus.clients.musicbrainz import MusicBrainzClient
 from odysseus.clients.path_utils import PathUtils
 from odysseus.domain.music.download.strategies import full_album_strategy
 from odysseus.domain.music.download.strategies.full_album_strategy import (
@@ -13,7 +12,6 @@ from odysseus.domain.music.download.strategies.full_album_strategy import (
 from odysseus.domain.music.search.search_service import SearchService
 from odysseus.domain.music.search.video_searcher import VideoSearcher
 from odysseus.models.search_results import YouTubeVideo
-from odysseus.models.song import SongData
 from odysseus.ui.handlers.recording_handler import RecordingHandler
 
 
@@ -22,26 +20,6 @@ def test_safe_path_rejects_sibling_with_common_prefix(temp_dir):
     sibling = temp_dir / "downloads-escape" / "track.mp3"
 
     assert PathUtils._resolve_safe_path(sibling, base_dir) == base_dir
-
-
-def test_musicbrainz_release_check_does_not_create_search_folders(temp_dir):
-    downloads_dir = temp_dir / "downloads"
-    client = MusicBrainzClient.__new__(MusicBrainzClient)
-    client.path_utils = PathUtils()
-    query = SongData(
-        title="",
-        artist="Search Artist",
-        album="Search Release",
-        release_year=1999,
-    )
-
-    with patch(
-        "odysseus.clients.musicbrainz.PROJECT_DOWNLOADS_DIR",
-        downloads_dir,
-    ):
-        assert client._check_release_folder_exists(query) is False
-
-    assert not downloads_dir.exists()
 
 
 def test_download_path_uses_selected_metadata_not_search_query(temp_dir):
@@ -90,8 +68,8 @@ def test_invalid_video_warning_uses_injected_console():
     title_matcher = MagicMock()
     title_matcher.are_titles_similar.return_value = False
 
-    display_manager = MagicMock()
-    display_manager.show_loading_spinner.side_effect = (
+    presenter = MagicMock()
+    presenter.show_loading_spinner.side_effect = (
         lambda _message, function, *args: function(*args)
     )
 
@@ -107,13 +85,13 @@ def test_invalid_video_warning_uses_injected_console():
         search_service,
         validator,
         title_matcher,
-        display_manager,
+        presenter,
     )
     searcher.search_and_match_video(track, release)
 
     assert any(
         "Skipping invalid video" in str(call)
-        for call in display_manager.console.print.call_args_list
+        for call in presenter.print.call_args_list
     )
 
 
@@ -182,9 +160,12 @@ def test_recording_reshuffle_advances_youtube_offset():
         "RESHUFFLE",
         selected_video,
     )
-    handler.release_validator = MagicMock()
-    handler.release_validator.extract_release_year.return_value = 2020
-    handler.download_orchestrator = MagicMock()
+    handler.recording_workflow = MagicMock()
+    handler.recording_workflow.download.return_value = MagicMock(
+        path="/tmp/track.flac",
+        warning=None,
+        verification_status="not_run",
+    )
 
     selected_song = MagicMock(
         artist="Artist",
@@ -199,12 +180,14 @@ def test_recording_reshuffle_advances_youtube_offset():
         (("Artist Title", 3, 0),),
         (("Artist Title", 3, 2),),
     ]
-    handler.download_orchestrator.download_recording.assert_called_once()
+    handler.recording_workflow.download.assert_called_once_with(
+        selected_song, selected_video, quality="audio"
+    )
 
 
 def test_full_album_temp_file_is_cleaned_when_split_fails(temp_dir):
     strategy = FullAlbumStrategy.__new__(FullAlbumStrategy)
-    strategy.display_manager = MagicMock()
+    strategy.presenter = MagicMock()
     strategy.path_manager = MagicMock()
     strategy.path_manager.get_release_folder_path.return_value = temp_dir
     strategy.download_service = MagicMock()
